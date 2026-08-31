@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Макет попапа стикера — типы</title>
+<style>
+  :root{
+    --background-primary:#28282b;
+    --background-primary-alt:#232326;
+    --background-secondary:#1e1e21;
+    --background-modifier-border:#3c3c42;
+    --background-modifier-hover:#333338;
+    --interactive-accent:#7096b8;
+    --text-on-accent:#1e1e21;
+    --text-normal:#e0e0e2;
+    --text-muted:#a8a8b0;
+    --text-faint:#666670;
+    --text-error:#f38ba8;
+    --quest-marker-rgba:rgba(167,139,250,1);
+    --quest-marker-fg:#1a1a2e;
+    --quest-label-color:#a78bfa;
+    --cs-k:1;
+    --cal-strip-opacity:0.09;
+    --cs-fs:9px;
+    --quest-icon-opacity:0.14;
+    --qt-corner-size:22px;
+    --qt-corner-icon-size:9px;
+    --qt-marker-fg:#1a1a2e;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;min-height:100vh;
+    background:#1b1b1d;
+    background-image:radial-gradient(rgba(255,255,255,.05) 1px, transparent 1px);
+    background-size:22px 22px;
+    font-family:'Segoe UI', system-ui, sans-serif;
+    color:var(--text-normal);
+    display:flex;align-items:flex-start;justify-content:center;
+    padding:40px 24px;
+  }
+  .demo-root{ display:flex;flex-direction:column;align-items:flex-start;gap:12px; }
+
+  /* Переключатель типов (демо-контрол, не часть попапа) */
+  .demo-switch{ display:flex;align-items:center;gap:6px;flex-wrap:wrap; }
+  .demo-switch .lbl{ font-size:11px;color:var(--text-faint);margin-right:2px; }
+  .demo-tab,.mode-tab{ font-size:11px;padding:4px 10px;border:1px solid var(--background-modifier-border);border-radius:5px;background:var(--background-primary-alt);color:var(--text-muted);cursor:pointer; }
+  .demo-tab:hover,.mode-tab:hover{ background:var(--background-modifier-hover);color:var(--text-normal); }
+  .demo-tab.active,.mode-tab.active{ background:var(--interactive-accent);color:var(--background-secondary);border-color:var(--interactive-accent);font-weight:600; }
+  /* Канвас-режим: центр (стикер-название) + комментарий под ним, по середине по высоте */
+  .pp-center{ display:flex;flex-direction:column;align-self:stretch;justify-content:center;gap:14px; }
+  .pp-center #blockSticker{ border:none;padding:0; }
+  .pp-center #blockCommentRight{ border:none;position:relative; }
+  .pp-name-chip{ position:relative;background:#fdfd96;color:#333;border:1px solid rgba(0,0,0,0.15);border-radius:4px;padding:10px 8px;text-align:center;font-weight:600;font-size:13px;word-break:break-word; }
+  /* тонкие белые линии от стикера к блокам */
+  .pp-name-chip::before,.pp-name-chip::after{ content:'';position:absolute;top:50%;height:1px;width:22px;background:rgba(255,255,255,0.5);pointer-events:none; }
+  .pp-name-chip::before{ right:100%; }
+  .pp-name-chip::after{ left:100%; }
+  .pp-name-chip.no-right::after{ display:none; }
+  .pp-center #blockCommentRight::before{ content:'';position:absolute;bottom:100%;left:50%;width:1px;height:14px;background:rgba(255,255,255,0.5); }
+
+  /* Стикер (.ld-s2) */
+  .ld-s2{
+    position:relative;overflow:hidden;cursor:pointer;user-select:none;
+    border:1px solid rgba(0,0,0,0.15);display:flex;flex-direction:column;
+    box-shadow:1px 2px 6px rgba(0,0,0,0.18);
+    transition:transform 0.16s ease-out, box-shadow 0.16s ease-out;transform-origin:center bottom;
+    width:100%;aspect-ratio:1;
+  }
+  .ld-s2:hover{ transform:translateY(-1px) rotate(-0.3deg);box-shadow:1px 4px 12px rgba(0,0,0,0.28); }
+  .ld-s2.s2-color-yellow{ background:#fdfd96;color:#333; }
+  .s2-strip{ position:absolute;top:0;left:0;right:0;height:11px;background:rgba(0,0,0,0.09);pointer-events:none;z-index:0; }
+  .s2-top{ position:relative;z-index:10;display:flex;justify-content:space-between;align-items:center;height:11px;padding:0 3px 0 1px;flex-shrink:0; }
+  .s2-top-left,.s2-top-right{ display:flex;align-items:center;gap:2px;min-width:0; }
+  .s2-icon{ width:7px;height:7px;opacity:0.35;flex-shrink:0; }
+  .s2-del{ position:absolute;top:0;right:0;z-index:30;font-size:10px;line-height:11px;width:11px;text-align:center;opacity:0;cursor:pointer;transition:opacity 0.12s; }
+  .ld-s2:hover .s2-del{ opacity:0.4; }
+  .s2-del:hover{ opacity:1 !important;color:#dc2626; }
+  .s2-body{ position:relative;z-index:10;flex:1;display:flex;align-items:center;justify-content:center;padding:0 5px 4px;overflow:hidden; }
+  .s2-title{ font-weight:normal;line-height:1.3;text-align:center;width:100%;word-break:break-word;font-size:14px; }
+  .s2-title.editing{ outline:1px solid rgba(0,0,0,.35);background:rgba(255,255,255,.35);border-radius:2px;cursor:text;user-select:text;-webkit-user-select:text; }
+  /* Значок квеста (фон) и уголок задачи квеста */
+  .ld-qicon{ display:block; }
+  .s2-quest-bg{ position:absolute;top:11px;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;pointer-events:none;overflow:hidden;opacity:var(--quest-icon-opacity,0.14);z-index:0; }
+  .s2-quest-bg svg{ width:68%;height:68%; }
+  .s2-qt-corner{ position:absolute;left:0;bottom:0;width:var(--qt-corner-size,22px);height:var(--qt-corner-size,22px);background:var(--quest-marker-rgba,#a78bfa);z-index:5;pointer-events:none;clip-path:polygon(0 0,0 100%,100% 100%); }
+  .s2-qt-corner svg{ position:absolute;left:2px;bottom:2px;width:var(--qt-corner-icon-size,9px);height:var(--qt-corner-icon-size,9px);color:var(--qt-marker-fg,#1a1a2e); }
+
+  /* Мини-стикер ярлыка — как в ячейке дня (.ld-cals.is-qlabel) */
+  .ld-cals{ position:relative;overflow:hidden;border:1px solid rgba(0,0,0,0.12);display:flex;flex-direction:column;box-shadow:1px 1px 4px rgba(0,0,0,0.1);width:150px;min-height:calc(36px*var(--cs-k,1)); }
+  .ld-cals.cs-color-yellow{ background:#fdfd96;color:#333; }
+  .cs-strip{ position:absolute;top:0;left:0;right:0;height:calc(14px*var(--cs-k,1));background:rgba(0,0,0,var(--cal-strip-opacity,0.09));pointer-events:none;z-index:0; }
+  .cs-body{ position:relative;z-index:10;display:flex;align-items:center;gap:3px;flex:1;padding:3px 4px 5px;overflow:hidden; }
+  .cs-grip{ width:calc(8px*var(--cs-k,1));height:calc(8px*var(--cs-k,1));opacity:0.25;flex-shrink:0; }
+  .cs-text-col{ display:flex;flex-direction:column;justify-content:space-around;flex:1;min-width:0;height:100%;gap:2px; }
+  .cs-quest-name{ font-size:calc(6px*var(--cs-k,1));opacity:0.55;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1; }
+  .cs-title{ font-weight:normal;line-height:1.25;text-align:center;flex:1;overflow:hidden;word-break:break-word;font-size:calc(var(--cs-fs,9px)*var(--cs-k,1)); }
+  .ld-cals.is-qlabel::after{ content:'';position:absolute;left:0;top:0;bottom:0;width:calc(20px*var(--cs-k,1));background:var(--quest-marker-rgba,#a78bfa);z-index:5;pointer-events:none; }
+  .ld-cals.is-qlabel .cs-body{ padding-left:calc(26px*var(--cs-k,1)); }
+  .ld-cals.is-qlabel .cs-tag{ position:absolute;left:calc(4.5px*var(--cs-k,1));top:50%;transform:translateY(-50%);width:calc(11px*var(--cs-k,1));height:calc(11px*var(--cs-k,1));color:var(--quest-marker-fg,#1a1a2e);z-index:6; }
+
+  /* Попап */
+  .pp-wrap{ width:470px;display:flex;flex-direction:column;gap:10px; }
+  .ld-expand-popup{ width:100%;position:relative; }
+  .pp-grid{ display:grid;grid-template-columns:196px 1fr;align-items:start;gap:6px; }
+  /* Колонки — отдельные боксы по высоте контента */
+  .pp-left,.pp-right{ display:flex;flex-direction:column;background:var(--background-secondary);border:1px solid var(--background-modifier-border);border-radius:8px;overflow:hidden; }
+  .pp-block{ padding:10px 12px;border-bottom:1px solid var(--background-modifier-border);min-width:0; }
+  .pp-field{ position:relative; }
+  .pp-block-title{ font-size:10px;color:var(--text-faint);font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px; }
+
+  .pp-actions{ display:flex;gap:8px;align-items:center;flex-wrap:wrap; }
+  .pp-actions:empty{ display:none; }
+  .pp-actions .ld-btn{ font-size:10px;padding:3px 9px;white-space:nowrap; }
+  .ld-btn-del{ background:#7f1d1d;color:#fca5a5;border-color:#991b1b; }
+  .ld-btn-del:hover{ opacity:.85; }
+  /* Действия под предпросмотром стикера (внутри бокса) */
+  .pp-acts-row{ padding:8px 12px;border-bottom:1px solid var(--background-modifier-border); }
+  .pp-acts-btns{ display:flex;gap:6px;flex-wrap:wrap; }
+  .pp-acts-btns .ld-btn{ flex:1;text-align:center;font-size:10px;padding:4px 6px; }
+  /* Удалить — внутри бокса, в самом низу */
+  .pp-del-row{ padding:8px 12px;border-top:1px solid var(--background-modifier-border); }
+  .pp-del-row:empty{ display:none; }
+  .pp-del-row .ld-btn{ width:100%;text-align:center;font-size:10px;padding:5px; }
+
+  .ld-expand-popup-close{ position:absolute;top:6px;right:10px;cursor:pointer;color:var(--text-muted);font-size:18px;line-height:1;z-index:40; }
+  .ld-expand-popup-close:hover{ color:var(--text-normal); }
+
+  /* Блок информации */
+  .pp-status-line{ font-size:11px;color:var(--text-muted);margin-bottom:2px; }
+  .pp-status-line b{ color:var(--text-normal);font-weight:600; }
+  .ld-expand-popup-cal{ font-size:12px;color:var(--interactive-accent);margin-bottom:2px; }
+  .pp-done{ font-size:12px;color:#4ade80;margin-bottom:2px; }
+  .ld-expand-popup-detach{ font-size:11px;color:var(--text-muted);cursor:pointer;margin-top:2px; }
+  .ld-expand-popup-detach:hover{ color:var(--text-error); }
+  .pp-task-prev{ font-size:12px;color:var(--text-normal);display:flex;gap:6px;align-items:center; }
+  .pp-cake-sep{ border-top:1px solid var(--background-modifier-border);margin:8px 0 6px; }
+  .pp-cake-title{ font-size:11px;color:var(--text-muted);font-weight:500;margin-bottom:3px; }
+  .pp-cake-group{ font-size:10px;font-weight:600;color:var(--text-muted);margin-top:3px; }
+  .pp-cake-item{ font-size:11px;color:var(--text-muted);padding:1px 0; }
+
+  /* Изолятор + раскрытие */
+  .ld-iso-btn{ background:transparent;border:1px solid var(--background-modifier-border);border-radius:4px;color:var(--text-faint);font-size:11px;padding:4px 8px;cursor:pointer;font-family:inherit;transition:all .12s;width:100%;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:6px; }
+  .ld-iso-btn:hover{ border-color:var(--text-muted);color:var(--text-muted); }
+  .ld-iso-btn.active{ background:var(--background-modifier-hover);border-color:var(--text-muted);color:var(--text-normal); }
+  .ld-iso-btn .iso-val{ flex:1;overflow:hidden;text-overflow:ellipsis; }
+  .ld-iso-btn .iso-chev{ opacity:.5;font-size:9px;flex-shrink:0;transition:transform .26s cubic-bezier(.2,0,0,1); }
+  .ld-iso-btn.open-chev .iso-chev{ transform:rotate(180deg); }
+  .pp-collapse{ display:grid;grid-template-rows:0fr;transition:grid-template-rows .26s cubic-bezier(.2,0,0,1); }
+  .pp-collapse.open{ grid-template-rows:1fr; }
+  .pp-collapse-inner{ overflow:hidden;min-height:0; }
+  .pp-inline-picker{ margin-top:6px;background:var(--background-primary);border:1px solid var(--background-modifier-border);border-radius:6px;padding:4px 0; }
+  .ld-goal-picker-item{ padding:5px 10px;font-size:11px;color:var(--text-normal);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center; }
+  .ld-goal-picker-item:hover{ background:var(--background-modifier-hover); }
+  .ld-goal-picker-item.active{ color:var(--interactive-accent);font-weight:600; }
+  .ld-sphere-dot{ display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle;border:1px solid rgba(0,0,0,0.2);flex-shrink:0; }
+
+  /* Цель (квест) */
+  .goal-row{ display:flex;gap:6px;align-items:center; }
+  .ld-popup-goal-select{ flex:1;background:#252525;border:1px solid #3a3a3a;border-radius:5px;color:#ccc;font-size:11px;padding:4px 6px;cursor:pointer;min-width:0; }
+  .goal-new-btn{ border:1px solid var(--background-modifier-border);background:var(--background-modifier-hover);color:var(--text-normal);border-radius:4px;padding:3px 9px;cursor:pointer;font-size:13px;line-height:1;flex:0 0 auto; }
+  .goal-new-btn:hover{ background:var(--background-modifier-border); }
+
+  /* Перенос месяца */
+  .ld-popup-month-row{ display:flex;align-items:center;gap:4px; }
+  .ld-popup-month-arrow{ background:var(--background-modifier-hover);border:1px solid var(--background-modifier-border);color:var(--text-normal);border-radius:4px;padding:2px 6px;cursor:pointer;font-size:12px; }
+  .ld-popup-month-arrow:hover{ background:var(--background-modifier-border); }
+  .ld-popup-month-label{ flex:1;text-align:center;font-size:12px;color:var(--text-normal); }
+  .ld-popup-transfer-btn{ background:var(--background-modifier-hover);color:var(--text-normal);border:1px solid var(--background-modifier-border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:11px; }
+  .ld-popup-transfer-btn:hover{ background:var(--background-modifier-border); }
+
+  /* Дедлайн */
+  .ld-dl-modes{ display:flex;gap:4px;margin:2px 0 6px; }
+  .ld-dl-mode{ flex:1;padding:4px 6px;font-size:10px;cursor:pointer;background:var(--background-primary-alt);border:1px solid var(--background-modifier-border);color:var(--text-muted);border-radius:4px; }
+  .ld-dl-mode.active{ background:var(--background-modifier-hover);color:var(--text-normal);border-color:var(--interactive-accent); }
+  .ld-dl-edit-row{ display:flex;gap:6px;margin-top:4px; }
+  .ld-dl-inp{ flex:1;background:var(--background-primary-alt);border:1px solid var(--background-modifier-border);color:var(--text-normal);border-radius:4px;padding:3px 6px;font-size:11px; }
+  .ld-dl-rem-row{ display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px;font-size:11px;color:var(--text-muted); }
+  .ld-dl-card{ border-radius:8px;padding:8px 10px;margin:2px 0 4px;border:1px solid var(--dl-accent,#4b5563);background:color-mix(in srgb, var(--dl-accent,#4b5563) 14%, var(--background-primary-alt)); }
+  .ld-dl-card.dl-ok{ --dl-accent:#34d399; }
+  .ld-dl-card.dl-soon{ --dl-accent:#f59e0b; }
+  .ld-dl-card.dl-now{ --dl-accent:#f87171; }
+  .ld-dl-card.dl-over{ --dl-accent:#ef4444; }
+  .ld-dl-card-main{ display:flex;align-items:baseline;gap:6px; }
+  .ld-dl-card-num{ font-size:22px;font-weight:800;line-height:1;color:var(--dl-accent,#e0e0e2); }
+  .ld-dl-card-unit{ font-size:11px;color:var(--text-muted); }
+  .ld-dl-card-when{ font-size:11px;color:var(--text-muted);margin-top:3px; }
+  .ld-dl-card-acts{ display:flex;gap:6px;margin-top:6px; }
+
+  .ld-btn{ border:1px solid var(--background-modifier-border);border-radius:4px;padding:4px 10px;cursor:pointer;background:var(--background-modifier-hover);color:var(--text-normal);font-size:12px; }
+  .ld-btn-primary{ background:var(--interactive-accent);color:var(--text-on-accent);border-color:var(--interactive-accent);font-weight:600; }
+  .ld-btn:hover{ opacity:.85; }
+
+  /* Комментарий — сворачиваемый (строка заголовок + плюс) */
+  .pp-block-head{ display:flex;align-items:center;justify-content:space-between;gap:8px; }
+  .pp-add-btn{ border:1px solid var(--background-modifier-border);background:var(--background-modifier-hover);color:var(--text-normal);border-radius:4px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:14px;line-height:1;flex:0 0 auto;transition:transform .2s; }
+  .pp-add-btn:hover{ background:var(--background-modifier-border); }
+  .pp-add-btn.open{ transform:rotate(45deg); }
+  .ld-expand-popup-comment{ width:100%;resize:vertical;min-height:70px;height:70px;margin-top:8px;background:var(--background-primary-alt);border:1px solid var(--background-modifier-border);border-radius:4px;color:var(--text-normal);font-size:12px;padding:6px;outline:none;font-family:inherit; }
+  .ld-expand-popup-comment:focus{ border-color:var(--interactive-accent); }
+  .ld-expand-popup-comment::placeholder{ color:var(--text-faint); }
+</style>
+</head>
+<body>
+<div class="demo-root">
+
+  <!-- Переключатель типов стикера -->
+  <div class="demo-switch">
+    <span class="lbl">Тип стикера:</span>
+    <button class="demo-tab" data-t="regular">Обычный</button>
+    <button class="demo-tab" data-t="quest">Квест</button>
+    <button class="demo-tab" data-t="task">Задача квеста</button>
+    <button class="demo-tab" data-t="shortcut">Ярлык</button>
+    <button class="demo-tab" data-t="cake">Торт</button>
+  </div>
+  <div class="demo-switch">
+    <span class="lbl">Режим:</span>
+    <button class="mode-tab active" data-m="popup">Единый попап</button>
+    <button class="mode-tab" data-m="canvas">Раздельный попап</button>
+  </div>
+
+  <div class="pp-wrap">
+  <div class="ld-expand-popup" id="popup">
+    <span class="ld-expand-popup-close">&times;</span>
+
+    <div class="pp-grid" id="ppGrid">
+      <!-- ЛЕВО -->
+      <div class="pp-left" id="ppLeft">
+
+        <!-- стикер -->
+        <div class="pp-block" id="blockSticker">
+          <!-- обычный стикер -->
+          <div class="ld-s2 s2-color-yellow" id="stickerNormal">
+            <div class="s2-strip"></div>
+            <!-- значок квеста (фон) -->
+            <div class="s2-quest-bg" id="qBg" style="display:none"><svg class="ld-qicon" viewBox="0 0 24 24" fill="currentColor"><path d="M2 16.5h20l-3-9-4 5-3-9-3 9-4-5-3 9zM2 18.5h20v2H2z"/></svg></div>
+            <!-- уголок задачи квеста -->
+            <div class="s2-qt-corner" id="qCorner" style="display:none"><svg class="ld-qicon" viewBox="0 0 24 24" fill="currentColor"><path d="M2 16.5h20l-3-9-4 5-3-9-3 9-4-5-3 9zM2 18.5h20v2H2z"/></svg></div>
+            <div class="s2-top">
+              <div class="s2-top-left">
+                <svg class="s2-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              </div>
+              <div class="s2-top-right"><span class="s2-del">×</span></div>
+            </div>
+            <div class="s2-body"><div class="s2-title">Сходить в магазин</div></div>
+          </div>
+          <!-- ярлык: предпросмотр как в ячейке дня (.ld-cals.is-qlabel) -->
+          <div class="ld-cals is-qlabel cs-color-yellow" id="stickerLabel" style="--cs-k:1.3;display:none">
+            <div class="cs-strip"></div>
+            <svg class="cs-tag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+            <div class="cs-body">
+              <svg class="cs-grip" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+              <div class="cs-text-col">
+                <span class="cs-quest-name">Физическая подготовка</span>
+                <div class="cs-title">Изучить основные стойки (камаэ)</div>
+              </div>
+            </div>
+          </div>
+          <!-- канвас-режим: только название -->
+          <div class="pp-name-chip" id="stickerName" style="display:none">Сходить в магазин</div>
+        </div>
+
+        <!-- действия под предпросмотром стикера -->
+        <div class="pp-acts-row" id="ppActsUnder">
+          <div class="pp-block-title" id="ppActsTitle">Сделать стикер:</div>
+          <div class="pp-acts-btns" id="ppActsBtns"></div>
+        </div>
+
+        <!-- информация -->
+        <div class="pp-block" id="blockInfo">
+          <div class="pp-block-title">Информация</div>
+          <div id="infoStatus">
+            <div class="pp-status-line">Колонка: <b>Нужно сделать</b></div>
+            <div class="ld-expand-popup-cal" id="statusCal">📅 28 июня</div>
+            <div class="pp-done" id="statusDone" style="display:none">✓ Выполнено: 14 июн 2026, 18:30</div>
+            <div class="ld-expand-popup-detach" id="detachBtn">× Открепить от календаря</div>
+          </div>
+          <div id="infoQuestName" class="pp-status-line" style="display:none">Квест: <b>Физическая подготовка</b></div>
+          <div id="infoTaskPreview" class="pp-task-prev" style="display:none"><span style="color:var(--interactive-accent)">▸</span> Изучить основные стойки (камаэ)</div>
+          <div id="cakeSection" style="display:none">
+            <div class="pp-cake-sep"></div>
+            <div class="pp-cake-title">🍰 Стикер-торт</div>
+            <div class="pp-cake-group">Когда делал:</div>
+            <div class="pp-cake-item">1. 12 июн 2026</div>
+            <div class="pp-cake-item">2. 13 июн 2026</div>
+            <div class="pp-cake-group">Запланировано:</div>
+            <div class="pp-cake-item">3. 28 июн 2026</div>
+          </div>
+        </div>
+
+        <!-- сфера (+ цель у квеста) -->
+        <div class="pp-block pp-field" id="blockSphere">
+          <div class="pp-block-title">Сфера жизни</div>
+          <button class="ld-iso-btn" id="sphereBtn" title="Колесо — переключить сферу, клик — раскрыть список">
+            <span class="ld-sphere-dot" id="sphereBtnDot" style="background:transparent"></span>
+            <span class="iso-val" id="sphereVal">— без сферы</span><span class="iso-chev">▼</span>
+          </button>
+          <div class="pp-collapse pp-iso-collapse" id="sphereCollapse"><div class="pp-collapse-inner"><div class="pp-inline-picker" id="sphereMenu"></div></div></div>
+
+          <!-- ЦЕЛЬ (только у квеста), в том же блоке под сферой -->
+          <div id="goalWrap" style="display:none">
+            <div class="pp-block-title" style="margin-top:10px">🎯 Цель</div>
+            <div class="goal-row">
+              <select class="ld-popup-goal-select" id="goalSelect">
+                <option value="">— без цели</option>
+                <option value="g_70u3kb">Освоить путь меча</option>
+              </select>
+              <button class="goal-new-btn" id="goalNewBtn" title="Создать новую цель">＋</button>
+            </div>
+            <div class="goal-row" id="goalNew" style="display:none;margin-top:6px">
+              <input class="ld-dl-inp" id="goalNewInp" placeholder="Название новой цели…" />
+              <button class="ld-btn ld-btn-primary" id="goalNewOk" style="font-size:11px;padding:4px 8px">Ок</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- перенос месяца -->
+        <div class="pp-block" id="blockMonth">
+          <div class="pp-block-title">Перенести на месяц</div>
+          <div class="ld-popup-month-row">
+            <button class="ld-popup-month-arrow" id="mPrev">←</button>
+            <span class="ld-popup-month-label" id="mLabel">Июнь 2026</span>
+            <button class="ld-popup-month-arrow" id="mNext">→</button>
+          </div>
+          <button class="ld-popup-transfer-btn" style="width:100%;margin-top:6px">Перенести</button>
+        </div>
+
+        <!-- комментарий СЛЕВА (только для ярлыка) -->
+        <div class="pp-block" id="blockCommentLeft" style="display:none">
+          <div class="pp-block-title">Комментарий</div>
+          <textarea class="ld-expand-popup-comment" placeholder="Комментарий..."></textarea>
+        </div>
+        <!-- удалить — внутри бокса, в самом низу -->
+        <div class="pp-del-row" id="ppDelRow"></div>
+      </div>
+
+      <!-- ЦЕНТР (канвас-режим: стикер-название + действия + удалить) -->
+      <div class="pp-center" id="ppCenter"></div>
+
+      <!-- ПРАВО -->
+      <div class="pp-right" id="ppRight">
+        <!-- дедлайн -->
+        <div class="pp-block pp-field" id="blockDeadline">
+          <div class="pp-block-title">⏱ Дедлайн</div>
+          <div class="ld-dl-modes">
+            <button class="ld-dl-mode" data-mode="sticker" title="Дедлайн = день, на котором стоит стикер.">📌 По дню стикера</button>
+            <button class="ld-dl-mode active" data-mode="fixed" title="Точная дата и время.">📅 Своя дата</button>
+          </div>
+          <div class="ld-dl-card dl-ok" id="dlCard">
+            <div class="ld-dl-card-main"><span class="ld-dl-card-num" id="dlNum">5</span><span class="ld-dl-card-unit" id="dlUnit">дней осталось</span></div>
+            <div class="ld-dl-card-when" id="dlWhen">📅 28 июня 2026, 18:00</div>
+            <div class="ld-dl-card-acts">
+              <button class="ld-btn" id="dlEditBtn" style="font-size:10px;padding:2px 7px">✎ Изменить</button>
+              <button class="ld-btn" id="dlClearBtn" style="font-size:10px;padding:2px 7px;background:#1a0a0a;border-color:#4a1010;color:#a44">✕ Убрать</button>
+            </div>
+          </div>
+          <div id="dlAdd" style="display:none">
+            <div id="dlSticker"><button class="ld-btn" id="dlAddSticker" style="width:100%;font-size:11px;padding:5px">Дедлайн +</button></div>
+            <div class="pp-collapse" id="dlFixedCollapse"><div class="pp-collapse-inner"><div style="padding-top:6px">
+              <div class="ld-dl-edit-row"><input type="date" class="ld-dl-inp" id="dlDateInp" value="2026-06-28" /><input type="time" class="ld-dl-inp" id="dlTimeInp" value="18:00" /></div>
+              <div class="ld-dl-edit-row"><button class="ld-btn ld-btn-primary" id="dlOk" style="flex:1;font-size:11px;padding:4px">Ок</button><button class="ld-btn" id="dlCancel" style="flex:1;font-size:11px;padding:4px">Отмена</button></div>
+            </div></div></div>
+          </div>
+          <div class="ld-dl-rem-row" id="dlRem"><span>Напоминаний в день</span><input type="number" min="1" max="12" value="1" class="ld-dl-inp" style="width:54px;flex:0 0 auto" /></div>
+        </div>
+
+        <!-- комментарий СПРАВА (по умолчанию) -->
+        <div class="pp-block" id="blockCommentRight">
+          <div class="pp-block-title">Комментарий</div>
+          <textarea class="ld-expand-popup-comment" placeholder="Комментарий..."></textarea>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  </div>
+</div>
+
+<script>
+  // ── Изолятор сферы ──
+  function makeIsolator({ btn, collapse, menu, val, items, start, dot, onChange }){
+    let idx = start;
+    function render(){
+      val.textContent = items[idx].label;
+      if (dot) dot.style.background = items[idx].color || 'transparent';
+      menu.querySelectorAll('.ld-goal-picker-item').forEach((el,i)=>el.classList.toggle('active', i===idx));
+      btn.classList.toggle('active', idx !== start);
+      if (onChange) onChange(items[idx]);
+    }
+    function close(){ collapse.classList.remove('open'); btn.classList.remove('open-chev'); }
+    items.forEach((it,i)=>{
+      const el=document.createElement('div'); el.className='ld-goal-picker-item';
+      el.innerHTML=(it.color!==undefined?`<span class="ld-sphere-dot" style="background:${it.color||'transparent'}"></span>`:'')+it.label;
+      el.onclick=e=>{ e.stopPropagation(); idx=i; render(); close(); }; menu.appendChild(el);
+    });
+    btn.addEventListener('click', e=>{ e.stopPropagation(); const o=!collapse.classList.contains('open'); closeAll(collapse); collapse.classList.toggle('open',o); btn.classList.toggle('open-chev',o); });
+    btn.addEventListener('wheel', e=>{ e.preventDefault(); idx=(idx+(e.deltaY>0?1:-1)+items.length)%items.length; render(); }, {passive:false});
+    render();
+  }
+  function closeAll(except){ document.querySelectorAll('.pp-iso-collapse.open').forEach(m=>{ if(m!==except){ m.classList.remove('open'); const b=m.parentElement.querySelector('.ld-iso-btn'); if(b)b.classList.remove('open-chev'); } }); }
+  document.addEventListener('click', ()=>closeAll(null));
+
+  makeIsolator({
+    btn:document.getElementById('sphereBtn'), collapse:document.getElementById('sphereCollapse'),
+    menu:document.getElementById('sphereMenu'), val:document.getElementById('sphereVal'), dot:document.getElementById('sphereBtnDot'), start:0,
+    items:[
+      {id:'',label:'— без сферы',color:''},
+      {id:'sp_68ea',label:'Семья',color:'#8fe28d'},
+      {id:'sp_dff5',label:'Социальное',color:'#fed7aa'},
+      {id:'sp_9260',label:'Карьера и материальное благополучие',color:'#fef08a'},
+      {id:'sp_ff95',label:'Развитие и увлечения',color:'#c0e8ce'},
+      {id:'sp_733a',label:'Здоровье',color:'#bfdbfe'},
+      {id:'sp_0066',label:'Ценности и смысл',color:'#e9d5ff'},
+    ],
+    onChange:(sp)=>{ const col=sp.color||'#fdfd96'; const c=document.querySelector('.ld-s2'); if(c){ c.style.background=col; c.style.color='#333'; } const n=document.getElementById('stickerName'); if(n) n.style.background=col; },
+  });
+
+  // Открепить
+  document.getElementById('detachBtn').onclick=()=>{ document.getElementById('statusCal').style.display='none'; document.getElementById('detachBtn').style.display='none'; };
+
+  // Перенос месяца
+  const MONTHS=['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+  let mIdx=5,mYear=2026; const mLabel=document.getElementById('mLabel'); const setM=()=>mLabel.textContent=`${MONTHS[mIdx]} ${mYear}`;
+  document.getElementById('mPrev').onclick=()=>{ if(--mIdx<0){mIdx=11;mYear--;} setM(); };
+  document.getElementById('mNext').onclick=()=>{ if(++mIdx>11){mIdx=0;mYear++;} setM(); };
+
+  // Дедлайн
+  const GEN=['','января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
+  const TODAY=new Date(2026,5,23), STICKER_DAY=new Date(2026,5,28);
+  const daysLeft=d=>Math.round((new Date(d.getFullYear(),d.getMonth(),d.getDate())-new Date(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate()))/86400000);
+  function unitText(n){ if(n===0)return'Сегодня'; const a=Math.abs(n); const w=(a%10===1&&a%100!==11)?'день':((a%10>=2&&a%10<=4&&(a%100<10||a%100>=20))?'дня':'дней'); return n<0?`${w} назад`:`${w} осталось`; }
+  const urgency=n=>n<0?'dl-over':n===0?'dl-now':n<=3?'dl-soon':'dl-ok';
+  const dlCard=document.getElementById('dlCard'),dlAdd=document.getElementById('dlAdd'),dlRem=document.getElementById('dlRem'),dlSticker=document.getElementById('dlSticker'),dlFixedCollapse=document.getElementById('dlFixedCollapse'),dlNum=document.getElementById('dlNum'),dlUnit=document.getElementById('dlUnit'),dlWhen=document.getElementById('dlWhen'),dlEditBtn=document.getElementById('dlEditBtn');
+  let assigned=true,fixed=true,dlDate=new Date(2026,5,28),dlTime='18:00';
+  function dlRender(){
+    document.querySelectorAll('.ld-dl-mode').forEach(b=>b.classList.toggle('active',(b.dataset.mode==='fixed')===fixed));
+    dlCard.style.display=assigned?'':'none'; dlAdd.style.display=assigned?'none':''; dlRem.style.display=assigned?'':'none';
+    if(assigned){ const d=fixed?dlDate:STICKER_DAY,n=daysLeft(d); dlNum.textContent=n===0?'Сегодня':Math.abs(n); dlUnit.textContent=n===0?'':unitText(n); dlCard.className='ld-dl-card '+urgency(n);
+      dlWhen.textContent=fixed?`📅 ${d.getDate()} ${GEN[d.getMonth()+1]} ${d.getFullYear()}, ${dlTime}`:`📅 ${d.getDate()} ${GEN[d.getMonth()+1]} ${d.getFullYear()} (день стикера)`; dlEditBtn.style.display=fixed?'':'none';
+    } else { dlSticker.style.display=fixed?'none':''; dlFixedCollapse.classList.toggle('open',fixed); }
+  }
+  document.querySelectorAll('.ld-dl-mode').forEach(b=>{ b.onclick=()=>{ const f=b.dataset.mode==='fixed'; if(f!==fixed)assigned=false; fixed=f; dlRender(); }; });
+  document.getElementById('dlAddSticker').onclick=()=>{ assigned=true; dlRender(); };
+  document.getElementById('dlOk').onclick=()=>{ const v=document.getElementById('dlDateInp').value; if(v){const[y,m,da]=v.split('-').map(Number);dlDate=new Date(y,m-1,da);} dlTime=document.getElementById('dlTimeInp').value||'18:00'; assigned=true; dlRender(); };
+  dlEditBtn.onclick=()=>{ assigned=false; fixed=true; dlRender(); };
+  document.getElementById('dlClearBtn').onclick=()=>{ assigned=false; dlRender(); };
+  document.getElementById('dlCancel').onclick=()=>{ assigned=true; dlRender(); };
+  dlRender();
+
+  // Цель: создать новую
+  document.getElementById('goalNewBtn').onclick=()=>{ const g=document.getElementById('goalNew'); g.style.display=''; document.getElementById('goalNewInp').focus(); };
+  document.getElementById('goalNewOk').onclick=()=>{ const inp=document.getElementById('goalNewInp'),v=inp.value.trim(); if(!v)return; const sel=document.getElementById('goalSelect'); const o=document.createElement('option'); o.textContent=v; o.value='new'; sel.appendChild(o); sel.value='new'; inp.value=''; document.getElementById('goalNew').style.display='none'; };
+
+
+  // Двойной клик → переименование (кроме ярлыка)
+  const stCard=document.querySelector('.ld-s2'), stTitle=stCard.querySelector('.s2-title'); let stPrev='';
+  stCard.addEventListener('dblclick', e=>{
+    e.stopPropagation(); if(stTitle.dataset.ro) return;
+    stPrev=stTitle.textContent; stTitle.setAttribute('contenteditable','true'); stTitle.classList.add('editing'); stTitle.focus();
+    const r=document.createRange(); r.selectNodeContents(stTitle); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r);
+  });
+  stTitle.addEventListener('keydown', e=>{ e.stopPropagation(); if(e.key==='Enter'){e.preventDefault();stTitle.blur();} else if(e.key==='Escape'){e.preventDefault();stTitle.textContent=stPrev;stTitle.blur();} });
+  stTitle.addEventListener('blur', ()=>{ stTitle.setAttribute('contenteditable','false'); stTitle.classList.remove('editing'); if(!stTitle.textContent.trim())stTitle.textContent=stPrev; });
+
+  // ── Типы стикера ──
+  const ACT={
+    quest:'<button class="ld-btn ld-btn-primary">Квестом</button>',
+    recurring:'<button class="ld-btn">Регулярным</button>',
+    openpage:'<button class="ld-btn ld-btn-primary">Открыть квест</button>',
+    openquest:'<button class="ld-btn ld-btn-primary">Открыть квест</button>',
+    cakedone:'<button class="ld-btn ld-btn-primary">Выполнено</button>',
+    cakedissolve:'<button class="ld-btn">Расформировать</button>',
+    delete:'<button class="ld-btn ld-btn-del">Удалить</button>',
+  };
+  const CFG={
+    regular: {sphere:1,goal:0,month:1,deadline:1,comment:'right',info:'status',cake:0,ro:0,acts:['quest','recurring','delete']},
+    quest:   {sphere:1,goal:1,month:1,deadline:0,comment:'right',info:'status',cake:0,ro:0,acts:['openpage','delete']},
+    task:    {sphere:0,goal:0,month:0,deadline:1,comment:'right',info:'quest', cake:0,ro:0,acts:['openquest','delete']},
+    shortcut:{sphere:0,goal:0,month:0,deadline:0,comment:'left', info:'task',  cake:0,ro:1,acts:['openpage','delete']},
+    cake:    {sphere:1,goal:0,month:0,deadline:1,comment:'right',info:'status',cake:1,ro:0,acts:['cakedone','cakedissolve','delete']},
+  };
+  const E={
+    grid:document.getElementById('ppGrid'), left:document.getElementById('ppLeft'), right:document.getElementById('ppRight'),
+    sphere:document.getElementById('blockSphere'), month:document.getElementById('blockMonth'), deadline:document.getElementById('blockDeadline'),
+    cRight:document.getElementById('blockCommentRight'), cLeft:document.getElementById('blockCommentLeft'),
+    goalWrap:document.getElementById('goalWrap'),
+    infoStatus:document.getElementById('infoStatus'), infoQuest:document.getElementById('infoQuestName'), infoTask:document.getElementById('infoTaskPreview'), cake:document.getElementById('cakeSection'),
+    stNormal:document.getElementById('stickerNormal'), stLabel:document.getElementById('stickerLabel'),
+    qBg:document.getElementById('qBg'), qCorner:document.getElementById('qCorner'),
+    wrap:document.querySelector('.pp-wrap'),
+    actsUnder:document.getElementById('ppActsUnder'), actsBtns:document.getElementById('ppActsBtns'), actsTitle:document.getElementById('ppActsTitle'), del:document.getElementById('ppDelRow'),
+    center:document.getElementById('ppCenter'), stName:document.getElementById('stickerName'), infoBlock:document.getElementById('blockInfo'),
+    title:stTitle,
+  };
+  const show=(el,on)=>el.style.display=on?'':'none';
+  // keep=true → у колонки оставляем нижнюю границу и у последнего блока (она короче,
+  // блок не должен сливаться с пустым местом). keep=false → у нижней (самой длинной)
+  // колонки убираем границу последнего блока (он у самого края попапа).
+  function trimCol(box, keep){
+    const bl=[...box.children].filter(x=>x.classList.contains('pp-block')); let last=null;
+    bl.forEach(b=>{ b.style.borderBottom = (b.style.display==='none') ? '' : '1px solid var(--background-modifier-border)'; if(b.style.display!=='none') last=b; });
+    if(!keep && last) last.style.borderBottom='none';
+  }
+  let curType='regular', mode='popup';
+  function setType(t){
+    curType=t; const c=CFG[t];
+    show(E.qBg, t==='quest'); show(E.qCorner, t==='task');               // значок квеста / уголок задачи
+    show(E.sphere,c.sphere); show(E.goalWrap,c.goal); show(E.month,c.month); show(E.deadline,c.deadline); show(E.cake,c.cake);
+    show(E.infoStatus,c.info==='status'); show(E.infoQuest,c.info==='quest'); show(E.infoTask,c.info==='task');
+    show(E.cLeft,c.comment==='left'); show(E.cRight,c.comment==='right');
+    E.title.dataset.ro=c.ro?'1':''; E.title.style.opacity=c.ro?'.7':'';
+    const topActs=c.acts.filter(a=>a!=='delete');
+    E.actsBtns.innerHTML=topActs.map(a=>ACT[a]).join('');                              // создать/открыть
+    show(E.actsUnder, topActs.length>0);
+    show(E.actsTitle, t==='regular');                                                  // «Сделать стикер:» — только у обычного
+    E.del.innerHTML=c.acts.includes('delete')?ACT.delete:'';                           // удалить
+    document.querySelectorAll('.demo-tab').forEach(b=>b.classList.toggle('active',b.dataset.t===t));
+    applyMode();
+  }
+  // Два режима: «попап» (всё вместе) и «канвас» (стикер по центру = название, блоки по бокам)
+  function applyMode(){
+    const c=CFG[curType], canvas=mode==='canvas';
+    const sticker=document.getElementById('blockSticker');
+    if(canvas){
+      const dOn=!!c.deadline;                                                          // справа — только дедлайн
+      E.center.appendChild(sticker); E.center.appendChild(E.cRight);                    // центр: стикер + комментарий под ним
+      E.left.insertBefore(E.actsUnder, E.infoBlock); E.left.appendChild(E.del);         // действия над инфо, удалить внизу
+      show(E.center,true); show(E.cRight,true); show(E.cLeft,false); show(E.right,dOn);
+      show(E.stNormal,false); show(E.stLabel,false); show(E.stName,true);             // превью → только название
+      E.stName.classList.toggle('no-right', !dOn);
+      E.grid.style.gap='22px';
+      E.grid.style.gridTemplateColumns = dOn ? '180px 180px 180px' : '180px 180px';
+      E.wrap.style.width = dOn ? '584px' : '382px';
+      trimCol(E.left,false); if(dOn) trimCol(E.right,false);
+    } else {
+      const rightOn=!!(c.deadline||c.comment==='right');
+      E.left.insertBefore(sticker, E.infoBlock); E.left.insertBefore(E.actsUnder, E.infoBlock); E.left.appendChild(E.del);
+      E.right.appendChild(E.cRight);                                                    // комментарий — обратно в правый бокс
+      show(E.center,false);
+      show(E.cLeft,c.comment==='left'); show(E.cRight,c.comment==='right'); show(E.right,rightOn);
+      show(E.stNormal, curType!=='shortcut'); show(E.stLabel, curType==='shortcut'); show(E.stName,false);
+      E.grid.style.gap='';
+      E.grid.style.gridTemplateColumns = rightOn ? '196px 1fr' : '1fr';
+      E.wrap.style.width = (curType==='shortcut') ? '190px' : '470px';
+      trimCol(E.left,false); if(rightOn) trimCol(E.right,false);
+    }
+    document.querySelectorAll('.mode-tab').forEach(b=>b.classList.toggle('active',b.dataset.m===mode));
+  }
+  document.querySelectorAll('.demo-tab').forEach(b=>b.onclick=()=>setType(b.dataset.t));
+  document.querySelectorAll('.mode-tab').forEach(b=>b.onclick=()=>{ mode=b.dataset.m; applyMode(); });
+  setType('regular');
+</script>
+</body>
+</html>

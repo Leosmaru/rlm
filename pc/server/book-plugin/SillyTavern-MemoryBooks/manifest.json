@@ -1,0 +1,14 @@
+{
+    "display_name": "Memory Books",
+    "loading_order": 101,
+    "requires": [],
+    "optional": [],
+    "js": "index.build.js",
+    "css": "style.build.css",
+    "author": "aikohanasaki",
+    "version": "6.12.0",
+    "license": "AGPL-3.0",
+    "homePage": "https://github.com/aikohanasaki/SillyTavern-MemoryBooks",
+    "auto_update": false,
+    "description": "Creates and saves chat memories and trackers to SillyTavern lorebooks with keywords and numbered titles. Localized in multiple languages."
+}

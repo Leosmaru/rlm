@@ -1,0 +1,1352 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Реальные CSS SillyTavern + Moonlit (скопированы как есть), затем наши переменные Cappuccino -->
+  <link rel="stylesheet" href="fontawesome.min.css" />
+  <link rel="stylesheet" href="solid.min.css" />
+  <link rel="stylesheet" href="st-tailwind.css" />
+  <link rel="stylesheet" href="st-animations.css" />
+  <link rel="stylesheet" href="st-style.css" />
+  <link rel="stylesheet" href="moonlit-extension.css" />
+  <link rel="stylesheet" href="moonlit-style.css" />
+  <link rel="stylesheet" href="base-vars.css" />
+  <style>
+    /* RLM: поле ввода — во всю ширину ПОД рядом кнопок (кнопки сверху, зона письма снизу) */
+    #send_form { align-items: center; }
+    #rightSendForm { margin-left: auto; }              /* кнопку отправки — к правому краю верхнего ряда */
+    #send_textarea { order: 10; flex: 1 0 100%; width: 100%; min-height: 3.6em; }   /* две строки — крупная цель для пальца */
+    /* RLM: кнопки действий над полем ввода */
+    #rlm-actions { display: flex; gap: 6px; padding: 4px 6px 1px; justify-content: flex-start; }   /* прижать к блоку ввода */
+    .rlm-act { font-family: inherit; font-size: 10px; color: var(--SmartThemeBodyColor, #cdd); background: transparent;
+      border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor, #889) 40%, transparent); border-radius: 6px;
+      padding: 1px 7px; cursor: pointer; opacity: 1; transition: all 0.2s ease; }
+    .rlm-act:hover { border-color: var(--customThemeColor, #8ab); }
+    /* RLM: «Собрать главу» — появляется, когда отмечена сцена ►◄; акцентная */
+    .rlm-build { opacity: 1; color: #eaf2f8; border-color: #66c0f4; background: rgba(102, 192, 244, 0.12); }
+    .rlm-build:hover { border-color: #66c0f4; background: rgba(102, 192, 244, 0.22); }
+    /* RLM группа: «След. ход» — акцент коробки передач */
+    .rlm-next { opacity: 1; color: #f2e6d2; border-color: #cda36a; background: rgba(205, 163, 106, 0.14); }
+    .rlm-next:hover { border-color: #cda36a; background: rgba(205, 163, 106, 0.26); }
+    .rlm-auto { opacity: 1; color: #f2e6d2; border-color: #cda36a; background: rgba(205, 163, 106, 0.10); }
+    .rlm-auto:hover { border-color: #cda36a; background: rgba(205, 163, 106, 0.22); }
+    .rlm-auto.on { color: #20191b; background: #cda36a; border-color: #cda36a; font-weight: 600; }
+    /* RLM: inline-редактор реплики */
+    .mes-edit { width: 100%; box-sizing: border-box; min-height: 60px; font-family: inherit; font-size: inherit;
+      color: inherit; background: rgba(0, 0, 0, 0.25); border: 1px solid var(--customThemeColor, #8ab);
+      border-radius: 6px; padding: 6px; resize: vertical; }
+    /* RLM: МОБИЛЬНЫЙ редактор реплики — лист, ЗАКРЕПЛЁННЫЙ над клавиатурой (fixed + visualViewport).
+       Клавиатура не двигает его целиком: лист «садится» ровно над ней, а текст скроллится ВНУТРИ textarea. */
+    .mes-edit-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, 0.45); }
+    .mes-edit-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 61; display: flex; flex-direction: column;
+      background: var(--SmartThemeBlurTintColor, #1b1719); border-top: 1px solid var(--customThemeColor, #8ab);
+      box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.5); }
+    .mes-edit-sheet .mes-edit-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+    .mes-edit-sheet .mes-edit-title { flex: 1; text-align: center; font-size: 13px; opacity: 0.8; }
+    .mes-edit-sheet .mes-edit-btn { font-family: inherit; font-size: 14px; padding: 6px 14px; border-radius: 8px; cursor: pointer;
+      border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor, #889) 40%, transparent); background: transparent; color: inherit; }
+    .mes-edit-sheet .mes-edit-save { border-color: var(--customThemeColor, #8ab); color: #eaf2f8; background: rgba(102, 192, 244, 0.14); font-weight: 600; }
+    /* textarea заполняет лист и скроллится внутри; 16px — чтобы мобильный браузер не зумил при фокусе */
+    .mes-edit-sheet textarea.mes-edit { flex: 1 1 auto; width: 100%; box-sizing: border-box; min-height: 0; margin: 0;
+      border: none; border-radius: 0; background: transparent; resize: none; overflow-y: auto; padding: 12px; font-size: 16px; line-height: 1.5; }
+    /* RLM: разметка сцены (каретки старт/конец, как в MachineMechanic) — ИНЛАЙН внутри имени */
+    .mes-scene-start, .mes-scene-end { font-size: 22px; line-height: 0; opacity: 0.5; cursor: pointer; vertical-align: middle; margin-left: 8px; font-weight: 400; transition: opacity .12s, color .12s; }
+    .mes-scene-start:hover, .mes-scene-end:hover { opacity: 1; }
+    .mes-scene-start.on { color: #6ee87a; opacity: 1; }
+    .mes-scene-end.on { color: #e0a35a; opacity: 1; }
+    /* RLM: ряд действий под сообщением — все иконки FontAwesome, ЕДИНЫЙ размер и центровка по базовой линии.
+       (раньше ↻ / 💬 / 🔊 были эмодзи и разъезжались по размеру и высоте — отсюда «беспорядок») */
+    /* Размер значков сообщения = как у значков ввода (15px), gap меньше — чтобы влезали в мобильной ширине. */
+    .mes .mes_buttons { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+    .mes .mes_buttons > .mes_button { font-size: 15px !important; line-height: 1; height: 16px; width: auto; margin: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+      opacity: 0.5; cursor: pointer; transition: opacity .12s, color .12s; }
+    .mes .mes_buttons > .mes_button:hover,
+    .mes .mes_buttons > .mes_button.on { opacity: 1; }
+    .mes .mes_buttons > .mes_button.busy { opacity: 0.3; pointer-events: none; }
+    .mes-regen:hover, .mes-tr:hover { color: var(--customThemeColor, #8ab); }
+    /* Выбор первого сообщения (перед началом ролки): стрелки ‹ › под приветствием */
+    .rlm-greet-nav { display: flex; align-items: center; gap: 8px; margin: 8px 2px 0; }
+    .rlm-greet-arrow { font-size: 15px; line-height: 1; color: inherit; background: rgba(127,127,127,.12);
+      border: 1px solid rgba(127,127,127,.32); border-radius: 4px; padding: 1px 11px; cursor: pointer; opacity: .8; transition: opacity .12s, background .12s; }
+    .rlm-greet-arrow:hover { opacity: 1; background: rgba(127,127,127,.24); }
+    .rlm-greet-count { font-size: 12px; opacity: .7; min-width: 42px; text-align: center; }
+    /* Текст сообщения использует больше ширины справа — уменьшенный правый паддинг блока (было 15px). */
+    body.ripplestyle #chat .mes .mes_block { padding-right: 5px !important; }
+    /* RLM: СКРИМ-затенение — тёмный слой ПОВЕРХ низа чата (сообщения + фон), с РАЗМЫТЫМ верхним краем.
+       Слои: чат (z0) → скрим (z1) → кнопки/лента/полоса/ввод (z2). Параметры в CSS-переменных — крутятся
+       ползунком вживую (тёмность / высота / размытие), сохраняются в localStorage. */
+    :root { --rlm-shade-d: .82; --rlm-shade-h: 210px; --rlm-shade-blur: 3px; }
+    /* Кнопки и лента загрузки БОЛТАЮТСЯ В ВОЗДУХЕ над чатом — без плашки и без отдельной полосы.
+       Зона поднята на чат (margin-top<0) и НЕ занимает своё место в потоке → ввод встаёт под чат,
+       тёмной полосы-«плашки» между чатом и вводом не остаётся. Прозрачная; клики проходят к чату (кликабельны только кнопки). */
+    /* Затенение над вводом = два слоя:
+       (1) БЛЮР #sheld::after (Размытие) — ПОЗАДИ текста (z ниже #chat): мылит только фон-картинку у низа, не трогая текст;
+           поэтому нет цветной каймы над контентом (она была, когда блюр лежал ПОВЕРХ текста).
+       (2) ТЁМНЫЙ ГРАДИЕНТ #rlm-zone::before (Тёмность/Высота) — от верхней границы блока ввода вверх, ПОВЕРХ текста;
+           тёмная часть закрывает кромку прокрутки → текст плавно тает, не режется. */
+    /* И ГРАДИЕНТ, и БЛЮР анкерятся на ВЕРХ блока ввода (низ #rlm-zone) и идут ВВЕРХ — накрывают только зону кнопок,
+       НЕ касаясь блока ввода сообщения. Блюр держим в тёмной зоне (маска 20→42%), чтобы не было цветной каймы над читаемым текстом. */
+    #chat { position: relative; z-index: 0; max-height: none !important; min-height: 0; }
+    /* RLM: запас прокрутки снизу — чтобы ПОСЛЕДНЕЕ сообщение (и его теги-источники/критик под ним) можно
+       было домотать ВЫШЕ нижней зоны (ввод + затенение), а не упираться в неё. Растёт вместе с высотой
+       затенения (--rlm-shade-h), поэтому при любой настройке скрима низ всегда домотывается. */
+    #chat { padding-bottom: calc(var(--rlm-shade-h) + 40px) !important; }
+    /* Телефон: поле ввода выше (крупная тач-цель) + системная полоса снизу (home-бар / safe-area) съедают запас —
+       низ последнего сообщения (теги-источники / критик / состояние) упирался в ввод и не домётывался.
+       Даём БОЛЬШЕ места домотать чат вниз + учитываем safe-area, чтобы теги всегда читались над вводом. */
+    @media (max-width: 820px) {
+      #chat { padding-bottom: calc(var(--rlm-shade-h) + 120px + env(safe-area-inset-bottom, 0px)) !important; }
+    }
+    #rlm-zone { position: relative; z-index: 2; margin-top: -38px; background: none; pointer-events: none; }
+    #rlm-zone::before { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: var(--rlm-shade-h); z-index: -2; pointer-events: none;
+      background: linear-gradient(to top, rgba(0,0,0,var(--rlm-shade-d)) 0%, rgba(0,0,0,var(--rlm-shade-d)) 46%, rgba(0,0,0,0) 100%); }
+    #rlm-zone::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: var(--rlm-shade-h); z-index: -1; pointer-events: none;
+      -webkit-backdrop-filter: blur(var(--rlm-shade-blur)); backdrop-filter: blur(var(--rlm-shade-blur));
+      -webkit-mask-image: linear-gradient(to top, #000 20%, transparent 42%); mask-image: linear-gradient(to top, #000 20%, transparent 42%); }
+    .rlm-ctl { position: relative; z-index: 1; pointer-events: none; }
+    #rlm-actions { pointer-events: none; }
+    .rlm-act, #rlm-proc, #rlm-proc-bar { pointer-events: auto; }
+    /* Блок ввода НЕ трогаем градиентом/блюром/подложкой — он остаётся чистым (затенение только над ним, на зоне кнопок). */
+    #form_sheld { position: relative; z-index: 2; border-top: 0 !important; box-shadow: none !important; }
+    /* Светящаяся акцентная линия ввода — ПОСТОЯННО (как при активном фокусе), а не только когда пишешь. */
+    #send_form { background: transparent !important; opacity: 1 !important;
+      border: 0 !important; border-top: 1.25px solid var(--customThemeColor, #8ab) !important;
+      box-shadow: 0 -2px 12px -4px color-mix(in srgb, var(--customThemeColor, #8ab) 45%, transparent) !important; }
+    @media (max-width: 1000px) { #send_form { border-radius: 10px 10px 0 0 !important; } }
+    /* Телефон: чат на ВСЮ ширину — «Ширина чата» из опций только для десктопа, на телефоне боковые поля не нужны. */
+    @media (max-width: 820px) { #sheld { width: 100% !important; } }
+    /* Параметры затенения (--rlm-shade-*) крутятся в панели настроек чата (RLM), рассылаются в оба кадра. */
+    /* строка процесса: текст по центру + крестик символом в конце названия (не кнопка) */
+    .rlm-ctl { position: relative; }
+    /* строка процесса ПЕРЕКРЫВАЕТ ряд кнопок (абсолютом поверх) — кнопки не двигаются */
+    #rlm-proc { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 2;
+      display: flex; align-items: center; justify-content: center; padding: 0 12px; text-align: center; }
+    #rlm-proc[hidden] { display: none; }
+    .rlm-proc-text { font-size: 13px; color: var(--SmartThemeBodyColor, #ddd); }
+    .rlm-proc-text.ok  { color: #6ee87a; }
+    .rlm-proc-text.err { color: #e0645a; }
+    .rlm-proc-text.scene { color: var(--customThemeColor, #66c0f4); }
+    .rlm-proc-x { margin-left: 8px; font-size: 13px; line-height: 1; cursor: pointer;
+      color: color-mix(in srgb, var(--SmartThemeBodyColor, #889) 55%, transparent); }
+    .rlm-proc-x:hover { color: #e0645a; }
+    .rlm-proc-x[hidden] { display: none; }
+    /* полоса процесса — анимируется из JS (реально движется в любом рендере) */
+    #rlm-proc-bar { position: relative; z-index: 1; height: 3px; margin: 5px 10px 0; border-radius: 3px;
+      background: rgba(255,255,255,.06); overflow: hidden; opacity: 0; transition: opacity .2s; }
+    #rlm-proc-bar.on { opacity: 1; }
+    #rlm-proc-bar > i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 3px;
+      opacity: 0; background: var(--customThemeColor, #51a0de); font-style: normal; }
+    .mes-tr.on { color: #66c0f4; opacity: 1; }
+    .mes-tr-busy, #rlm-tr-input.busy { opacity: 0.4; pointer-events: none; }
+    .mes.stmb-in-scene { box-shadow: inset 3px 0 0 rgba(110, 232, 122, 0.55); }
+    /* RLM Хроника: подпись сцены (всегда, вверху сообщения) + «призрак» — сообщение свёрнуто и НЕ идёт в контекст */
+    .mes-scene-tag { display: inline-block; font-size: 10px; letter-spacing: .3px; line-height: 1.4;
+      color: var(--cap-italic, #d8c4a8); background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.14);
+      border-radius: 10px; padding: 1px 9px; margin: 0 0 5px 0; opacity: .9; max-width: 100%;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mes.mes-ghost { opacity: .5; }
+    .mes.mes-ghost .mes_text { font-style: italic; }
+    .mes-ghost-ic { margin-left: 6px; font-size: .9em; opacity: .85; cursor: default; }
+    /* RLM группа: реплика Рассказчика — прозой во всю ширину, без аватара и имени (без курсива) */
+    #chat .mes.mes-narr .mes_block { flex: 1 1 auto; width: 100%; min-width: 0; }
+    /* RLM группа: активный говорящий («на передаче») — имя и аватар золотым акцентом коробки передач */
+    #chat .mes.mes-active-speaker .name_text { color: #cda36a; }
+    #chat .mes.mes-active-speaker .avatar { box-shadow: 0 0 0 2px #cda36a; }
+    .mes.stmb-flash { animation: stmbFlash 1.4s ease-out; }
+    @keyframes stmbFlash { 0% { background: rgba(110, 232, 122, 0.22); } 100% { background: transparent; } }
+    /* RLM: теги-источники под ответом («откуда взята инфа») */
+    .mes-sources { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+    /* RLM: плеер озвучки под сообщением — играть/пауза, перемотка (нативный range: палец/мышь), перегенерация */
+    .mes-tts-player { display: flex; align-items: center; gap: 10px; margin-top: 8px; max-width: 560px;
+      padding: 6px 12px; border-radius: 9px; border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.06); }
+    .mes-ttsp-btn { flex: 0 0 auto; width: 24px; height: 24px; padding: 0; font-size: 13px; line-height: 1; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center; border: none; background: transparent;
+      color: var(--SmartThemeBodyColor, #ddd); opacity: .85; transition: opacity .12s, color .12s; }
+    .mes-ttsp-btn:hover { opacity: 1; color: var(--customThemeColor, #8ab); }
+    .mes-ttsp-btn.busy { opacity: .35; pointer-events: none; }
+    .mes-ttsp-time { flex: 0 0 auto; min-width: 78px; text-align: right; font-size: 11px; opacity: .7; font-variant-numeric: tabular-nums; }
+    .mes-ttsp-seek { flex: 1 1 auto; -webkit-appearance: none; appearance: none; height: 5px; margin: 0; border-radius: 4px;
+      background: rgba(255,255,255,.14); outline: none; cursor: pointer; }
+    .mes-ttsp-seek::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 13px; height: 13px; margin: 0;
+      border: none; border-radius: 50%; background: var(--customThemeColor, #8ab); cursor: pointer; }
+    .mes-ttsp-seek::-moz-range-thumb { width: 13px; height: 13px; border: none; border-radius: 50%; background: var(--customThemeColor, #8ab); cursor: pointer; }
+    .mes-critic { margin-top: 8px; font-size: 13px; font-weight: 600; padding: 5px 11px; border-radius: 6px; display: inline-block; }
+    .mes-critic.crit-ok { color: #bce6bc; border: 1px solid rgba(150,200,150,.55); background: rgba(150,200,150,.12); }
+    .mes-critic.crit-bad { color: #f2bd80; border: 1px solid rgba(224,160,96,.6); background: rgba(224,160,96,.14); }
+    /* Блок «Состояние» под сообщением (вместо плавающей панели) */
+    .mes-state { margin-top: 8px; max-width: 560px; padding: 9px 13px; border-radius: 9px; border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.06); font-size: 13px; }
+    .mes-state-hd { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+    .mes-state-t { font-size: 11px; letter-spacing: .6px; text-transform: uppercase; opacity: .7; }
+    .mes-roll-btn { display: inline-block; margin-top: 6px; font-size: 11px; padding: 4px 9px; border: 1px dashed rgba(255,255,255,.28); border-radius: 5px; color: #cbd5e1; cursor: pointer; }
+    .mes-roll-btn:hover { color: var(--customThemeColor, #9ecbff); border-color: var(--customThemeColor, #9ecbff); }
+    .mes-roll { margin-top: 6px; padding: 6px 9px; border-radius: 5px; border: 1px solid rgba(255,255,255,.2); font-size: 11px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+    .mes-roll.roll-ok { border-color: rgba(120,200,140,.5); }
+    .mes-roll.roll-no { border-color: rgba(217,138,91,.55); }
+    .mes-roll-t { font-weight: 600; }
+    .mes-roll-d { color: #9aa5b1; }
+    .mes-st-tr { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10px; line-height: 1; padding: 3px 7px; background: rgba(255,255,255,.06); color: #cbd5e1; border: 1px solid rgba(255,255,255,.28); border-radius: 4px; cursor: pointer; }
+    .mes-st-tr:hover, .mes-st-tr.on { color: var(--customThemeColor, #9ecbff); border-color: var(--customThemeColor, #9ecbff); }
+    .mes-st-row { display: flex; align-items: center; gap: 9px; margin: 4px 0; }
+    .mes-st-name { flex: 0 0 auto; min-width: 84px; opacity: .92; }
+    .mes-st-bar { flex: 1 1 auto; height: 7px; border-radius: 4px; background: rgba(255,255,255,.12); overflow: hidden; }
+    .mes-st-fill { display: block; height: 100%; background: linear-gradient(90deg,#d98b6a,#d9c86a,#7ac07a); }
+    .mes-st-val { flex: 0 0 auto; font-variant-numeric: tabular-nums; opacity: .95; }
+    .mes-st-val.mes-st-wide { flex: 1 1 auto; text-align: right; }
+    .mes-st-reason { font-style: italic; opacity: .78; font-size: 12px; margin: 2px 0 5px; }
+    .mes-review { margin-top: 8px; font-size: 13px; font-weight: 600; padding: 5px 11px; border-radius: 6px; display: inline-block; cursor: pointer; color: #cdb2e6; border: 1px solid rgba(185,150,225,.5); background: rgba(185,150,225,.12); }
+    .mes-review:hover { border-color: rgba(185,150,225,.9); }
+    /* RLM: окно разбора критика — модалка (как окно правки сообщения), но ТОЛЬКО просмотр (реплику не меняет). */
+    .crit-modal-backdrop { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.5);
+      display: flex; align-items: center; justify-content: center; padding: 20px; box-sizing: border-box; }
+    .crit-modal { display: flex; flex-direction: column; width: min(560px, 100%); max-height: 86vh;
+      background: var(--SmartThemeBlurTintColor, #1b1719); border: 1px solid var(--customThemeColor, #8ab);
+      border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.55); overflow: hidden; }
+    .crit-modal-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+      border-bottom: 1px solid rgba(255,255,255,.08); }
+    .crit-modal-title { flex: 1; font-size: 14px; font-weight: 600; opacity: .92; }
+    .crit-modal-x { font-size: 16px; line-height: 1; cursor: pointer; padding: 2px 7px; border-radius: 6px;
+      color: color-mix(in srgb, var(--SmartThemeBodyColor, #889) 60%, transparent); }
+    .crit-modal-x:hover { color: #e0645a; }
+    .crit-modal-body { flex: 1 1 auto; overflow-y: auto; padding: 14px; }
+    .crit-modal-body .mrp-tr { margin-top: 4px; }
+    .crit-modal-body textarea.mes-edit { width: 100%; box-sizing: border-box; }
+    .mrp-sec { margin-bottom: 9px; }
+    .mrp-h { font-size: 10px; letter-spacing: .5px; color: #9ab; text-transform: uppercase; margin-bottom: 3px; }
+    .mrp-t { font-size: 13px; white-space: pre-wrap; opacity: .93; }
+    .fb-reason { font: inherit; font-size: 12px; color: #d8e2ea; background: #10161c; border: 1px solid #2b3742; border-radius: 6px; padding: 5px 8px; outline: none; cursor: pointer; }
+    .fb-reason:focus { border-color: #4a6b86; }
+    /* Квадратные кнопки перевода RU/EN — как на полях нод RLM */
+    .tr-b { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10px; line-height: 1; padding: 3px 7px; margin-left: 6px; background: rgba(255,255,255,.06); color: #cbd5e1; border: 1px solid rgba(255,255,255,.28); border-radius: 4px; cursor: pointer; vertical-align: middle; }
+    .tr-b:hover, .tr-b.on { color: var(--customThemeColor, #9ecbff); border-color: var(--customThemeColor, #9ecbff); }
+    .tr-b.busy { opacity: .5; pointer-events: none; }
+    .mrp-tr { display: inline-block; margin-top: 2px; font-size: 12px; cursor: pointer; color: var(--customThemeColor, #8ab); }
+    .crit-approve-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+    .crit-approve-actions .mrp-tr { margin-top: 0; padding: 5px 11px; border-radius: 6px; border: 1px solid rgba(150,180,210,.35); }
+    .crit-approve-actions .mrp-tr:hover { border-color: var(--customThemeColor, #8ab); }
+    .crit-approve-actions .crit-approve-rewrite { color: #f2bd80; border-color: rgba(224,160,96,.5); }
+    .crit-approve-actions .crit-approve-rewrite:hover { border-color: rgba(224,160,96,.9); }
+    /* RLM: лайтбокс аватарки — клик по аве в сообщении разворачивает картинку на весь экран (крестик/Esc/фон — закрыть) */
+    .mesAvatarWrapper .avatar img { cursor: zoom-in; }
+    .ava-lightbox { position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,.82);
+      display: flex; align-items: center; justify-content: center; padding: 30px; box-sizing: border-box; }
+    .ava-lightbox img { max-width: 94vw; max-height: 92vh; border-radius: 10px; object-fit: contain;
+      box-shadow: 0 14px 50px rgba(0,0,0,.6); }
+    .ava-lightbox-x { position: fixed; top: 16px; right: 20px; z-index: 91; font-size: 26px; line-height: 1;
+      cursor: pointer; padding: 4px 12px; border-radius: 8px; color: #eaf2f8;
+      background: rgba(20,20,24,.7); border: 1px solid rgba(255,255,255,.18); }
+    .ava-lightbox-x:hover { color: #e0645a; border-color: rgba(224,100,90,.6); }
+    .mes-src { font-size: 10px; line-height: 1.4; padding: 1px 8px; border-radius: 10px;
+      background: color-mix(in srgb, var(--SmartThemeBodyColor, #889) 16%, transparent);
+      color: var(--SmartThemeBodyColor, #ccd); opacity: 0.85; white-space: nowrap; }
+    /* RLM: контекстная кнопка Clip — всплывает у ВЫДЕЛЕННОГО текста в сообщении (как в MachineMechanic) */
+    #stmb-clip-fab { position: fixed; z-index: 9999; display: none; align-items: center; gap: 6px;
+      padding: 5px 10px; font-family: inherit; font-size: 12px; line-height: 1; cursor: pointer; white-space: nowrap;
+      color: #eaf2f8; background: rgba(18, 26, 36, 0.96); border: 1px solid #66c0f4; border-radius: 6px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5); }
+    #stmb-clip-fab:hover { background: #1a2a3a; }
+    #stmb-clip-fab .cic { font-size: 13px; }
+    /* RLM: режим удаления — кнопка 🗑 активна; наведение на сообщение подсвечивает ЕГО и все НИЖЕ (что удалится) */
+    .rlm-act.rlm-del.on { color: #f0b6b0; border-color: #e0645a; background: rgba(224, 100, 90, 0.16); }
+    #chat.del-mode .mes { cursor: pointer; }
+    #chat.del-mode .mes:hover, #chat.del-mode .mes:hover ~ .mes {
+      outline: 2px solid #e0645a; outline-offset: -2px; background: rgba(224, 100, 90, 0.10); border-radius: 4px; }
+  /* Панель партии («коробка передач») над чатом — групповой режим */
+  #rlm-party{ flex:none; padding:8px 12px; background:rgba(24,19,20,.82); border-bottom:1px solid rgba(90,80,72,.5);
+    display:flex; flex-direction:column; gap:7px; backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); }
+  #rlm-party .rp-h{ font-size:10px; letter-spacing:1px; text-transform:uppercase; color:#9a8f86; }
+  #rlm-party .rp-h b{ color:#cda36a; font-weight:400; }
+  #rlm-party .rp-row{ display:flex; gap:7px; flex-wrap:wrap; }
+  #rlm-party .rp-chip{ display:flex; align-items:center; gap:7px; padding:4px 9px 4px 4px;
+    border:1px solid rgba(90,80,72,.6); border-radius:999px; background:rgba(0,0,0,.2); }
+  #rlm-party .rp-chip.on{ border-color:#cda36a; background:rgba(205,163,106,.12); }
+  #rlm-party .rp-ava{ width:24px; height:24px; border-radius:50%; flex:none; display:grid; place-items:center;
+    font-size:12px; color:#20191b; background:#8a7f76; }
+  #rlm-party .rp-chip.on .rp-ava{ background:#cda36a; }
+  #rlm-party .rp-chip.empty .rp-ava{ background:transparent; border:1px dashed #9a8f86; color:#9a8f86; }
+  #rlm-party .rp-w{ display:flex; flex-direction:column; line-height:1.12; }
+  #rlm-party .rp-nm{ font-size:12.5px; color:#ece4db; }
+  #rlm-party .rp-chip:not(.on) .rp-nm{ color:#b3a99f; }
+  #rlm-party .rp-chip.empty .rp-nm{ color:#9a8f86; }
+  #rlm-party .rp-tag{ font-size:8px; letter-spacing:.4px; text-transform:uppercase; color:#9a8f86; }
+  #rlm-party .rp-chip.on .rp-tag{ color:#cda36a; }
+  #rlm-party .rp-hint{ color:#8a7f76; font-size:9px; letter-spacing:.2px; text-transform:none; }
+  #rlm-party .rp-chip[data-party-idx]{ cursor:pointer; transition:border-color .12s, background .12s; }
+  #rlm-party .rp-chip[data-party-idx]:hover{ border-color:#cda36a; background:rgba(205,163,106,.10); }
+  #rlm-party .rp-chip.narr .rp-ava{ background:transparent; border:1px solid #cda36a; color:#cda36a; }
+  /* Экран «Вход в игру» (групповой старт) */
+  #rlm-entry{ flex:1 1 auto; min-height:0; overflow:auto; display:flex; align-items:flex-start; justify-content:center; padding:34px 16px; }
+  #rlm-entry .ge-box{ width:100%; max-width:560px; background:rgba(24,19,20,.72); border:1px solid rgba(90,80,72,.5);
+    border-radius:14px; padding:22px 22px 20px; backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); box-shadow:0 10px 40px rgba(0,0,0,.35); }
+  #rlm-entry .ge-title{ font-size:19px; color:#ece4db; letter-spacing:.3px; }
+  #rlm-entry .ge-sub{ font-size:12.5px; color:#9a8f86; line-height:1.5; margin-top:6px; }
+  #rlm-entry .ge-party-h{ font-size:10px; letter-spacing:1px; text-transform:uppercase; color:#8a7f76; margin:16px 0 7px; }
+  #rlm-entry .ge-party{ display:flex; gap:7px; flex-wrap:wrap; }
+  #rlm-entry .ge-chip{ display:flex; align-items:center; gap:7px; padding:4px 11px 4px 4px; border:1px solid rgba(90,80,72,.6);
+    border-radius:999px; background:rgba(0,0,0,.2); }
+  #rlm-entry .ge-chip.empty{ border-style:dashed; opacity:.6; }
+  #rlm-entry .ge-ava{ width:24px; height:24px; border-radius:50%; flex:none; display:grid; place-items:center; font-size:12px; color:#20191b; background:#cda36a; }
+  #rlm-entry .ge-chip.empty .ge-ava{ background:transparent; border:1px dashed #9a8f86; color:#9a8f86; }
+  #rlm-entry .ge-chip.narr .ge-ava{ background:transparent; border:1px solid #cda36a; color:#cda36a; }
+  #rlm-entry .ge-nm{ font-size:12.5px; color:#ece4db; }
+  #rlm-entry .ge-empty{ font-size:12px; color:#9a8f86; font-style:italic; }
+  #rlm-entry .ge-scene-l{ display:block; font-size:10px; letter-spacing:1px; text-transform:uppercase; color:#8a7f76; margin:18px 0 6px; }
+  #rlm-entry .ge-scene{ width:100%; box-sizing:border-box; min-height:88px; resize:vertical; padding:11px 12px; font:inherit; font-size:13.5px;
+    line-height:1.5; color:#ece4db; background:rgba(0,0,0,.28); border:1px solid rgba(90,80,72,.6); border-radius:9px; outline:none; }
+  #rlm-entry .ge-scene:focus{ border-color:#cda36a; }
+  #rlm-entry .ge-scene-hd{ display:flex; align-items:center; justify-content:space-between; margin:18px 0 6px; }
+  #rlm-entry .ge-scene-hd .ge-scene-l{ margin:0; }
+  #rlm-entry .ge-tr{ font:inherit; font-size:10px; letter-spacing:.3px; color:#cdbfae; background:transparent; border:1px solid rgba(205,163,106,.5); border-radius:6px; padding:2px 8px; cursor:pointer; }
+  #rlm-entry .ge-tr:hover{ border-color:#cda36a; color:#f2e6d2; }
+  #rlm-entry .ge-tr.busy{ opacity:.5; pointer-events:none; }
+  #rlm-entry .ge-expand-l{ display:flex; align-items:center; gap:7px; margin-top:11px; font-size:12.5px; color:#cdbfae; cursor:pointer; }
+  #rlm-entry .ge-expand-l input{ accent-color:#cda36a; }
+  #rlm-entry .ge-expand-hint{ color:#8a7f76; font-size:11px; }
+  #rlm-entry .ge-start{ margin-top:14px; width:100%; padding:11px; font:inherit; font-size:14px; color:#20191b; background:#cda36a; cursor:pointer;
+    border:none; border-radius:9px; letter-spacing:.3px; transition:filter .12s; }
+  #rlm-entry .ge-start:hover{ filter:brightness(1.08); }
+  #rlm-entry .ge-start:disabled{ background:#5a5049; color:#9a8f86; cursor:default; filter:none; }
+  #rlm-entry .ge-progress{ margin-top:14px; display:none; }
+  #rlm-entry .ge-progress.active{ display:block; }
+  #rlm-entry .ge-p-line{ display:flex; align-items:center; gap:8px; font-size:12.5px; color:#cdbfae; }
+  #rlm-entry .ge-p-line.ge-p-err{ color:#e0876f; }
+  #rlm-entry .ge-p-line.ge-p-done{ color:#8fbf7f; }
+  #rlm-entry .ge-p-dot{ width:8px; height:8px; border-radius:50%; background:#cda36a; flex:none; animation:gePulse 1s ease-in-out infinite; }
+  #rlm-entry .ge-p-line.ge-p-done .ge-p-dot,#rlm-entry .ge-p-line.ge-p-err .ge-p-dot{ animation:none; }
+  #rlm-entry .ge-p-line.ge-p-done .ge-p-dot{ background:#8fbf7f; } #rlm-entry .ge-p-line.ge-p-err .ge-p-dot{ background:#e0876f; }
+  #rlm-entry .ge-p-bar{ margin-top:8px; height:4px; border-radius:3px; background:rgba(90,80,72,.4); overflow:hidden; }
+  #rlm-entry .ge-p-bar i{ display:block; height:100%; background:#cda36a; border-radius:3px; transition:width .3s ease; }
+  @keyframes gePulse{ 0%,100%{ opacity:.35 } 50%{ opacity:1 } }
+  </style>
+</head>
+<!-- ripplestyle = режим Moonlit с крупным аватаром (chat_display 6 у пользователя) -->
+<body class="ripplestyle no_animation" style="background: transparent !important;">
+  <div id="bg1"></div>
+  <div id="sheld">
+    <!-- Панель партии («коробка передач») — только в групповом режиме (данные от мультиплей-комплитера) -->
+    <div id="rlm-party" style="display:none"></div>
+    <!-- Экран «Вход в игру» — перед стартом группового чата (этапы: фантомы → стартовая сцена) -->
+    <div id="rlm-entry" style="display:none"></div>
+    <!-- Сообщения рисуются из данных (postMessage {type:'render'}); до первого render — демо-диалог -->
+    <div id="chat"></div>
+
+    <div id="rlm-zone">
+      <div class="rlm-ctl">
+        <div id="rlm-actions">
+          <button class="rlm-act rlm-build" data-act="chronicle-build" type="button" title="Собрать сцену из отмеченной ►◄ разметки (с превью)" style="display:none;">Собрать сцену</button>
+          <button class="rlm-act rlm-next" data-act="group-next" type="button" title="Следующий ход: ИИ отвечает сам (ранжиратор выбирает говорящего) — не дожидаясь твоей реплики" style="display:none;">⏭ След. ход</button>
+          <button class="rlm-act rlm-auto" data-act="group-auto" type="button" title="Авто-ходы: ИИ ходит сам, пока ранжиратор не отдаст ход тебе. Нажми ещё раз — пауза (можно влезть самому)." style="display:none;">▶ Авто</button>
+          <button class="rlm-act" data-act="newchat" type="button">Новый чат</button>
+          <button class="rlm-act" data-act="regen" type="button">Перегенерировать</button>
+          <button class="rlm-act" data-act="critic-run" type="button" title="Критик проверит последний ответ ИИ и при фальши перепишет">Критик</button>
+          <button class="rlm-act rlm-del" data-act="del-mode" type="button" title="Режим удаления: выбери сообщение — оно и все ниже удалятся">🗑 Удалить</button>
+        </div>
+        <!-- RLM: лента статуса процесса ПЕРЕКРЫВАЕТ кнопки (текст этапа по центру + крестик отмены) -->
+        <div id="rlm-proc" hidden><span class="rlm-proc-text"></span><span class="rlm-proc-x" title="Остановить процесс">✕</span></div>
+      </div>
+      <div id="rlm-proc-bar"><i></i></div>
+    </div>
+
+    <div id="form_sheld">
+      <div id="send_form" class="no_connection">
+        <div id="leftSendForm">
+          <div class="fa-solid fa-wrench interactable" title="Инструменты"></div>
+          <div class="fa-solid fa-list-ol interactable" title="Оглавление"></div>
+          <div class="fa-solid fa-book rlm-lore-open interactable" title="Лорбук чата (открыть вижн)"></div>
+          <div class="fa-solid fa-heart rlm-state-open interactable" title="Состояние (переменные — открыть вижн)"></div>
+          <div class="fa-solid fa-bullseye rlm-objective-open interactable" title="Цель (задачи для ИИ — открыть вижн)"></div>
+          <div class="fa-solid fa-video rlm-director-open interactable" title="Режиссёр (события сцены — открыть вижн)"></div>
+          <div class="fa-solid fa-users rlm-guests-open interactable" title="Гости и визитёры (список — открыть/удалить)"></div>
+          <div class="fa-solid fa-brain interactable" title="Память"></div>
+          <div class="fa-solid fa-dice-d20 rlm-random-open interactable" title="Рандомайзер (честный кубик — открыть вижн)"></div>
+        </div>
+        <textarea id="send_textarea" placeholder="написать сообщение..."></textarea>
+        <div id="rightSendForm">
+          <div id="rlm-tr-input" class="fa-solid fa-language interactable" title="Перевести ввод RU→EN (заменить)"></div>
+          <div id="send_but" class="fa-solid fa-paper-plane interactable" title="Отправить"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ---- Аватары-заглушки (тот же вид, что был в статике): тёплый ИИ / холодный юзер ----
+    const AVA_CHAR = "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 130%22%3E%3Crect width=%22100%22 height=%22130%22 fill=%22%232e2422%22/%3E%3Ccircle cx=%2250%22 cy=%2252%22 r=%2222%22 fill=%22%23e3cbb9%22/%3E%3Cpath d=%22M18 130C18 96 34 82 50 82s32 14 32 48z%22 fill=%22%23e3cbb9%22/%3E%3Cpath d=%22M26 52C26 26 50 24 50 24s24 2 24 28c0-12-12-16-24-16s-24 4-24 16z%22 fill=%22%234a2f28%22/%3E%3C/svg%3E";
+    const AVA_USER = "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 130%22%3E%3Crect width=%22100%22 height=%22130%22 fill=%22%2320262f%22/%3E%3Ccircle cx=%2250%22 cy=%2252%22 r=%2222%22 fill=%22%23c6cbd6%22/%3E%3Cpath d=%22M18 130C18 96 34 82 50 82s32 14 32 48z%22 fill=%22%23c6cbd6%22/%3E%3C/svg%3E";
+
+    // Экранирование + разметка реплики как в SillyTavern: **жирный**, *действие*, "речь" (<q>).
+    function esc(s){ return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+    function fmt(text){
+      return esc(text)
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+        .replace(/&quot;/g, '"')
+        .replace(/"([^"]*)"/g, '<q>$1</q>')
+        .replace(/\n/g, '<br>');
+    }
+
+    let lastNames = { char: 'Персонаж', user: 'Ты' };
+    let lastAvatars = {};       // аватары «долетают по проводам» из нод Персонаж/Персона
+    let lastSlotAvatars = null;  // группа: карта «имя говорящего → аватар» (у каждой реплики — свой аватар)
+    let lastStateDefs = [];     // определения переменных «Состояния» (для блока под сообщением); пусто = не показывать
+    let lastStateNamesTr = {};  // перевод ИМЁН состояний (id → RU), общий кэш; используется при включённом переводе блока
+    let currentMsgs = [];       // последний отрисованный список (для inline-правки — нужен сырой текст)
+    let lastGroup = null;       // групповой чат: {started, scene} — пока !started, показываем экран «Вход в игру»
+    let lastParty = null;       // партия (слоты) для экрана входа
+    let sceneStart = null, sceneEnd = null;   // разметка сцены (как в MachineMechanic): начало/конец
+    // Озвучка: готовый звук реплики idx → blob-URL. Живёт МЕЖДУ перерисовками (плеер под сообщением
+    // рисуется из этой карты в mesHtml). _ttsAutoplayIdx — какую реплику проиграть сразу после рендера.
+    const ttsAudioByIdx = {};
+    let _ttsAutoplayIdx = null;
+
+    // Плеер озвучки под сообщением: играть/пауза, перемотка (нативный range — тянется пальцем и мышью),
+    // перегенерировать. Рисуется, только если для реплики уже готов звук (ttsAudioByIdx[i]).
+    function ttsPlayerHtml(i){
+      const a = ttsAudioByIdx[i];
+      if (!a) return '';
+      const cur = currentMsgs[i];
+      if (!cur || (a.key != null && a.key !== cur.text)) return '';   // звук привязан к ТЕКСТУ реплики: перегенерили/правили → чужой плеер не показываем
+      const url = a.url;
+      return '<div class="mes-tts-player" data-ttsp="' + i + '">'
+        + '<button type="button" class="mes-ttsp-btn mes-ttsp-play fa-solid fa-play interactable" title="Играть / пауза"></button>'
+        + '<input type="range" class="mes-ttsp-seek" min="0" max="1000" value="0" step="1" title="Перемотка">'
+        + '<span class="mes-ttsp-time">0:00 / 0:00</span>'
+        + '<button type="button" class="mes-ttsp-btn mes-ttsp-regen fa-solid fa-rotate-right interactable" title="Перегенерировать озвучку"></button>'
+        + '<audio class="mes-ttsp-audio" src="' + url + '" preload="metadata"></audio>'
+        + '</div>';
+    }
+    // Оживить плееры озвучки после перерисовки: навесить события на каждый (элементы всегда свежие,
+    // innerHTML их пересоздаёт). Перемотка — нативный <input type=range> (палец/мышь). В конце — автозапуск
+    // той реплики, что только что озвучилась (_ttsAutoplayIdx).
+    function wireTtsPlayers(){
+      const fmtT = (s) => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+      const fill = (el, p) => { el.style.background = 'linear-gradient(90deg, var(--customThemeColor,#8ab) ' + p + '%, rgba(255,255,255,.14) ' + p + '%)'; };
+      document.querySelectorAll('.mes-tts-player').forEach((pl) => {
+        const audio = pl.querySelector('.mes-ttsp-audio');
+        const playB = pl.querySelector('.mes-ttsp-play');
+        const seek = pl.querySelector('.mes-ttsp-seek');
+        const timeEl = pl.querySelector('.mes-ttsp-time');
+        const regenB = pl.querySelector('.mes-ttsp-regen');
+        const idx = Number(pl.dataset.ttsp);
+        let seeking = false;
+        const paint = () => {
+          const d = audio.duration || 0, c = audio.currentTime || 0;
+          const p = d ? (c / d * 100) : 0;
+          if (!seeking) { seek.value = String(Math.round(p * 10)); fill(seek, p); }
+          timeEl.textContent = fmtT(c) + ' / ' + fmtT(d);
+        };
+        playB.addEventListener('click', (e) => { e.stopPropagation(); if (audio.paused) audio.play().catch(() => {}); else audio.pause(); });
+        const toPlay = () => { playB.classList.remove('fa-pause'); playB.classList.add('fa-play'); };
+        const toPause = () => { playB.classList.remove('fa-play'); playB.classList.add('fa-pause'); };
+        audio.addEventListener('play', toPause);
+        audio.addEventListener('pause', toPlay);
+        audio.addEventListener('ended', () => { toPlay(); });
+        audio.addEventListener('loadedmetadata', paint);
+        audio.addEventListener('timeupdate', paint);
+        // перемотка: во время тяги показываем цель, отпустили — прыгаем (палец на телефоне, мышь на ПК)
+        seek.addEventListener('click', (e) => e.stopPropagation());
+        seek.addEventListener('input', () => {
+          seeking = true; const d = audio.duration || 0, p = Number(seek.value) / 10;
+          fill(seek, p); timeEl.textContent = fmtT(d * p / 100) + ' / ' + fmtT(d);
+        });
+        seek.addEventListener('change', () => { const d = audio.duration || 0; audio.currentTime = d * (Number(seek.value) / 1000); seeking = false; paint(); });
+        regenB.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const mm = currentMsgs[idx];
+          const shown = mm ? ((mm._showTr && mm._tr != null) ? mm._tr : mm.text) : '';
+          regenB.classList.add('busy');
+          parent.postMessage({ type: 'tts', idx: idx, text: shown }, '*');   // тот же путь, что и 🔊 — придёт новый звук
+        });
+        paint();
+      });
+      if (_ttsAutoplayIdx != null) {   // только что озвучили — проиграть сразу (клик по 🔊/перегенерации ещё «активен» в кадре → autoplay разрешён)
+        const pl = document.querySelector('.mes-tts-player[data-ttsp="' + _ttsAutoplayIdx + '"]');
+        _ttsAutoplayIdx = null;
+        if (pl) { const a = pl.querySelector('.mes-ttsp-audio'); if (a) a.play().catch(() => {}); }
+      }
+    }
+
+    // Теги-источники под ответом: откуда взята инфа (сработавшие записи лорбука/памяти).
+    function sourcesHtml(m){
+      if (!m.sources || !m.sources.length) return '';
+      return '<div class="mes-sources">' + m.sources.map(function(s){
+        return '<span class="mes-src" title="' + esc(s.kind) + '">' + esc(s.kind) + ': ' + esc(s.name) + '</span>';
+      }).join('') + '</div>';
+    }
+    // Метка вердикта критика под репликой. Переписанное → бейдж «Апрув редактора» ТОЛЬКО у последнего
+    // сообщения (клик — разбор: было / рассуждение / стало); принятое (ручной режим) → зелёная метка.
+    function criticHtml(m, isLast){
+      if (m.criticReview) return isLast ? '<div class="mes-review interactable" data-review="1">⚖ Апрув редактора ▸</div>' : '';
+      if (!m.critic) return '';
+      const c = m.critic;
+      if (c.ok) return '<div class="mes-critic crit-ok interactable" data-approve="1">⚖ Критик: апрув ✓ ▸</div>';   // клик → почему одобрил + фидбек
+      return '<div class="mes-critic crit-bad">' + esc('⚖ Критик переписал: ' + (c.reason || 'не в характере')) + '</div>';
+    }
+    // Блок «Состояние» ПОД сообщением (вместо плавающей панели): значения на этот ход + причины изменений.
+    // Рисуем на каждом ответе ИИ, где есть снимок (_state); пусто lastStateDefs / user / pending → скрыт.
+    function stateHtml(m, i){
+      if (m.role === 'user' || m.pending || !m._state || !lastStateDefs.length) return '';
+      const vals = m._state;
+      const showTr = !!(m._showStateTr && m._stateRtr);
+      const reasons = showTr ? m._stateRtr : (m._stateR || {});   // причины: перевод (из кэша) или оригинал
+      const rows = lastStateDefs.map(function(v){
+        const val = vals[v.id];
+        if (val === undefined || val === null) return '';
+        const nameTxt = (showTr && lastStateNamesTr[v.id]) ? lastStateNamesTr[v.id] : v.name;   // имя состояния: перевод (если включён) или оригинал
+        let valTxt;
+        if (v.type === 'list') valTxt = (Array.isArray(val) && val.length) ? val.join(', ') : '(пусто)';
+        else if (v.type === 'bool') valTxt = val ? 'да' : 'нет';
+        else valTxt = String(val);
+        let row;
+        if (v.type === 'int' && isFinite(v.min) && isFinite(v.max) && v.max > v.min) {
+          const pct = Math.max(0, Math.min(100, Math.round(((val - v.min) / (v.max - v.min)) * 100)));
+          row = '<div class="mes-st-row"><span class="mes-st-name">' + esc(nameTxt) + '</span><span class="mes-st-bar"><span class="mes-st-fill" style="width:' + pct + '%"></span></span><span class="mes-st-val">' + esc(valTxt) + '</span></div>';
+        } else {
+          row = '<div class="mes-st-row"><span class="mes-st-name">' + esc(nameTxt) + '</span><span class="mes-st-val mes-st-wide">' + esc(valTxt) + '</span></div>';
+        }
+        const rt = reasons[v.id];
+        return row + (rt ? '<div class="mes-st-reason">' + esc(rt) + '</div>' : '');
+      }).join('');
+      if (!rows) return '';
+      const hasReasons = m._stateR && Object.keys(m._stateR).length;
+      const trBtn = hasReasons ? '<span class="mes-st-tr interactable' + (showTr ? ' on' : '') + '" data-st-tr="' + i + '" title="Перевести причины на русский (повторно — оригинал)">RU</span>' : '';
+      return '<div class="mes-state"><div class="mes-state-hd"><span class="mes-state-t">🎛 Состояние</span>' + trBtn + '</div>' + rows + '</div>';
+    }
+
+    // «Раскрыть вероятность» ПОД последним ответом ИИ: игрок забирает ближайший исход СЕБЕ —
+    // модели он уже не достанется (ей уйдёт следующий). Раскрыл — отыгрывай честно в своём ходу.
+    let randomOn = false;   // включён ли «Рандомайзер» (сообщает renderer вместе с логом)
+    function randomHtml(m, i, isLast){
+      if (m.role === 'user' || m.pending || !isLast || !randomOn) return '';
+      if (m._peek) {
+        const ok = m._peek === 'success';
+        return '<div class="mes-roll ' + (ok ? 'roll-ok' : 'roll-no') + '">'
+          + '<span class="mes-roll-t">' + (ok ? '🎲 Успех' : '🎲 Провал') + '</span>'
+          + '<span class="mes-roll-d">' + (ok ? 'то, что ты сейчас попробуешь, — получится: этот же бросок уйдёт с твоим ходом. Отыграй его.' : 'то, что ты сейчас попробуешь, — не выйдет: этот же бросок уйдёт с твоим ходом. Отыграй его.') + '</span>'
+          + '</div>';
+      }
+      return '<div class="mes-roll-btn interactable" data-roll-peek="' + i + '" title="Подсмотреть бросок, который уйдёт с твоим ходом — чтобы отыграть его самому. Ничего не тратит.">🎲 Раскрыть вероятность</div>';
+    }
+
+    // Выбор первого сообщения ‹ › — ТОЛЬКО на приветствии и ТОЛЬКО пока ролка не началась (одно сообщение
+    // в чате) и заготовок больше одной. Как в ST-свайпе, но без генерации: переключаем готовые приветствия.
+    function greetNavHtml(m, i){
+      if (!(m && m.greeting && i === 0 && currentMsgs.length === 1 && Array.isArray(m.swipes) && m.swipes.length > 1)) return '';
+      const gi = Number.isInteger(m.swipeIdx) ? m.swipeIdx : 0;
+      return '<div class="rlm-greet-nav" title="Первое сообщение — выбери, с какого начать ролку">'
+        + '<button class="rlm-greet-arrow" type="button" data-greet-dir="-1" title="Предыдущее">‹</button>'
+        + '<span class="rlm-greet-count">' + (gi + 1) + ' / ' + m.swipes.length + '</span>'
+        + '<button class="rlm-greet-arrow" type="button" data-greet-dir="1" title="Следующее">›</button>'
+        + '</div>';
+    }
+    // Одно сообщение → разметка ST (.mes). role: 'char' | 'user'.
+    function mesHtml(m, i){
+      const isUser = m.role === 'user';
+      // Группа: рассказчик (m._narr; фолбэк — имя совпало со слотом-рассказчиком) → проза без имени/аватара;
+      //         активный говорящий («на передаче» по партии) → имя+аватар золотым, остальные нейтральны.
+      const members = (lastParty && Array.isArray(lastParty.members)) ? lastParty.members : null;
+      const narrName = members ? ((members.find(x => x.narr) || {}).name || null) : null;
+      const isNarr = !isUser && (!!m._narr || (!!m._speaker && narrName && m._speaker === narrName));
+      const activeMem = members ? members.find(x => x.active) : null;
+      const activeName = (activeMem && !activeMem.narr) ? activeMem.name : null;
+      const isActiveSpeaker = !isUser && !isNarr && !!m._speaker && !!activeName && m._speaker === activeName;
+      // Группа: у реплики свой говорящий (m._speaker) — его имя над репликой (иначе общее имя карточки).
+      const name = isUser ? (lastNames.user || 'Ты') : (m._speaker || lastNames.char || 'Персонаж');
+      // Группа: аватар — у КАЖДОЙ реплики свой (по говорящему m._speaker), иначе общий активного «лагает» на всех.
+      const ava = isUser ? (lastAvatars.user || AVA_USER)
+        : ((lastSlotAvatars && m._speaker && lastSlotAvatars[m._speaker]) || lastAvatars.char || AVA_CHAR);
+      const time = m.time ? esc(m.time) : '';
+      const lo = (sceneStart != null && sceneEnd != null) ? Math.min(sceneStart, sceneEnd) : null;
+      const hi = (sceneStart != null && sceneEnd != null) ? Math.max(sceneStart, sceneEnd) : null;
+      const inScene = (lo != null && i >= lo && i <= hi);
+      const shownText = m.pending ? '…' : ((m._showTr && m._tr != null) ? m._tr : m.text);   // pending — держим «…», пока авто-критик проверяет (без мелькания)
+      return '<div class="mes' + (inScene ? ' stmb-in-scene' : '') + (m.chrHidden ? ' mes-ghost' : '') + (isNarr ? ' mes-narr' : '') + (isActiveSpeaker ? ' mes-active-speaker' : '') + '" is_user="' + isUser + '" ch_name="' + esc(name) + '" mesid="' + i + '" swipeid="0" '
+        + 'style="--mes-avatar-url: url(\'' + ava + '\');">'
+        + (isNarr ? '' : ('<div class="mesAvatarWrapper"><div class="avatar"><img src="' + ava + '" /></div>'
+        + '<div class="mesIDDisplay">#' + i + '</div></div>'))
+        + '<div class="mes_block">'
+        // Подпись сцены (Хроника) — всегда вверху сообщения, если оно уже свёрнуто в запись
+        + (m.chrScene ? '<div class="mes-scene-tag" title="Сцена, в которую свёрнуто это сообщение (Хроника)">🗒 ' + esc(m.chrScene.name || ('Сцена ' + (m.chrScene.num || ''))) + '</div>' : '')
+        + '<div class="ch_name flex-container justifySpaceBetween">'
+        + '<div class="flex-container flex1 alignitemscenter">'
+        + '<div class="flex-container alignItemsBaseline">'
+        // Каретки старт ▶ / конец ◀ — ВНУТРИ самого имени (инлайн), чтобы флекс Moonlit (order/wrap/justify) их не отрывал
+        + '<span class="name_text">' + (isNarr ? '' : esc(name))
+        + ' <span class="mes-scene-start fa-solid fa-caret-right' + (sceneStart === i ? ' on' : '') + ' interactable" title="Отметить начало сцены" data-scene-start="' + i + '"></span>'
+        + '<span class="mes-scene-end fa-solid fa-caret-left' + (sceneEnd === i ? ' on' : '') + ' interactable" title="Отметить конец сцены" data-scene-end="' + i + '"></span>'
+        + (m.chrHidden ? '<span class="mes-ghost-ic" title="Свёрнуто в Хронику — не идёт в контекст модели">👻</span>' : '')
+        + '</span>'
+        + '<small class="timestamp">' + time + '</small>'
+        + '</div>'
+        + '</div>'
+        + '<div class="mes_buttons">'
+        // ⑃ Ветка — на КАЖДОМ сообщении (вверху, в шапке): новый чат-копия истории ДО этого места (родитель: branch)
+        + '<div class="mes_button mes-branch fa-solid fa-code-branch interactable" title="Ветка: новый чат — копия истории до этого сообщения" data-branch="' + i + '"></div>'
+        // Весь ряд — иконки FontAwesome (единый шрифт → одинаковый размер и базовая линия; без эмодзи, что разъезжались)
+        // ↻ — только на ПОСЛЕДНЕМ ответе ИИ (как в ST: перегенерируется последняя реплика)
+        + ((!isUser && i === currentMsgs.length - 1) ? '<div class="mes_button mes-regen fa-solid fa-rotate-right interactable" title="Перегенерировать этот ответ" data-regen="1"></div>' : '')
+        + (!isUser ? '<div class="mes_button mes-fb fa-solid fa-comment-dots interactable" title="Фидбек: переписать этот ответ по замечанию" data-fb="' + i + '"></div>' : '')
+        + '<div class="mes_button fa-solid fa-language mes-tr' + (m._showTr ? ' on' : '') + ' interactable" title="Перевести EN→RU (повторно — оригинал)" data-translate="' + i + '"></div>'
+        + '<div class="mes_button mes-tts fa-solid fa-volume-high interactable" title="Озвучить (нода «Озвучка»)" data-tts="' + i + '"></div>'
+        + '<div class="mes_button fa-solid fa-pencil interactable" title="Редактировать" data-edit="' + i + '"></div>'
+        + '<div class="mes_button mes-del fa-solid fa-xmark interactable" title="Удалить это сообщение" data-del="' + i + '"></div>'
+        + '</div></div>'
+        + '<div class="mes_text">' + fmt(shownText) + '</div>'
+        + greetNavHtml(m, i)
+        + ttsPlayerHtml(i)
+        + sourcesHtml(m)
+        + criticHtml(m, i === currentMsgs.length - 1)
+        + stateHtml(m, i)
+        + randomHtml(m, i, i === currentMsgs.length - 1)
+        + '</div></div>';
+    }
+
+    // Панель партии («коробка передач») над чатом. data = { active, members:[{name,active}] } или null.
+    // Нет данных → панель скрыта (обычный одиночный чат). Активный слот подсвечен, пустой — пунктиром.
+    function renderParty(data){
+      const bar = document.getElementById('rlm-party');
+      if (!bar) return;
+      if (!data || !Array.isArray(data.members) || !data.members.length){ bar.style.display='none'; bar.innerHTML=''; return; }
+      const chip = (m,i) => {
+        const empty = !m.name;
+        const nm = m.name || ('Слот '+(i+1));
+        const ava = m.narr ? '✎' : (m.name ? m.name.slice(0,1) : '＋');
+        const tag = m.active ? 'на передаче' : (m.narr ? 'рассказчик' : (empty ? 'пусто' : 'фантом'));
+        // Клик по чипу → память ЭТОГО слота (его Душа); пустой слот не кликаем.
+        return '<div class="rp-chip '+(m.active?'on':'')+' '+(empty?'empty':'')+' '+(m.narr?'narr':'')+'"'
+          + (empty?'':' data-party-idx="'+i+'" title="Открыть память: '+esc(nm)+'"')+'>'
+          + '<span class="rp-ava">'+ava+'</span>'
+          + '<span class="rp-w"><span class="rp-nm">'+esc(nm)+'</span><span class="rp-tag">'+tag+'</span></span></div>';
+      };
+      const active = data.members.find(x => x.active);
+      const turn = active && active.name ? active.name : '—';
+      bar.innerHTML = '<div class="rp-h">Коробка передач · <b>ход: '+turn+'</b> <span class="rp-hint">клик по нику — его память</span></div>'
+        + '<div class="rp-row">'+data.members.map(chip).join('')+'</div>';
+      bar.style.display='';
+    }
+    // Клик по чипу партии → открыть память ЭТОГО слота (его Душа). Делегирование: #rlm-party живёт, меняется только innerHTML.
+    (function(){ const bar = document.getElementById('rlm-party'); if (bar) bar.addEventListener('click', (e) => { const c = e.target.closest('.rp-chip[data-party-idx]'); if (c) parent.postMessage({ type:'party-soul', idx: Number(c.dataset.partyIdx) }, '*'); }); })();
+
+    // Экран «Вход в игру»: показывается в групповом чате, пока игра не начата (group && !group.started).
+    // Пишешь завязку → «Начать игру» → этапы (фантомы по персонажу → стартовая сцена) → открывается чат.
+    function renderGroupEntry(group, party){
+      const box = document.getElementById('rlm-entry');
+      const chat = document.getElementById('chat');
+      const form = document.getElementById('form_sheld');
+      if (!box) return;
+      const show = !!(group && !group.started);
+      box.style.display = show ? '' : 'none';
+      if (chat) chat.style.display = show ? 'none' : '';
+      if (form) form.style.display = show ? 'none' : '';
+      if (!show) return;
+      const members = (party && Array.isArray(party.members)) ? party.members : [];
+      const chips = members.map((m,i) => {
+        const nm = m.name || ('Слот '+(i+1));
+        const ava = m.narr ? '✎' : (m.name ? m.name.slice(0,1) : '＋');
+        const cls = 'ge-chip'+(m.name?'':' empty')+(m.narr?' narr':'');
+        return '<div class="'+cls+'"><span class="ge-ava">'+esc(ava)+'</span><span class="ge-nm">'+esc(nm)+(m.narr?' · рассказчик':'')+'</span></div>';
+      }).join('');
+      const named = members.filter(m => m.name && !m.narr).length;   // персонажи с картой (без рассказчика)
+      // Не пересобираем, если уже показан и идёт подготовка (чтобы не стереть прогресс/ввод).
+      if (box.dataset.built === '1' && box.querySelector('.ge-progress.active')) return;
+      box.innerHTML =
+        '<div class="ge-box">'
+        + '<div class="ge-title">🎬 Вход в игру</div>'
+        + '<div class="ge-sub">Групповая сцена. Опиши завязку — где всё начинается — и запусти подготовку: Рассказчик познакомится с каждым (по одному за ход), затем откроет сцену.</div>'
+        + '<div class="ge-party-h">Партия · '+named+' персонаж'+(named===1?'':(named>=2&&named<=4?'а':'ей'))+'</div>'
+        + '<div class="ge-party">'+(chips||'<span class="ge-empty">Нет персонажей — подключи карточки в слоты мультиплей-комплитера</span>')+'</div>'
+        + '<div class="ge-scene-hd"><label class="ge-scene-l">Завязка / первая сцена</label>'
+        +   '<button type="button" class="ge-tr" title="Перевести завязку RU→EN (модель понимает англ. лучше)">🌐 RU→EN</button></div>'
+        + '<textarea class="ge-scene" spellcheck="false" placeholder="напр.: Таверна на краю болот, поздний вечер, гроза. Партия только что укрылась от дождя…">'+esc((group&&group.scene)||'')+'</textarea>'
+        + '<label class="ge-expand-l" title="Вкл — Рассказчик распишет обстоятельства по твоей завязке. Выкл — твоя завязка станет первым сообщением КАК ЕСТЬ (без переписывания).">'
+        +   '<input type="checkbox" class="ge-expand" checked> Дописать сцену Рассказчиком <span class="ge-expand-hint">(выкл — завязка как есть, без переписывания)</span>'
+        + '</label>'
+        + '<button class="ge-start" type="button"'+(named?'':' disabled')+'>Начать игру</button>'
+        + '<div class="ge-progress"></div>'
+        + '</div>';
+      box.dataset.built = '1';
+      const startBtn = box.querySelector('.ge-start');
+      const sceneTa = box.querySelector('.ge-scene');
+      if (startBtn) startBtn.addEventListener('click', () => {
+        if (startBtn.disabled) return;
+        startBtn.disabled = true; startBtn.textContent = 'Готовим…';
+        const prog = box.querySelector('.ge-progress'); if (prog) prog.classList.add('active');
+        const expandCb = box.querySelector('.ge-expand');
+        parent.postMessage({ type: 'group-start', scene: (sceneTa && sceneTa.value || '').trim(), expand: expandCb ? !!expandCb.checked : true }, '*');
+      });
+      // Перевод завязки RU→EN (замена) — тот же движок, что у поля ввода (нода Транслитер), ответ в 'entry-translated'.
+      const trBtn = box.querySelector('.ge-tr');
+      if (trBtn) trBtn.addEventListener('click', () => {
+        if (!sceneTa || !sceneTa.value.trim() || trBtn.classList.contains('busy')) return;
+        trBtn.classList.add('busy'); trBtn.textContent = '…';
+        parent.postMessage({ type: 'translate-entry', text: sceneTa.value }, '*');
+      });
+    }
+    // Кнопка Авто/Пауза: on=true → идёт авто-прокрутка ходов (⏸ Пауза), on=false → ▶ Авто.
+    function setAutoBtn(on){ const b = document.querySelector('.rlm-auto'); if (!b) return; b.classList.toggle('on', !!on); b.textContent = on ? '⏸ Пауза' : '▶ Авто'; }
+    // Прогресс подготовки (этапы фантомов/сцены) — приходит из RLM ({type:'group-prep'}).
+    function groupPrepUpdate(m){
+      const box = document.getElementById('rlm-entry');
+      const prog = box && box.querySelector('.ge-progress');
+      if (!prog) return;
+      prog.classList.add('active');
+      const cls = m.stage === 'error' ? 'ge-p-err' : (m.stage === 'done' ? 'ge-p-done' : 'ge-p-run');
+      prog.innerHTML = '<div class="ge-p-line '+cls+'"><span class="ge-p-dot"></span><span class="ge-p-txt">'+esc(m.text||'')+'</span></div>'
+        + '<div class="ge-p-bar"><i style="width:'+Math.round((m.frac!=null?m.frac:(m.stage==='done'?1:0.15))*100)+'%"></i></div>';
+      if (m.stage === 'error') {
+        const b = box.querySelector('.ge-start'); if (b) { b.disabled = false; b.textContent = 'Начать игру'; }
+      }
+    }
+
+    // Перерисовать весь диалог из массива сообщений.
+    let _renderedCount = 0;   // сколько сообщений было в прошлой отрисовке (для «камера сразу внизу»)
+    function renderMessages(msgs){
+      currentMsgs = msgs || [];
+      const chat = document.getElementById('chat');
+      if (!chat) return;
+      // «Прилипание к низу»: держим низ ТОЛЬКО если пользователь и так был внизу (новое сообщение).
+      // Если прокрутил вверх (читает/переводит старое сообщение) — сохраняем позицию, не дёргаем вниз.
+      const nearBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 60;
+      const prevTop = chat.scrollTop;
+      // Открыли чат / подгрузили всю историю разом (было пусто, или список прыгнул больше чем на 1) —
+      // ставим камеру СРАЗУ ВНИЗ, к последнему сообщению, а не оставляем вверху.
+      const prevCount = _renderedCount; _renderedCount = currentMsgs.length;
+      const forceBottom = (prevCount === 0 && currentMsgs.length > 0) || Math.abs(currentMsgs.length - prevCount) > 1;
+      chat.innerHTML = currentMsgs.map((m, i) => mesHtml(m, i)).join('');
+      wireTtsPlayers();                                     // оживить плееры озвучки (innerHTML пересоздал их)
+      if (window.__stmbHideClip) window.__stmbHideClip();   // старое выделение исчезло — убрать кнопку Clip
+      const bb = document.getElementById('rlm-actions') && document.querySelector('.rlm-build');
+      if (bb) bb.style.display = (sceneStart != null && sceneEnd != null) ? '' : 'none';  // «Собрать главу» — только при отмеченной сцене ►◄
+      const grpOn = (lastParty && Array.isArray(lastParty.members) && lastParty.members.length && lastGroup && lastGroup.started);
+      const nb = document.querySelector('.rlm-next');   // «След. ход» — только в группе, когда игра начата
+      if (nb) nb.style.display = grpOn ? '' : 'none';
+      const ab = document.querySelector('.rlm-auto');   // «Авто/Пауза» — там же
+      if (ab) { ab.style.display = grpOn ? '' : 'none'; setAutoBtn(lastGroup && lastGroup.auto); }
+      updateSceneHint();   // подсказка «отметь конец/начало» выводится из состояния меток → переживает любую перерисовку (в т.ч. прыжки по Оглавлению)
+      const toBottom = () => { chat.scrollTop = chat.scrollHeight; };
+      requestAnimationFrame(() => {
+        chat.scrollTop = (forceBottom || nearBottom) ? chat.scrollHeight : prevTop;
+        // высота растёт после подгрузки аватарок/шрифтов — до тех пор дожимаем низ
+        if (forceBottom) { setTimeout(toBottom, 60); setTimeout(toBottom, 250); setTimeout(toBottom, 600); }
+      });
+    }
+    // Чат стартует ПУСТЫМ — наполняется только из render (приветствие карточки / диалог).
+    renderMessages([]);
+
+    // ---- Приём команд из RLM через postMessage (надёжно при file://) ----
+    window.addEventListener('message', (e) => {
+      const m = e.data || {};
+      const de = document.documentElement;
+      if (m.type === 'var') { m.value == null ? de.style.removeProperty(m.name) : de.style.setProperty(m.name, m.value); }
+      else if (m.type === 'mode') { document.body.className = 'no_animation ' + m.value; }
+      else if (m.type === 'css') {
+        let s = document.getElementById(m.id);
+        if (!m.css) { if (s) s.remove(); }
+        else { if (!s) { s = document.createElement('style'); s.id = m.id; document.head.appendChild(s); } s.textContent = m.css; }
+      }
+      else if (m.type === 'bg') { const b = document.getElementById('bg1'); if (b) b.style.backgroundImage = m.url ? "url('" + m.url + "')" : ''; }
+      else if (m.type === 'transparent') { de.style.background = m.on ? 'transparent' : ''; document.body.style.background = m.on ? 'transparent' : '#14100f'; }
+      else if (m.type === 'render') { if (m.names) lastNames = m.names; if (m.avatars) lastAvatars = m.avatars; lastSlotAvatars = m.slotAvatars || null; if (m.stateDefs) lastStateDefs = m.stateDefs; lastGroup = m.group || null; lastParty = m.party || null; renderParty(m.party); if (m.group && !m.group.started) { document.getElementById('rlm-entry').dataset.built = ''; } renderGroupEntry(m.group, m.party); randomOn = !!m.randomOn; renderMessages(m.msgs); }
+      else if (m.type === 'group-prep') { groupPrepUpdate(m); }
+      else if (m.type === 'group-auto-state') { setAutoBtn(m.on); }
+      else if (m.type === 'mes-translated') { const mm = currentMsgs[m.idx]; if (mm) { if (m.text != null) { mm._tr = m.text; mm._showTr = true; } renderMessages(currentMsgs); } }
+      else if (m.type === 'roll-peeked') { const mm = currentMsgs[m.idx]; if (mm) { mm._peek = m.roll; renderMessages(currentMsgs); } }
+      else if (m.type === 'st-translated') { const mm = currentMsgs[m.idx]; if (mm) { if (m.reasons) { mm._stateRtr = m.reasons; mm._showStateTr = true; } if (m.names) lastStateNamesTr = m.names; renderMessages(currentMsgs); } }
+      else if (m.type === 'input-translated') { if (window.trBusyClear) window.trBusyClear(); const b = document.getElementById('rlm-tr-input'); if (b) b.classList.remove('busy'); if (ta && m.text != null) { ta.value = m.text; fit(); } }
+      else if (m.type === 'entry-translated') { const box = document.getElementById('rlm-entry'); const sc = box && box.querySelector('.ge-scene'); const tb = box && box.querySelector('.ge-tr'); if (tb) { tb.classList.remove('busy'); tb.textContent = '🌐 RU→EN'; } if (sc && m.text != null) sc.value = m.text; }
+      else if (m.type === 'review-translated') {   // перевод разбора «Апрув редактора» пришёл — подменить тексты в открытом окне
+        const back = document.getElementById('rlm-crit-modal'); if (!back || Number(back.dataset.idx) !== m.idx) return;
+        const keys = ['reason'];   // в окне апрува осталась одна секция — разбор судьи
+        (m.texts || []).forEach((tx, i) => { const el = back.querySelector('.mrp-t[data-mrp="' + keys[i] + '"]'); if (el && tx != null) el.textContent = tx; });
+        const tb = back.querySelector('[data-review-tr]'); if (tb) tb.textContent = '🌐 переведено';
+      }
+      else if (m.type === 'approve-translated') {   // перевод ОТВЕТА критика пришёл — вписать в окно (обратимо через dataset)
+        const back = document.getElementById('rlm-crit-modal'); if (!back || Number(back.dataset.idx) !== m.idx) return;
+        const cell = back.querySelector('.mrp-t[data-mrp="reason"]'); if (!cell) return;
+        if (m.text != null) { cell.dataset.trText = m.text; cell.textContent = m.text; cell.dataset.trShown = '1'; }
+        const btn = back.querySelector('.crit-tr-reason'); if (btn) { btn.classList.remove('busy'); btn.classList.add('on'); }
+      }
+      else if (m.type === 'fb-translated') {   // перевод ТВОЕГО текста в поле фидбека пришёл — заменить
+        const back = document.getElementById('rlm-crit-modal'); if (!back) return;
+        back.querySelectorAll('.crit-tr-fb').forEach((b) => b.classList.remove('busy'));
+        const ta2 = back.querySelector('.crit-approve-fb'); if (ta2 && m.text != null) ta2.value = m.text;
+      }
+      else if (m.type === 'tts-busy') {   // спиннер на кнопке 🔊 сообщения + кнопке перегенерации плеера (полоса/текст этапа идут через 'proc')
+        if (m.all) { document.querySelectorAll('.mes-tts.busy, .mes-ttsp-regen.busy').forEach((b) => b.classList.remove('busy')); }
+        else {
+          const b = document.querySelector('[data-tts="' + m.idx + '"]'); if (b) b.classList.toggle('busy', !!m.on);
+          const r = document.querySelector('.mes-tts-player[data-ttsp="' + m.idx + '"] .mes-ttsp-regen'); if (r) r.classList.toggle('busy', !!m.on);
+        }
+      }
+      else if (m.type === 'tts-audio') {   // готовый звук реплики → показать плеер под сообщением (и проиграть сразу)
+        try {
+          const cur = currentMsgs[m.idx];
+          if (m.key != null && cur && cur.text !== m.key) { /* реплику уже перегенерили/правили пока озвучивалось — звук не наш, выбрасываем */ }
+          else {
+            const old = ttsAudioByIdx[m.idx]; if (old && old.url) URL.revokeObjectURL(old.url);
+            const bytes = Uint8Array.from(atob(m.audioB64), (c) => c.charCodeAt(0));
+            ttsAudioByIdx[m.idx] = { url: URL.createObjectURL(new Blob([bytes], { type: m.mime || 'audio/wav' })), key: (m.key != null ? m.key : (cur ? cur.text : null)) };
+            _ttsAutoplayIdx = m.idx;
+            renderMessages(currentMsgs);
+          }
+        } catch (e) { /* битый звук — молча пропустим */ }
+      }
+      else if (m.type === 'proc') { if (window.rlmProc) window.rlmProc(m); }   // лента статуса процесса
+      else if (m.type === 'reset') {
+        de.removeAttribute('style');
+        document.querySelectorAll('style[id^="opt-"],style[id^="raw-"]').forEach((x) => x.remove());
+        const b = document.getElementById('bg1'); if (b) b.style.backgroundImage = '';
+        document.body.className = 'no_animation ripplestyle';
+      }
+      else if (m.type === 'scroll-to') {   // из «Оглавления»: прокрутить к сообщению сцены + подсветить
+        const el = document.querySelector('.mes[mesid="' + m.idx + '"]');
+        const chat = document.getElementById('chat');
+        if (el && chat) {
+          // Скроллим ТОЛЬКО контейнер #chat (а не scrollIntoView) — иначе в ноде браузер тянет
+          // сам iframe в видимую область родителя и дёргает холст/шапку. Центрируем сообщение вручную.
+          const er = el.getBoundingClientRect(), cr = chat.getBoundingClientRect();
+          const top = chat.scrollTop + (er.top - cr.top) - (chat.clientHeight - er.height) / 2;
+          chat.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+          el.classList.add('stmb-flash'); setTimeout(() => el.classList.remove('stmb-flash'), 1400);
+        }
+      }
+    });
+
+    // ---- Поле ввода: растёт при переносах + отправка наружу (в RLM) ----
+    const ta = document.getElementById('send_textarea');
+    const fit = () => { if (!ta) return; ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 200) + 'px'; };
+    function sendNow(){
+      if (!ta) return;
+      const t = ta.value.trim();
+      if (!t) return;
+      parent.postMessage({ type: 'send', text: t }, '*');
+      ta.value = ''; fit();
+    }
+    if (ta) {
+      ta.addEventListener('input', fit); fit();
+      ta.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || e.shiftKey) return;
+        // Телефон/узкий экран (touch или ≤820px): Enter = ПЕРЕНОС СТРОКИ (не перехватываем). Отправка — только кнопкой ✈.
+        const mobile = window.matchMedia('(pointer: coarse)').matches || window.matchMedia('(max-width: 820px)').matches;
+        if (mobile) return;
+        e.preventDefault(); sendNow();   // десктоп: Enter отправляет (Shift+Enter — перенос)
+      });
+    }
+    const sendBut = document.getElementById('send_but');
+    if (sendBut) sendBut.addEventListener('click', sendNow);
+
+    // ---- Кнопки «Новый чат» / «Перегенерировать» → наружу в RLM ----
+    const actions = document.getElementById('rlm-actions');
+    // Режим удаления (как в ST): 🗑 включает режим → клик по сообщению удаляет ЕГО и все НИЖЕ.
+    let delMode = false;
+    function setDelMode(on) {
+      delMode = on;
+      const c = document.getElementById('chat'); if (c) c.classList.toggle('del-mode', on);
+      const b = document.querySelector('.rlm-del'); if (b) b.classList.toggle('on', on);
+    }
+    if (actions) actions.addEventListener('click', (e) => {
+      const btn = e.target.closest('.rlm-act'); if (!btn) return;
+      if (btn.dataset.act === 'del-mode') { setDelMode(!delMode); return; }   // локально в кадре чата
+      parent.postMessage({ type: btn.dataset.act }, '*');
+    });
+    // Клик по сообщению в режиме удаления (capture — перехват ДО кнопок сообщения): обрезать _msgs с этого места.
+    document.getElementById('chat').addEventListener('click', (e) => {
+      if (!delMode) return;
+      const mes = e.target.closest('.mes'); if (!mes) return;
+      e.stopPropagation(); e.preventDefault();
+      const idx = Number(mes.getAttribute('mesid')); if (isNaN(idx)) return;
+      const cnt = currentMsgs.length - idx;
+      if (window.confirm('Удалить это сообщение и все ниже (' + cnt + ' шт.)?')) {
+        parent.postMessage({ type: 'delete-from', idx: idx }, '*');
+      }
+      setDelMode(false);
+    }, true);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && delMode) setDelMode(false); });
+
+    // ---- Лента статуса процесса: движок полос (озвучка/душа/хроника/критик/генерация) ----
+    // Полосы рисуем через setInterval (реально движутся). Родитель шлёт {type:'proc', state, text, frac, cancelable}.
+    // Ошибки идут НЕ сюда, а в верхний chatToast; сюда — только ход процесса и его финал.
+    (function(){
+      const zoneActions = document.getElementById('rlm-actions');
+      const proc  = document.getElementById('rlm-proc');
+      const ptext = proc && proc.querySelector('.rlm-proc-text');
+      const px    = proc && proc.querySelector('.rlm-proc-x');
+      const bar   = document.getElementById('rlm-proc-bar');
+      const fill  = bar && bar.querySelector('i');
+      if (!proc || !bar || !fill) return;
+      const ACC = 'var(--customThemeColor,#51a0de)';
+      let anim = null, hideT = null, mode = null, pendingScene = null;   // mode: 'proc' | 'scene'; pendingScene — подсказка сцены ждёт, пока процесс освободит ленту
+      const stop = () => { if (anim) { clearInterval(anim); anim = null; } };
+      function barOff(){ stop(); fill.style.transition='none'; fill.style.opacity='0'; fill.style.left='0'; fill.style.width='0'; bar.classList.remove('on'); }
+      function toIdle(){ barOff(); proc.hidden = true; if (zoneActions) zoneActions.style.visibility = ''; mode = null; if (pendingScene) showScene(pendingScene); }
+      // Подсказка разметки сцены (не процесс): спокойная статичная полоса + текст + ✕ (сброс разметки).
+      function barScene(){ stop(); bar.classList.add('on'); fill.style.transition='none'; fill.style.opacity='0.5'; fill.style.left='0'; fill.style.width='100%'; fill.style.background='linear-gradient(90deg,transparent,'+ACC+' 50%,transparent)'; }
+      function showScene(text){ mode='scene'; if(hideT){clearTimeout(hideT);hideT=null;} proc.hidden=false; if(zoneActions) zoneActions.style.visibility='hidden'; ptext.className='rlm-proc-text scene'; ptext.textContent=text; px.hidden=false; barScene(); }
+      function show(text, cancelable){
+        proc.hidden = false; if (zoneActions) zoneActions.style.visibility = 'hidden';   // кнопки на месте (не двигаются), просто перекрыты
+        ptext.className = 'rlm-proc-text'; ptext.textContent = text || '';
+        px.hidden = !cancelable; bar.classList.add('on');
+      }
+      // подгрузка модели: полоса ДВИЖЕТСЯ (бегущая)
+      function barLoad(){ stop(); bar.classList.add('on'); fill.style.transition='none'; fill.style.opacity='1'; fill.style.width='40%';
+        fill.style.background='linear-gradient(90deg,transparent,'+ACC+',transparent)';
+        let p=-40; anim=setInterval(()=>{ p+=4; if(p>100)p=-40; fill.style.left=p+'%'; },35); }
+      // генерация (неизмеримо): ДЫХАНИЕ — тухнет/светится, к краям затухает
+      function barPulse(){ stop(); bar.classList.add('on'); fill.style.transition='none'; fill.style.left='0'; fill.style.width='100%';
+        fill.style.background='linear-gradient(90deg,transparent,'+ACC+' 50%,transparent)';
+        let t=0; anim=setInterval(()=>{ t+=0.09; fill.style.opacity=(0.4+0.6*(0.5+0.5*Math.sin(t))).toFixed(2); },35); }
+      // измеримо (Душа по докам / генерация аудио по времени): заливка по доле
+      function barDet(frac){ stop(); bar.classList.add('on'); fill.style.transition='width .3s ease'; fill.style.opacity='1'; fill.style.left='0';
+        fill.style.background=ACC; fill.style.width=Math.round(Math.max(0,Math.min(1,frac||0))*100)+'%'; }
+      function barDone(){ stop(); bar.classList.add('on'); fill.style.transition='width .3s ease'; fill.style.opacity='1'; fill.style.left='0'; fill.style.width='100%'; fill.style.background='#6ee87a'; }
+      function barFail(){ stop(); bar.classList.add('on'); fill.style.transition='none'; fill.style.opacity='1'; fill.style.left='0'; fill.style.width='100%'; fill.style.background='#e0645a'; }
+
+      window.rlmProc = function(m){
+        if (hideT) { clearTimeout(hideT); hideT = null; }
+        const st = m.state;
+        if (st === 'error' || st === 'cancel' || st === 'idle') trBusyClear();   // перевод оборвался — кнопки снова живые
+
+        if (st !== 'idle') mode = 'proc';   // реальный процесс перекрывает подсказку сцены (вернётся из pendingScene, когда лента освободится)
+        if (st === 'idle')  { toIdle(); return; }
+        if (st === 'done')  { proc.hidden=false; if(zoneActions) zoneActions.style.visibility='hidden'; ptext.className='rlm-proc-text ok';  ptext.textContent=m.text||'Готово';  px.hidden=true; barDone(); hideT=setTimeout(toIdle,1500); return; }
+        if (st === 'error' || st === 'cancel') { proc.hidden=false; if(zoneActions) zoneActions.style.visibility='hidden'; ptext.className='rlm-proc-text err'; ptext.textContent=m.text||(st==='cancel'?'Прервано':'Ошибка'); px.hidden=true; barFail(); hideT=setTimeout(toIdle,1500); return; }
+        show(m.text, m.cancelable !== false);
+        if (st === 'load') barLoad();
+        else if (st === 'pulse') barPulse();
+        else if (st === 'fill' || st === 'grow') barDet(m.frac);
+      };
+      // крестик: процесс → отмена процесса (наружу); подсказка сцены → сброс разметки.
+      px.addEventListener('click', () => { if (mode === 'scene') { if (window.rlmSceneCancel) window.rlmSceneCancel(); } else parent.postMessage({ type: 'proc-cancel' }, '*'); });
+      // Подсказка «отметь конец/начало сцены»: text=null убирает. Идёт процесс → ждёт в pendingScene, покажется, когда лента освободится.
+      window.rlmSceneHint = function(text){ if (!text) { pendingScene = null; if (mode === 'scene') toIdle(); return; } pendingScene = text; if (mode === 'proc') return; showScene(text); };
+    })();
+
+    // Мобильный чат = погружение на телефоне (#st-frame на всю ширину экрана < 720px).
+    // В мини-чате ноды логическая ширина 1000px → false, лист не показываем (там правка не нужна).
+    function isMobileChat() { try { return window.matchMedia('(max-width: 720px)').matches; } catch (_) { return false; } }
+
+    // Мобильный лист над клавиатурой — ОБЩИЙ для правки реплики и фидбека: закреплён над клавиатурой
+    // (не уезжает целиком), текст скроллится внутри. Заголовок/значение/кнопку/действие задаёт вызывающий.
+    function openMobileSheet(opts) {
+      if (document.querySelector('.mes-edit-sheet')) return;   // одно окно за раз
+      const back = document.createElement('div'); back.className = 'mes-edit-backdrop';
+      const sheet = document.createElement('div'); sheet.className = 'mes-edit-sheet';
+      sheet.innerHTML = '<div class="mes-edit-bar">'
+        + '<button class="mes-edit-btn mes-edit-cancel">Отмена</button>'
+        + '<span class="mes-edit-title">' + esc(opts.title || 'Правка') + '</span>'
+        + '<button class="mes-edit-btn mes-edit-save">' + esc(opts.saveLabel || 'Готово') + '</button></div>';
+      const ed = document.createElement('textarea'); ed.className = 'mes-edit'; ed.value = opts.value || '';
+      if (opts.placeholder) ed.placeholder = opts.placeholder;
+      sheet.appendChild(ed);
+      document.body.appendChild(back); document.body.appendChild(sheet);
+
+      // Закрепляем лист над клавиатурой по visualViewport: bottom = высота клавиатуры,
+      // высота листа = почти вся видимая область. Пересчёт при появлении/скрытии клавиатуры.
+      const vv = window.visualViewport;
+      function fit() {
+        if (vv) {
+          const kb = Math.max(0, window.innerHeight - (vv.offsetTop + vv.height));
+          sheet.style.bottom = kb + 'px';
+          sheet.style.height = Math.round(vv.height) + 'px';   // на ВСЮ видимую область над клавиатурой (не оставлять пустое место сверху)
+        } else {
+          sheet.style.bottom = '0'; sheet.style.height = '100vh';
+        }
+      }
+      fit();
+      if (vv) { vv.addEventListener('resize', fit); vv.addEventListener('scroll', fit); }
+
+      let done = false;
+      function close() {
+        if (done) return; done = true;
+        if (vv) { vv.removeEventListener('resize', fit); vv.removeEventListener('scroll', fit); }
+        back.remove(); sheet.remove();
+      }
+      function cancel() { close(); if (opts.onCancel) opts.onCancel(); }
+      function save() { if (done) return; if (opts.onSave) opts.onSave(ed.value, close); else close(); }
+      sheet.querySelector('.mes-edit-save').addEventListener('click', save);
+      sheet.querySelector('.mes-edit-cancel').addEventListener('click', cancel);
+      back.addEventListener('click', cancel);
+      ed.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') cancel(); });   // Enter = перенос строки, НЕ сохранение
+      ed.focus();
+      try { ed.setSelectionRange(ed.value.length, ed.value.length); } catch (_) { /* игнор */ }
+    }
+    // Мобильная правка реплики — лист «Правка сообщения».
+    function openMobileEdit(idx, raw) {
+      openMobileSheet({
+        title: 'Правка сообщения', value: raw, saveLabel: 'Готово',
+        onSave: (val, close) => { parent.postMessage({ type: 'edit', idx, text: val }, '*'); close(); },
+        onCancel: () => renderMessages(currentMsgs),
+      });
+    }
+    // Мобильный фидбек по ответу ИИ — тот же лист (пусто → просто закрыть, без переката).
+    function openMobileFeedback(idx) {
+      openMobileSheet({
+        title: 'Фидбек: переписать ответ', value: '', saveLabel: 'Отправить',
+        placeholder: 'В чём фидбек? Что не так — перепишу ответ.',
+        onSave: (val, close) => { const t = (val || '').trim(); if (t) parent.postMessage({ type: 'feedback', idx, text: t }, '*'); close(); },
+      });
+    }
+
+    // ---- Правка реплики: клик по «карандашу» → inline-редактор → сохранить (Enter) / отмена (Esc) ----
+    const chatEl = document.getElementById('chat');
+    if (chatEl) chatEl.addEventListener('click', (e) => {
+      const pen = e.target.closest('[data-edit]'); if (!pen) return;
+      e.stopPropagation();
+      const mes = pen.closest('.mes'); if (!mes || mes.querySelector('.mes-edit')) return;
+      const idx = Number(pen.dataset.edit);
+      const textEl = mes.querySelector('.mes_text');
+      const raw = (currentMsgs[idx] && currentMsgs[idx].text != null) ? currentMsgs[idx].text : textEl.textContent;
+      if (isMobileChat()) { openMobileEdit(idx, raw); return; }   // телефон: закреплённый лист над клавиатурой
+      const ed = document.createElement('textarea');
+      ed.className = 'mes-edit'; ed.value = raw;
+      textEl.style.display = 'none';
+      textEl.parentNode.insertBefore(ed, textEl.nextSibling);
+      ed.style.overflow = 'hidden';   // растём в высоту, а не прячем текст под внутренний скролл
+      const autoFit = () => { ed.style.height = 'auto'; ed.style.height = (ed.scrollHeight + 2) + 'px'; };  // +2 — под рамку (border-box)
+      autoFit(); ed.addEventListener('input', autoFit);
+      ed.focus({ preventScroll: true });   // не дёргать прокрутку чата в самый низ при входе в редактирование
+      try { ed.setSelectionRange(ed.value.length, ed.value.length); } catch (e) { /* игнор */ }
+      let done = false;
+      const save = () => { if (done) return; done = true; parent.postMessage({ type: 'edit', idx, text: ed.value }, '*'); };
+      ed.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); save(); }
+        else if (ev.key === 'Escape') { done = true; renderMessages(currentMsgs); }
+      });
+      ed.addEventListener('blur', save);
+    });
+
+    // ---- Перегенерация: клик по ↻ на последнем ответе ИИ → наружу (regenerate) ----
+    if (chatEl) chatEl.addEventListener('click', (e) => {
+      const rb = e.target.closest('[data-regen]'); if (!rb) return;
+      e.stopPropagation();
+      parent.postMessage({ type: 'regen' }, '*');
+    });
+
+    // ---- Выбор первого сообщения (перед началом ролки): клик по ‹ › на приветствии → наружу ----
+    if (chatEl) chatEl.addEventListener('click', (e) => {
+      const ga = e.target.closest('.rlm-greet-arrow'); if (!ga) return;
+      e.stopPropagation();
+      parent.postMessage({ type: 'greet-swipe', dir: Number(ga.dataset.greetDir) || 1 }, '*');
+    });
+
+    // ---- Окно разбора критика: клик по тегу под сообщением → окошко (как окно правки), но ТОЛЬКО просмотр ----
+    // Раньше разбор вставлялся ПРЯМО в чат (.mes-review-panel). Теперь открывается отдельным окном поверх —
+    // на десктопе и на телефоне одинаково, — как окно правки, но реплику не редактирует.
+    let critModalClose = null;
+    function openCritModal(idx, title, innerHtml) {
+      if (critModalClose) critModalClose();                       // одно окно за раз
+      const back = document.createElement('div');
+      back.className = 'crit-modal-backdrop'; back.id = 'rlm-crit-modal'; back.dataset.idx = idx;
+      const box = document.createElement('div'); box.className = 'crit-modal';
+      box.innerHTML = '<div class="crit-modal-bar"><span class="crit-modal-title">' + esc(title) + '</span>'
+        + '<span class="crit-modal-x interactable" title="Закрыть">✕</span></div>'
+        + '<div class="crit-modal-body">' + innerHtml + '</div>';
+      back.appendChild(box); document.body.appendChild(back);
+      function onKey(ev) { if (ev.key === 'Escape') close(); }
+      function close() {
+        if (!critModalClose) return; critModalClose = null;
+        document.removeEventListener('keydown', onKey); back.remove();
+      }
+      critModalClose = close;
+      document.addEventListener('keydown', onKey);
+      back.addEventListener('click', (ev) => { if (ev.target === back) close(); });   // клик по фону — закрыть
+      box.querySelector('.crit-modal-x').addEventListener('click', close);
+      return box;
+    }
+
+    // «Апрув редактора» (критик переписал): было / разбор судьи / стало + перевод. Окно, только чтение.
+    if (chatEl) chatEl.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-review]'); if (!b) return;
+      e.stopPropagation();
+      const mes = b.closest('.mes'); const idx = Number(mes.getAttribute('mesid'));
+      const m = currentMsgs[idx]; if (!m || !m.criticReview) return;
+      const cr = m.criticReview;
+      // Только САМ разбор судьи (вердикт/причина/урок). Полные тексты «Было»/«Стало» не показываем —
+      // они и так на экране (старый снесён, новый в ленте), а окно из-за них превращалось в простыню.
+      const box = openCritModal(idx, '⚖ Апрув редактора',
+          '<div class="mrp-sec"><div class="mrp-h">Разбор судьи</div><div class="mrp-t" data-mrp="reason">' + esc(cr.reason || '') + '</div></div>'
+        + '<div class="mrp-tr interactable" data-review-tr="' + idx + '">🌐 Перевести на русский</div>');
+      const tb = box.querySelector('[data-review-tr]');
+      if (tb) tb.addEventListener('click', () => {
+        const mm = currentMsgs[idx]; if (!mm || !mm.criticReview) return;
+        const c = mm.criticReview; tb.textContent = '🌐 перевожу…';
+        parent.postMessage({ type: 'translate-review', idx: idx, texts: [c.reason || ''] }, '*');
+      });
+    });
+
+    // «Критик: апрув ✓» (одобрение): почему одобрил + поле «не согласен» → урок критику. Тоже окно.
+    if (chatEl) chatEl.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-approve]'); if (!b) return;
+      e.stopPropagation();
+      const mes = b.closest('.mes'); const idx = Number(mes.getAttribute('mesid'));
+      const m = currentMsgs[idx]; if (!m || !m.critic || !m.critic.ok) return;
+      const reason = (m.critic.reason || '').trim() || '(критик пояснения не дал)';
+      const box = openCritModal(idx, '⚖ Критик: апрув ✓',
+          '<div class="mrp-sec"><div class="mrp-h">Почему критик одобрил <button class="tr-b crit-tr-reason interactable" type="button" title="Перевести ответ критика на русский (повторно — оригинал)">RU</button></div><div class="mrp-t" data-mrp="reason">' + esc(reason) + '</div></div>'
+        + '<div class="mrp-sec"><div class="mrp-h">Не согласен? Скажи, что критик упустил <button class="tr-b crit-tr-fb interactable" type="button" data-fb-dir="ru" title="Перевести твой текст на русский (замена)">RU</button><button class="tr-b crit-tr-fb interactable" type="button" data-fb-dir="en" title="Перевести твой текст на английский (замена)">EN</button></div><textarea class="mes-edit crit-approve-fb" placeholder="напр.: тут он подлизал, а ты пропустил"></textarea></div>'
+        + '<div class="crit-approve-actions">'
+        + '<div class="mrp-tr crit-approve-send interactable" title="Учит критика на будущее: пишет урок в блокнот">Записать в блокнот</div>'
+        + '<div class="mrp-tr crit-approve-rewrite interactable" title="Разово переписать ИМЕННО этот ответ по замечанию, урок НЕ пишется">Не записывать · переписать</div>'
+        + '</div>');
+      const fa = box.querySelector('.crit-approve-fb'); if (fa) fa.focus();
+      // RU (квадратная, как в ноде) — предпросмотр перевода ОТВЕТА критика EN→RU (нажал → RU, ещё раз → оригинал).
+      const trReason = box.querySelector('.crit-tr-reason');
+      if (trReason) trReason.addEventListener('click', () => {
+        const cell = box.querySelector('.mrp-t[data-mrp="reason"]'); if (!cell) return;
+        if (cell.dataset.trShown === '1') { cell.textContent = cell.dataset.trOrig || ''; cell.dataset.trShown = '0'; trReason.classList.remove('on'); return; }   // повторно → оригинал
+        if (cell.dataset.trText) { cell.textContent = cell.dataset.trText; cell.dataset.trShown = '1'; trReason.classList.add('on'); return; }                     // уже переводили — показать
+        cell.dataset.trOrig = cell.textContent; trReason.classList.add('busy');
+        parent.postMessage({ type: 'translate-approve', idx: idx, text: (currentMsgs[idx] && currentMsgs[idx].critic && currentMsgs[idx].critic.reason || '').trim() }, '*');
+      });
+      // RU / EN (квадратные, как в ноде) — перевод ТВОЕГО текста в поле фидбека в нужную сторону (замена).
+      box.querySelectorAll('.crit-tr-fb').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          if (!fa || !fa.value.trim()) return;
+          box.querySelectorAll('.crit-tr-fb').forEach((b) => b.classList.remove('busy'));
+          btn.classList.add('busy');
+          parent.postMessage({ type: 'translate-fb', to: btn.dataset.fbDir, text: fa.value }, '*');
+        });
+      });
+      const s = box.querySelector('.crit-approve-send');
+      if (s) s.addEventListener('click', () => {
+        const val = (fa && fa.value.trim()) || ''; if (!val) return;
+        s.textContent = 'записываю…';
+        parent.postMessage({ type: 'critic-approve-feedback', idx: idx, text: val }, '*');
+      });
+      const rw = box.querySelector('.crit-approve-rewrite');
+      if (rw) rw.addEventListener('click', () => {
+        const val = (fa && fa.value.trim()) || ''; if (!val) return;   // без замечания нечего переписывать
+        rw.textContent = 'переписываю…';
+        parent.postMessage({ type: 'critic-approve-rewrite', idx: idx, text: val }, '*');
+      });
+    });
+
+    // ---- Фидбек: клик по 💬 у ответа ИИ → ОКНО (как плашка критика) с полем и кнопками RU/EN → перекат ответа ----
+    if (chatEl) chatEl.addEventListener('click', (e) => {
+      const fb = e.target.closest('[data-fb]'); if (!fb) return;
+      e.stopPropagation();
+      const idx = Number(fb.dataset.fb);
+      const box = openCritModal(idx, '💬 Фидбек — переписать ответ',
+          '<div class="mrp-sec"><div class="mrp-h">Что не так? Перепишу ответ по замечанию <button class="tr-b crit-tr-fb interactable" type="button" data-fb-dir="ru" title="Перевести твой текст на русский (замена)">RU</button><button class="tr-b crit-tr-fb interactable" type="button" data-fb-dir="en" title="Перевести твой текст на английский (замена)">EN</button></div><textarea class="mes-edit crit-approve-fb" placeholder="напр.: он слишком легко согласился — перепиши жёстче"></textarea></div>'
+        + '<div class="mrp-sec fb-reason-sec"><div class="mrp-h">Рассуждение при переписи</div><select class="fb-reason interactable"><option value="node">Как в ноде «Опции»</option><option value="off">Выкл</option><option value="low" selected>Короткое</option><option value="medium">Среднее</option><option value="high">Длинное</option></select></div>'
+        + '<div class="crit-approve-actions">'
+        + '<div class="mrp-tr crit-fb-learn interactable" title="Переписать ответ по замечанию И записать урок критику в блокнот">Записать в блокнот</div>'
+        + '<div class="mrp-tr crit-fb-send interactable" title="Переписать этот ответ по замечанию">Переписать</div>'
+        + '</div>');
+      const fa = box.querySelector('.crit-approve-fb'); if (fa) fa.focus();
+      // RU / EN — перевод ТВОЕГО текста в поле (замена), тот же механизм, что в окне апрува.
+      box.querySelectorAll('.crit-tr-fb').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          if (!fa || !fa.value.trim()) return;
+          box.querySelectorAll('.crit-tr-fb').forEach((b) => b.classList.remove('busy'));
+          btn.classList.add('busy');
+          parent.postMessage({ type: 'translate-fb', to: btn.dataset.fbDir, text: fa.value }, '*');
+        });
+      });
+      const learn = box.querySelector('.crit-fb-learn');
+      if (learn) learn.addEventListener('click', () => {
+        const val = (fa && fa.value.trim()) || ''; if (!val) return;
+        const rz = box.querySelector('.fb-reason'); const reason = rz ? rz.value : 'node';   // то же рассуждение при переписи, что у «Переписать»
+        learn.textContent = 'переписываю + пишу…';
+        parent.postMessage({ type: 'feedback-learn', idx: idx, text: val, reason: reason }, '*');   // И перекат по замечанию, И урок в блокнот
+        if (critModalClose) critModalClose();
+      });
+      const send = box.querySelector('.crit-fb-send');
+      if (send) send.addEventListener('click', () => {
+        const val = (fa && fa.value.trim()) || ''; if (!val) return;
+        const rz = box.querySelector('.fb-reason'); const reason = rz ? rz.value : 'node';   // рассуждение при переписи (node = как в «Опциях»)
+        send.textContent = 'переписываю…';
+        parent.postMessage({ type: 'feedback', idx: idx, text: val, reason: reason }, '*');   // перекат по замечанию (без авто-урока — урок отдельной кнопкой)
+        if (critModalClose) critModalClose();   // окно закрыть — перекат идёт в чате
+      });
+    });
+
+    // ---- «Раскрыть вероятность»: забираем ближайший исход СЕБЕ (модели он уже не уйдёт) ----
+    if (chatEl) chatEl.addEventListener('click', (e) => {
+      const rb = e.target.closest('[data-roll-peek]'); if (!rb) return;
+      e.stopPropagation();
+      rb.classList.add('busy');
+      parent.postMessage({ type: 'random-peek', idx: Number(rb.dataset.rollPeek) }, '*');
+    });
+    // ---- Перевод ПРИЧИН состояния под сообщением: RU (тумблер оригинал/перевод, кэш в m._stateRtr) ----
+    if (chatEl) chatEl.addEventListener('click', (e) => {
+      const tb = e.target.closest('[data-st-tr]'); if (!tb) return;
+      e.stopPropagation();
+      const idx = Number(tb.dataset.stTr);
+      const mm = currentMsgs[idx]; if (!mm || !mm._stateR) return;
+      if (mm._showStateTr) { mm._showStateTr = false; renderMessages(currentMsgs); return; }   // назад к оригиналу
+      if (mm._stateRtr) { mm._showStateTr = true; renderMessages(currentMsgs); return; }         // из кэша
+      tb.classList.add('busy');
+      const stNames = {}; lastStateDefs.forEach((v) => { stNames[v.id] = v.name; });   // имена состояний — тоже на перевод
+      parent.postMessage({ type: 'translate-st', idx: idx, reasons: mm._stateR, names: stNames }, '*');
+    });
+
+    // Подсказка разметки сцены: пока отмечена ТОЛЬКО одна граница — в ленте «отметь вторую» + ✕ (сброс).
+    // Выводится из sceneStart/sceneEnd → переживает перерисовки и прыжки по Оглавлению (ничего не слетает).
+    function updateSceneHint(){
+      if (!window.rlmSceneHint) return;
+      const one = (sceneStart != null) !== (sceneEnd != null);   // ровно одна граница
+      if (!one) { window.rlmSceneHint(null); return; }
+      window.rlmSceneHint(sceneStart != null ? 'Отметь КОНЕЦ сцены ◄ · ✕ сбросить' : 'Отметь НАЧАЛО сцены ► · ✕ сбросить');
+    }
+    window.rlmSceneCancel = function(){ sceneStart = null; sceneEnd = null; parent.postMessage({ type:'scene', start:null, end:null }, '*'); renderMessages(currentMsgs); };
+    // ---- Разметка сцены: клик по ►/◄ отмечает начало/конец (как MachineMechanic) ----
+    if (chatEl) chatEl.addEventListener('click', (e) => {
+      const sb = e.target.closest('[data-scene-start]');
+      const eb = e.target.closest('[data-scene-end]');
+      if (!sb && !eb) return;
+      e.stopPropagation();
+      if (sb) { const i = Number(sb.dataset.sceneStart); sceneStart = (sceneStart === i) ? null : i; }
+      else    { const i = Number(eb.dataset.sceneEnd);   sceneEnd   = (sceneEnd === i)   ? null : i; }
+      renderMessages(currentMsgs);
+      parent.postMessage({ type: 'scene', start: sceneStart, end: sceneEnd }, '*');
+    });
+
+    // ---- Перевод СООБЩЕНИЯ: EN→RU, предпросмотр (повторно — оригинал) ----
+    if (chatEl) chatEl.addEventListener('click', (e) => {
+      const tb = e.target.closest('[data-translate]'); if (!tb) return;
+      e.stopPropagation();
+      const idx = Number(tb.dataset.translate);
+      const mm = currentMsgs[idx]; if (!mm) return;
+      if (mm._showTr) { mm._showTr = false; renderMessages(currentMsgs); parent.postMessage({ type: 'mes-tr-toggle', idx: idx, show: false }, '*'); return; }    // назад к оригиналу (запомнить в родителе)
+      if (mm._tr != null) { mm._showTr = true; renderMessages(currentMsgs); parent.postMessage({ type: 'mes-tr-toggle', idx: idx, show: true }, '*'); return; }  // из кэша (запомнить в родителе)
+      tb.classList.add('mes-tr-busy');
+      parent.postMessage({ type: 'translate-mes', idx: idx, text: mm.text }, '*');
+    });
+    // ---- Озвучка сообщения: 🔊 → наружу. Озвучиваем ПОКАЗАННЫЙ текст (если открыт перевод — его) ----
+    if (chatEl) chatEl.addEventListener('click', (e) => {
+      const sb = e.target.closest('[data-tts]'); if (!sb) return;
+      e.stopPropagation();
+      const idx = Number(sb.dataset.tts);
+      const mm = currentMsgs[idx];
+      const shown = mm ? ((mm._showTr && mm._tr != null) ? mm._tr : mm.text) : '';
+      parent.postMessage({ type: 'tts', idx: idx, text: shown }, '*');
+    });
+    // ---- Удаление СООБЩЕНИЯ: ✕ рядом с карандашом → убрать конкретную реплику (наружу, родитель правит лог) ----
+    if (chatEl) chatEl.addEventListener('click', (e) => {
+      const db = e.target.closest('[data-del]'); if (!db) return;
+      e.stopPropagation();
+      const idx = Number(db.dataset.del);
+      parent.postMessage({ type: 'delete-mes', idx: idx }, '*');
+    });
+    // ---- Ветка: ⑃ в шапке сообщения → новый чат-копия истории до этого места (наружу, родитель ветвит) ----
+    if (chatEl) chatEl.addEventListener('click', (e) => {
+      const bb = e.target.closest('[data-branch]'); if (!bb) return;
+      e.stopPropagation();
+      const idx = Number(bb.dataset.branch);
+      parent.postMessage({ type: 'branch', idx: idx }, '*');
+    });
+    // ---- Аватарка: клик по аве в сообщении → картинка на весь экран (крестик/Esc/клик по фону — закрыть) ----
+    let avaLightboxClose = null;
+    function openAvatarLightbox(src){
+      if (avaLightboxClose) avaLightboxClose();                  // одно окно за раз
+      const back = document.createElement('div'); back.className = 'ava-lightbox';
+      const big = document.createElement('img'); big.src = src; big.alt = '';
+      const x = document.createElement('div'); x.className = 'ava-lightbox-x interactable'; x.title = 'Закрыть'; x.textContent = '✕';
+      back.appendChild(big); back.appendChild(x); document.body.appendChild(back);
+      function onKey(ev){ if (ev.key === 'Escape') { ev.stopPropagation(); close(); } }
+      function close(){ if (!avaLightboxClose) return; avaLightboxClose = null; document.removeEventListener('keydown', onKey, true); back.remove(); }
+      avaLightboxClose = close;
+      document.addEventListener('keydown', onKey, true);         // capture: Esc гасит лайтбокс раньше выхода из вижна
+      back.addEventListener('click', (ev) => { if (ev.target === back) close(); });   // клик по фону — закрыть
+      x.addEventListener('click', close);
+    }
+    if (chatEl) chatEl.addEventListener('click', (e) => {
+      const img = e.target.closest('.mesAvatarWrapper .avatar img'); if (!img) return;
+      e.stopPropagation();
+      const src = img.getAttribute('src'); if (!src) return;
+      openAvatarLightbox(src);
+    });
+    // ---- Перевод ПОЛЯ ВВОДА: RU→EN, реальная замена ----
+    const trInputBtn = document.getElementById('rlm-tr-input');
+    if (trInputBtn) trInputBtn.addEventListener('click', () => {
+      if (!ta || !ta.value.trim()) return;
+      if (trInputBtn.classList.contains('busy')) return;   // уже переводим
+      trInputBtn.classList.add('busy');
+      if (window.__trT) clearTimeout(window.__trT);
+      window.__trT = setTimeout(trBusyClear, 90000);       // ответа нет полторы минуты — вернуть кнопку, а не держать серой навсегда
+      parent.postMessage({ type: 'translate-input', text: ta.value }, '*');
+    });
+    // Снять «занято» со всех кнопок перевода: успех, отмена, ошибка или молчание провайдера.
+    function trBusyClear() {
+      if (window.__trT) { clearTimeout(window.__trT); window.__trT = null; }
+      const b = document.getElementById('rlm-tr-input'); if (b) b.classList.remove('busy');
+      document.querySelectorAll('.mes-tr-busy, .busy[data-mes-tr], .busy[data-roll-peek]').forEach((n) => n.classList.remove('busy'));
+    }
+    window.trBusyClear = trBusyClear;
+    // ---- Оглавление (значок списка): родитель строит панель глав из записей «Хроники» ----
+    const tocBtn = document.querySelector('.fa-list-ol');
+    if (tocBtn) tocBtn.addEventListener('click', () => parent.postMessage({ type: 'chronicle-toc' }, '*'));
+    // ---- Лорбук чата (значок книги, рядом): родитель открывает ВИЖН ноды «Лорбук чата» ----
+    const loreBtn = document.querySelector('.rlm-lore-open');
+    if (loreBtn) loreBtn.addEventListener('click', () => parent.postMessage({ type: 'lore-open' }, '*'));
+    // ---- Состояние (значок ползунков, рядом): родитель открывает ВИЖН ноды «Состояние» ----
+    const stateBtn = document.querySelector('.rlm-state-open');
+    if (stateBtn) stateBtn.addEventListener('click', () => parent.postMessage({ type: 'state-open' }, '*'));
+    const objectiveBtn = document.querySelector('.rlm-objective-open');
+    if (objectiveBtn) objectiveBtn.addEventListener('click', () => parent.postMessage({ type: 'objective-open' }, '*'));
+    const randomBtn = document.querySelector('.rlm-random-open');
+    if (randomBtn) randomBtn.addEventListener('click', () => parent.postMessage({ type: 'random-open' }, '*'));
+    // ---- Режиссёр (значок камеры, рядом): родитель открывает ВИЖН ноды «Режиссёр» (события сцены) ----
+    const dirBtn = document.querySelector('.rlm-director-open');
+    if (dirBtn) dirBtn.addEventListener('click', () => parent.postMessage({ type: 'director-open' }, '*'));
+    // ---- Гости и визитёры (значок людей): родитель открывает список записей лорбука чата (.guest/.npc) ----
+    const guestsBtn = document.querySelector('.rlm-guests-open');
+    if (guestsBtn) guestsBtn.addEventListener('click', () => parent.postMessage({ type: 'guests-open' }, '*'));
+    // ---- Инструменты (гаечный ключ): родитель открывает меню вижнов нод без своей кнопки (комплитер, API, Хроника, Озвучка) ----
+    const toolsBtn = document.querySelector('.fa-wrench');
+    if (toolsBtn) toolsBtn.addEventListener('click', () => parent.postMessage({ type: 'tools-menu' }, '*'));
+    // ---- Память (значок мозга): родитель открывает ВИЖН ноды «Душа» (её доки/записи) — как глазок на самой Душе ----
+    const memBrainBtn = document.querySelector('.fa-brain');
+    if (memBrainBtn) memBrainBtn.addEventListener('click', () => parent.postMessage({ type: 'soul-open' }, '*'));
+
+    // ---- Clip: кнопка появляется ТОЛЬКО у выделенного текста внутри сообщения (условие как в MachineMechanic).
+    //      Нет выделения — нет кнопки (не перекрывает чат). По клику шлём выделение родителю (type:'clip'). ----
+    (function(){
+      const fab = document.createElement('button');
+      fab.type = 'button'; fab.id = 'stmb-clip-fab';
+      fab.innerHTML = '<span class="cic">✂</span>Clip';
+      document.body.appendChild(fab);
+      let curText = '';
+      // Состояние выделения: непустой текст ВНУТРИ .mes (не в поле правки) → вернуть {text, rect}.
+      function selInMes(){
+        const sel = window.getSelection && window.getSelection();
+        if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+        const text = (sel.toString() || '').trim();
+        if (!text) return null;
+        const chat = document.getElementById('chat');
+        if (!chat || !chat.contains(sel.anchorNode) || !chat.contains(sel.focusNode)) return null;
+        const anc = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+        if (!anc || !anc.closest('.mes') || anc.closest('.mes-edit')) return null;
+        const rect = sel.getRangeAt(0).getBoundingClientRect();
+        if (!rect || (rect.width === 0 && rect.height === 0)) return null;
+        return { text, rect };
+      }
+      function updateFab(){
+        const st = selInMes();
+        if (!st) { fab.style.display = 'none'; curText = ''; return; }
+        curText = st.text;
+        fab.style.display = 'flex';
+        const bw = fab.offsetWidth || 62, bh = fab.offsetHeight || 26;
+        let x = Math.min(st.rect.right + 6, window.innerWidth - bw - 6); x = Math.max(6, x);
+        let y = st.rect.top - bh - 4; if (y < 4) y = st.rect.bottom + 6;   // не влезло сверху — снизу выделения
+        fab.style.left = x + 'px'; fab.style.top = y + 'px';
+      }
+      document.addEventListener('mouseup', () => setTimeout(updateFab, 0));
+      document.addEventListener('selectionchange', () => { const s = window.getSelection(); if (!s || s.isCollapsed) { fab.style.display = 'none'; curText = ''; } });
+      const chatSc = document.getElementById('chat');
+      if (chatSc) chatSc.addEventListener('scroll', () => { fab.style.display = 'none'; });
+      fab.addEventListener('mousedown', (e) => e.preventDefault());   // не сбрасывать выделение до клика
+      fab.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!curText) return;
+        parent.postMessage({ type: 'clip', text: curText }, '*');
+        fab.style.display = 'none'; curText = '';
+        const s = window.getSelection(); if (s) s.removeAllRanges();
+      });
+      window.__stmbHideClip = () => { fab.style.display = 'none'; curText = ''; };
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "name": "rlm",
+  "version": "0.0.1",
+  "description": "Roleplay Machine — узловое рабочее пространство (Electron)",
+  "main": "app/main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^43.2.0"
+  }
+}

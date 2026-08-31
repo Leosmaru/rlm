@@ -1,0 +1,7 @@
+node_modules/
+server/data/rlm-store/rlm.chatgraph.*.json
+server/data/rlm-store/rlm.chatlog.*.json
+server/data/rlm-store/rlm.chats.*.json
+server/data/rlm-store/rlm.telegram.json
+server/plugins/soul-md/data/
+*.log

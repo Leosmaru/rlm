@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Мобильный вьюпорт: рисуем по реальной ширине экрана и отключаем зум браузера,
+       чтобы жесты не конфликтовали с нашим пан/pinch-зумом холста (телефон, /rlm/).
+       interactive-widget=resizes-content — виртуальная клавиатура ужимает КОНТЕНТ (а не только
+       визуальный вьюпорт): поле ввода встаёт над клавиатурой без белого разрыва/мельканий. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: data:;" />
+  <title>RLM — рабочее пространство</title>
+  <!-- PWA: «Добавить на главный экран» → холст запускается с иконки как приложение (телефон, /rlm/).
+       Просто манифест + apple-мета + иконки, как в SillyTavern (без service worker, работает по http). -->
+  <link rel="manifest" crossorigin="use-credentials" href="manifest.json" />
+  <meta name="theme-color" content="#1d2b30" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="RLM" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+  <link rel="icon" type="image/png" href="icon-192.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Экран загрузки (сплэш): аниме-арт RLM на фоне + полоска прогресса с процентами.
+       Стоит первым в разметке и виден по умолчанию (CSS) — рисуется с первым кадром, поэтому
+       холст под ним не «мелькает» старым видом. Фон-арт и прогресс ставит renderer.js (Splash);
+       логотип «RLM» уже впечатан в сам арт. Прячется, когда база с сервера загружена. -->
+  <div id="rlm-splash">
+    <div id="rlm-splash-bg"></div>
+    <div class="rlm-splash-bar-wrap">
+      <div class="rlm-splash-bar"><div id="rlm-splash-fill" class="rlm-splash-fill"></div></div>
+      <div id="rlm-splash-pct" class="rlm-splash-pct">0%</div>
+    </div>
+  </div>
+
+  <!-- Фон рабочего пространства: арт RLM за нодами (z-index:-1 — над градиентом body, под сеткой/нодами).
+       Картинку и прозрачность ставит renderer.js по выбору в шапке; по умолчанию скрыт. -->
+  <div id="workspace-bg"></div>
+
+  <!-- Тулбар: имя + управление приложением (закрыть/перезапуск) -->
+  <div id="toolbar">
+    <div class="tb-left">
+      <button id="btn-chars" class="ico" title="Меню: персонажи, чаты, пресеты">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/></svg>
+      </button>
+      <button id="btn-save" class="ico" title="Сохранить (пресет или чат — по контексту)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
+      </button>
+      <button id="btn-open" class="ico" title="Загрузить сборку">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      </button>
+      <button id="btn-reset" class="ico" title="Сброс к базовому пресету">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+      </button>
+      <button id="btn-console" class="ico" title="Консоль: запросы к модели (что ушло / что вернулось)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M7 9l3 3-3 3"/><path d="M13 16h4"/></svg>
+      </button>
+      <button id="btn-help" class="ico" title="Справка: как всё устроено (F1)">❓</button>
+      <button class="ico" title="Отменить">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.7 2.9L3 13"/></svg>
+      </button>
+      <button class="ico" title="Вернуть">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6.7 2.9L21 13"/></svg>
+      </button>
+    </div>
+    <div class="tb-center">
+      <span class="crumb-root">RLM</span><span class="crumb-sep">/</span><span class="crumb-name">рабочее пространство</span>
+    </div>
+    <div class="tb-right">
+      <!-- Мобильный режим: переключает САМО приложение в телефонный размер (окно ужимается, вёрстка → mobile-mode) -->
+      <button id="btn-phone" class="ico" title="Мобильный режим: окно под размер телефона (как в Termux)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg>
+      </button>
+      <!-- Переключатель стиля оформления: наш «Терминал» ↔ «Референс» (Langflow-подобный).
+           На мобиле кнопка прячется — «Стиль» уезжает в меню ⋮ (место освобождается под имя контекста). -->
+      <button id="btn-theme" class="btn ghost" title="Стиль оформления: Терминал / Референс">Стиль</button>
+      <!-- Кнопка и меню цветовых пресетов: синий Steam и графит -->
+      <div class="preset-wrap">
+        <button id="btn-preset" class="btn ghost" title="Цветовая тема"><span class="preset-cur"></span>Цвет</button>
+        <div id="preset-menu" class="preset-menu hidden"></div>
+      </div>
+      <!-- Фон рабочего пространства: выбрать один из артов RLM (слой за нодами) + прозрачность -->
+      <div class="bg-wrap">
+        <button id="btn-bg" class="btn ghost" title="Фон рабочего пространства (арт + прозрачность)">Фон</button>
+        <div id="bg-menu" class="bg-menu hidden">
+          <div class="bg-thumbs">
+            <button class="bg-thumb bg-none" data-bg="" title="Без фона">✕</button>
+            <button class="bg-thumb" data-bg="RLM1" title="Арт 1" style="background-image:url('loading/RLM1.png')"></button>
+            <button class="bg-thumb" data-bg="RLM2" title="Арт 2" style="background-image:url('loading/RLM2.png')"></button>
+            <button class="bg-thumb" data-bg="RLM3" title="Арт 3" style="background-image:url('loading/RLM3.png')"></button>
+            <button class="bg-thumb" data-bg="RLM4" title="Арт 4" style="background-image:url('loading/RLM4.png')"></button>
+            <button class="bg-thumb" data-bg="RLM5" title="Арт 5 (⚙ логотип)" style="background-image:url('loading/RLM5.png')"></button>
+            <button class="bg-thumb bg-thumb-vid" data-bg="RLM1V" title="Видео 1"><video src="loading/RLM1V.mp4" muted loop autoplay playsinline></video><span class="bg-thumb-play">▶</span></button>
+            <button class="bg-thumb bg-thumb-vid" data-bg="RLM3V" title="Видео 3"><video src="loading/RLM3V.mp4" muted loop autoplay playsinline></video><span class="bg-thumb-play">▶</span></button>
+          </div>
+          <label class="bg-op-row"><span>Прозрачность</span>
+            <input id="bg-op-range" type="range" min="0" max="100" value="35">
+          </label>
+        </div>
+      </div>
+      <!-- Меню ⋮ «Ещё» — только в мобильном режиме: держит «Стиль» и т.п., чтобы шапка не пухла -->
+      <div class="tb-more-wrap">
+        <button id="tb-more" class="btn ghost" title="Ещё">⋮</button>
+        <div id="tb-more-menu" class="tb-more-menu hidden">
+          <button id="tb-more-theme" type="button">Стиль оформления</button>
+        </div>
+      </div>
+      <button id="btn-close" class="btn ghost" title="Закрыть приложение">Закрыть</button>
+      <button id="btn-restart" class="btn accent" title="Перезапустить приложение">Перезапуск</button>
+    </div>
+  </div>
+
+  <!-- Холст: viewport фиксирован; world двигается/масштабируется (renderer.js) -->
+  <div id="viewport">
+    <div id="world"></div>
+  </div>
+
+  <!-- Мобильный режим: плавающая кнопка выхода (на случай, если узкая шапка обрезала кнопку-телефон) -->
+  <button id="mobile-exit" title="Выйти из мобильного режима">⤢ выйти из телефона</button>
+
+  <!-- Панель управления холстом (низ слева): стиль проводов + прозрачность -->
+  <div id="canvas-ctl">
+    <button id="btn-wire" class="cc-btn" title="Стиль проводов: волнистые / уголками"></button>
+    <button id="btn-stop-all" class="cc-btn cc-stop" title="СТОП: оборвать ВСЕ идущие генерации (ход, память, критик, Хроника, перевод, озвучка)">⏹ <span>Стоп</span></button>
+    <label id="wire-op" class="cc-slider" title="Прозрачность проводов">
+      <span class="cc-slider-ico">◔</span>
+      <input id="wire-op-range" type="range" min="15" max="100" value="100">
+    </label>
+  </div>
+
+  <!-- Контекстное меню по ПКМ -->
+  <div id="ctxmenu" class="ctxmenu hidden">
+    <div class="ctx-item" data-action="new-api">＋ Нода: API</div>
+    <div class="ctx-item" data-action="new-options">＋ Нода: Опции</div>
+    <div class="ctx-item" data-action="new-local">＋ Нода: Локал-сэмплеры</div>
+    <div class="ctx-item" data-action="new-sys">＋ Нода: Систем промт</div>
+    <div class="ctx-item" data-action="new-prompt">＋ Нода: Промт комплитер</div>
+    <div class="ctx-item" data-action="new-mprompt">＋ Нода: Мультиплей-комплитер</div>
+    <div class="ctx-item" data-action="new-char">＋ Нода: Персонаж</div>
+    <div class="ctx-item" data-action="new-persona">＋ Нода: Персона</div>
+    <div class="ctx-item" data-action="new-lore">＋ Нода: Лорбук</div>
+    <div class="ctx-item" data-action="new-soul">＋ Нода: Душа</div>
+    <div class="ctx-item" data-action="new-chronicle">＋ Нода: Хроника</div>
+    <div class="ctx-item" data-action="new-critic">＋ Нода: Критик</div>
+    <div class="ctx-item" data-action="new-director">＋ Нода: Режиссёр</div>
+    <div class="ctx-item" data-action="new-state">＋ Нода: Состояние</div>
+    <div class="ctx-item" data-action="new-objective">＋ Нода: Цель</div>
+    <div class="ctx-item" data-action="new-note">＋ Нода: Заметка автора</div>
+    <div class="ctx-item" data-action="new-random">＋ Нода: Рандомайзер</div>
+    <div class="ctx-item" data-action="new-dry">＋ Нода: Программный DRY</div>
+    <div class="ctx-item" data-action="new-embedder">＋ Нода: Эмбеддер</div>
+    <div class="ctx-item" data-action="new-translator">＋ Нода: Транслитер</div>
+    <div class="ctx-item" data-action="new-tts">＋ Нода: Озвучка (TTS)</div>
+    <div class="ctx-item" data-action="new-chat">＋ Нода: Чат</div>
+    <div class="ctx-item" data-action="new-groupchat">＋ Нода: Групповой чат</div>
+    <div class="ctx-item" data-action="new-netgame">＋ Нода: Телеграм сетевая игра</div>
+    <div class="ctx-item" data-action="new-scanner">＋ Нода: Сканер</div>
+  </div>
+
+  <!-- Режим погружения: чат в стиле SillyTavern + Moonlit; опции — выезжают справа по кнопке -->
+  <div id="immersive" class="hidden">
+    <div class="im-topbar">
+      <button id="im-exit" class="im-exit" title="Назад к нодам (Esc)">← ноды</button>
+      <!-- Только в мобильном режиме: меню выбора персонажа (открывает стартовое меню, вкладку «Персонажи») -->
+      <button id="im-chars" class="im-exit" title="Выбор персонажа">☰ персонажи</button>
+      <button id="im-console" class="im-exit" title="Консоль: запросы к модели (что ушло / что вернулось)">&gt;_ консоль</button>
+      <button id="im-help" class="im-exit" title="Справка (F1)">❓ справка</button>
+      <!-- Название текущего чата по центру шапки — клик переименовывает чат (как крошка на холсте) -->
+      <span id="im-chat-name" class="im-chat-name" title="Нажми, чтобы переименовать чат"></span>
+      <button id="im-restart" class="im-exit" title="Перезапустить приложение/сервер">⟳ перезапуск</button>
+      <button id="im-opts-toggle" class="im-exit" title="Опции Moonlit">опции ⚙</button>
+    </div>
+    <div class="im-body-wrap">
+      <!-- Фон рисуется здесь, за прозрачным iframe — так он точно виден -->
+      <div id="im-bg"></div>
+      <!-- Настоящий чат ST+Moonlit (изолированный iframe со скопированным CSS) -->
+      <iframe id="st-frame" src="moonlit/chat.html"></iframe>
+      <!-- Опции Moonlit: крутят реальные переменные ST внутри чата -->
+      <div class="im-opts">
+        <div class="im-opts-head">Опции Moonlit · <span id="opt-count"></span></div>
+        <div class="opt-actions">
+          <button id="opt-default" class="opt-btn" type="button">По умолчанию</button>
+          <button id="opt-bg" class="opt-btn" type="button">Установить фон</button>
+          <input id="opt-bg-file" type="file" accept="image/*" hidden>
+        </div>
+        <!-- Режим (стиль чата) — не в конфиге плагина, это класс body -->
+        <label class="opt"><span>Стиль чата (режим)</span>
+          <select data-mode data-default="ripplestyle">
+            <option value="flatchat">Плоский (flat)</option>
+            <option value="bubblechat">Пузыри (bubbles)</option>
+            <option value="documentstyle">Документ</option>
+            <option value="echostyle">Эхо</option>
+            <option value="whisperstyle">Шёпот</option>
+            <option value="ripplestyle" selected>Рябь (ripple)</option>
+          </select>
+        </label>
+        <label class="opt"><span>Ширина чата</span><input type="range" min="40" max="100" value="100" data-var="--rlm-sheld-width" data-unit="%" data-default="100"></label>
+        <!-- Все реальные опции плагина генерируются сюда из moonlit-settings.js -->
+        <div id="opt-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Стартовое меню: слева пресеты (верхний = дефолт) + ☰/💾, справа карточки персонажей
+       (аватар · дескрипшен · чаты). Открывается при старте приложения и по кнопке ☰. -->
+  <div id="start-menu" class="hidden">
+    <aside class="sm-side">
+      <div class="sm-side-tools">
+        <button id="sm-close" class="sm-tool" title="К холсту (закрыть меню)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/></svg>
+        </button>
+        <button id="sm-net" class="sm-tool" title="Доступ по сети: открыть RLM с телефона в локальной сети">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18"/></svg>
+        </button>
+      </div>
+      <div class="sm-side-hd">Пресеты</div>
+      <div id="sm-presets" class="sm-presets"></div>
+      <button id="sm-add-preset" class="sm-add-preset" title="Создать новый пресет (имя спросим при первом сохранении)">＋ новый пресет</button>
+    </aside>
+    <main class="sm-main">
+      <!-- Верхние вкладки: Персонажи · Лорбуки (ворлд-буки) · Каталог сайтов -->
+      <div class="sm-tabs">
+        <button class="sm-tab" data-tab="chars" title="Карточки персонажей">Персонажи</button>
+        <button class="sm-tab" data-tab="books" title="Ворлд-буки — World Info на постоянке">Лорбуки</button>
+        <button class="sm-tab" data-tab="browse" title="Скачать карточки с chub.ai / Character Tavern">🌐 Каталог сайтов</button>
+        <button id="sm-help" class="sm-restart" title="Справка: как всё устроено (F1)">❓ Справка</button>
+        <button id="sm-restart" class="sm-restart" title="Перезапустить приложение — подхватить обновления">⟳ Перезапуск</button>
+      </div>
+      <!-- Экран 1: сетка карточек-аватаров -->
+      <div id="sm-grid-view" class="sm-view">
+        <div class="sm-main-hd">
+          <div class="sm-hd-left">
+            <!-- ⋮ Пресеты — на телефоне (сайдбар пресетов скрыт): выбрать активный пресет для новых чатов -->
+            <div class="sm-presets-wrap">
+              <button id="sm-presets-btn" class="sm-cat-btn sm-presets-btn" title="Пресеты — выбрать активный для новых чатов">⋮ Пресеты</button>
+              <div id="sm-presets-menu" class="sm-presets-menu hidden"></div>
+            </div>
+          </div>
+          <div class="sm-ava-size">
+            <span class="sm-ava-size-lbl">Размер аватаров</span>
+            <button id="sm-ava-minus" class="sm-size-btn" title="Мельче">−</button>
+            <button id="sm-ava-plus" class="sm-size-btn" title="Крупнее">＋</button>
+          </div>
+        </div>
+        <div id="sm-cards" class="sm-cards sm-scroll"></div>
+      </div>
+      <!-- Экран «Лорбуки»: сетка ворлд-буков (рендерится из JS) -->
+      <div id="sm-books-view" class="sm-view hidden"></div>
+      <!-- Экран 2: меню персонажа (аватар + чаты + описание) — рендерится из JS -->
+      <div id="sm-char-view" class="sm-view hidden"></div>
+      <!-- Экран 3: каталог сайтов (chub.ai / Character Tavern) — рендерится из JS -->
+      <div id="sm-browse-view" class="sm-view hidden"></div>
+    </main>
+    <input id="sm-card-file" type="file" accept=".json,.png,image/png,application/json" hidden>
+    <input id="sm-wb-cover-file" type="file" accept="image/*" hidden>
+  </div>
+
+  <!-- Панель «Доступ по сети»: какие устройства могут открыть RLM с телефона (whitelist сервера) -->
+  <div id="net-panel" class="net-panel hidden">
+    <div class="net-box">
+      <div class="net-head">
+        <span class="net-title">🌐 Доступ по сети</span>
+        <button id="net-close" class="net-x" title="Закрыть">✕</button>
+      </div>
+      <div class="net-body">
+        <div class="net-url-row">
+          <div class="net-lbl">Открыть с телефона (та же Wi-Fi):</div>
+          <div id="net-url" class="net-url" title="Нажми, чтобы скопировать">—</div>
+        </div>
+        <div class="net-this">
+          <span class="net-lbl">Это устройство:</span>
+          <span id="net-client" class="net-ip">—</span>
+          <button id="net-add-this" class="net-btn" style="display:none">＋ разрешить</button>
+        </div>
+        <button id="net-add-subnet" class="net-btn net-btn-wide" style="display:none">Разрешить всю сеть</button>
+        <div class="net-lbl net-list-lbl">Разрешённые устройства:</div>
+        <div id="net-list" class="net-list"></div>
+        <div class="net-add">
+          <input id="net-input" class="net-input" type="text" placeholder="IP или подсеть: 192.168.1.77 или 192.168.1.*">
+          <button id="net-add" class="net-btn">Добавить</button>
+        </div>
+        <div id="net-note" class="net-note"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="moonlit/moonlit-settings.js"></script>
+  <script src="renderer.js"></script>
+
+  <!-- Справка: руководство приложения (app/help/app-guide.md) — оверлей поверх всего, F1 -->
+  <div id="help-fs">
+    <div class="help-top">
+      <button id="help-close" class="im-exit" title="Закрыть (Esc)">← назад</button>
+      <span class="help-title">Справка RLM</span>
+      <input id="help-search" class="field help-search" type="text" placeholder="поиск по справке…" spellcheck="false">
+    </div>
+    <div class="help-body">
+      <nav id="help-toc" class="help-toc"></nav>
+      <article id="help-doc" class="help-doc"></article>
+    </div>
+  </div>
+</body>
+</html>

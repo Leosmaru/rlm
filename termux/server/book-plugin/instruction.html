@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Инструкция — установка плагина</title>
+<style>
+  :root{
+    --bg:#1b1b1d; --card:#232326; --border:#3c3c42;
+    --text:#e0e0e2; --muted:#a8a8b0; --accent:#7096b8; --code:#d7ba7d;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:'Segoe UI',system-ui,sans-serif;line-height:1.55;
+    padding:28px 18px;max-width:760px;margin:0 auto;}
+  h1{font-size:22px;margin:0 0 6px;}
+  h2{font-size:16px;margin:24px 0 8px;color:var(--accent);}
+  p,li{color:var(--text);}
+  small,.muted{color:var(--muted);}
+  code{background:#111;color:var(--code);padding:1px 6px;border-radius:4px;
+    font-family:'Consolas',monospace;font-size:13px;}
+  pre{background:#111;border:1px solid var(--border);border-radius:8px;
+    padding:12px 14px;overflow:auto;}
+  pre code{background:none;padding:0;color:#cfe3f5;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:10px;
+    padding:14px 16px;margin:14px 0;}
+  ol{padding-left:20px;} li{margin:6px 0;}
+  .warn{border-left:3px solid #f0a000;padding-left:12px;color:#f4d58a;}
+  .q{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;
+    border-radius:50%;background:var(--accent);color:#fff;font-size:11px;font-weight:700;
+    cursor:help;margin-left:4px;vertical-align:middle;}
+</style>
+</head>
+<body>
+  <h1>📕 Установка плагина «умная память»</h1>
+  <p class="muted">Ставится по ссылке из GitHub прямо в SillyTavern. Серверную часть — один раз включить (ниже).</p>
+
+  <h2>🧠 Умная память (Дневник души) — как модель это «вспоминает»</h2>
+  <div class="card">
+    <p>Кнопка <b>🧠</b> у палочки. Память — <b>4 дока на каждый чат</b>, листаются ◄►. Разница — <b>как каждый попадает в контекст модели</b>:</p>
+    <ul>
+      <li><b>📔 Дневник</b> <span class="q" title="В контекст идут ПОСЛЕДНИЕ N записей по времени (по порядку файлов-дат и дописывания), а не по смыслу — как в Soul of Waifu. Модель НЕ сравнивает даты, свежие ей уже отобрал код.">?</span> — чувства персонажа → в промт <b>последние по времени</b>.</li>
+      <li><b>🧠 Эмоции · ❤️ Отношения</b> <span class="q" title="Перезаписываются целиком при каждом обновлении (прошлая версия идёт на вход). В контекст всегда идёт ТЕКУЩАЯ версия — выбирать не из чего, версия одна.">?</span> — текущее состояние → в промт <b>всегда целиком</b>.</li>
+      <li><b>📚 Факты/темы</b> <span class="q" title="1 файл на субъект (сундук, место, NPC). Из ВСЕХ тем эмбеддер выбирает 3 самые близкие по смыслу к твоей последней реплике и вставляет их. Пример: тем 10 — в контекст уйдут 3.">?</span> — факты о мире → в промт <b>3 самые близкие по смыслу</b> («из трёх в контексте»).</li>
+    </ul>
+    <p class="muted">Итог: дневник — по времени, эмоции/отношения — всегда, факты — 3 по смыслу. «Что правда сейчас» решает не модель, а <b>запись</b>: Archivist перезаписывает тему на новую правду, поэтому нет каши «украли/вернули».</p>
+  </div>
+
+  <h2>Установка серверной части (умная память)</h2>
+  <div class="card">
+    <p><b>Проще всего:</b> 🧠 → <b>⚙ Настройки</b> → секция «Установка сервера» → <b>📋 Копировать команду</b>. Вставь в Termux (или ПК-терминал) и запусти:</p>
+    <pre><code>mkdir -p ~/SillyTavern/plugins/soul-md &amp;&amp; curl -o ~/SillyTavern/plugins/soul-md/index.js https://raw.githubusercontent.com/Leosmaru/SillyTavern-MachineMechanic/main/soul-md-server.js &amp;&amp; sed -i 's/enableServerPlugins: false/enableServerPlugins: true/' ~/SillyTavern/config.yaml</code></pre>
+    <p>Потом <b>полностью перезапусти сервер</b> <span class="q" title="Серверный плагин грузится только при старте сервера. Update расширения ставит только фронт (кнопку 🧠), сервер — нет. Поэтому нужен этот шаг + рестарт.">?</span> (в Termux: <code>pkill node</code> → снова запусти).</p>
+    <p class="warn">Без этого кнопка 🧠 будет, но записи не сохранятся («сервер не сохранил»).</p>
+    <p class="muted"><b>На ПК проще — без консоли:</b> положи <code>soul-md-server.js</code> как <code>plugins\soul-md\index.js</code> через проводник, в <code>config.yaml</code> поставь <code>enableServerPlugins: true</code> (блокнотом), перезапусти. Команда выше — для телефона (Termux), где проводника нет.</p>
+  </div>
+
+  <h2>Установка расширения — проще всего по ссылке (GitHub)</h2>
+  <div class="card">
+    <ol>
+      <li>SillyTavern → <b>Extensions</b> (кубики) → <b>Install extension</b>.</li>
+      <li>Вставь URL репозитория:
+        <pre><code>https://github.com/Leosmaru/SillyTavern-MachineMechanic</code></pre>
+      </li>
+      <li><b>Install</b> → <b>F5</b>. Весь фронт (кнопка 🧠, вьюер, настройки) уже работает.</li>
+    </ol>
+    <p class="muted">Обновлять потом — кнопкой <b>Update</b> у расширения. Заодно приезжает файл <code>soul-md-server.js</code> (он в репо) — для серверной части.</p>
+    <p class="warn">Install по ссылке ставит <b>только фронт</b>. Серверную часть (умную память) включаешь один раз — см. раздел «Установка серверной части» <span class="q" title="SillyTavern ставит по ссылке только расширения, серверные плагины — нет. Поэтому серверный шаг всегда отдельно (curl на телефоне / проводник на ПК) + рестарт.">?</span> выше.</p>
+  </div>
+
+  <h2>После установки / обновления</h2>
+  <p>Менял <b>фронт</b> → <b>F5</b>. Менял <b>серверную часть</b> → <b>перезапуск сервера</b> (Termux: <code>pkill node</code> → старт).</p>
+
+  <hr style="border-color:var(--border);margin:24px 0" />
+  <p class="muted">Репозиторий: <a href="https://github.com/Leosmaru/SillyTavern-MachineMechanic" style="color:var(--accent)">github.com/Leosmaru/SillyTavern-MachineMechanic</a></p>
+</body>
+</html>

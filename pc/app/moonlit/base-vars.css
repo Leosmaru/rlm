@@ -1,0 +1,55 @@
+/* base-vars.css — переменные темы Cappuccino, вытащенные из живых настроек SillyTavern.
+   Грузится ПОСЛЕ st-style/moonlit, чтобы задать реальные значения темы пользователя. */
+:root {
+  --SmartThemeBodyColor: rgba(235, 235, 235, 1);
+  --SmartThemeEmColor: rgba(230, 210, 190, 1);
+  --SmartThemeUnderlineColor: rgba(205, 180, 160, 1);
+  --SmartThemeQuoteColor: rgba(165, 140, 115, 1);
+  --SmartThemeBlurTintColor: rgba(34, 30, 32, 0.95);
+  --SmartThemeChatTintColor: rgba(50, 45, 50, 0.75);
+  --SmartThemeUserMesBlurTintColor: rgba(34, 30, 32, 0.75);
+  --SmartThemeBotMesBlurTintColor: rgba(34, 30, 32, 0.75);
+  --SmartThemeShadowColor: rgba(0, 0, 0, 0.3);
+  --SmartThemeBorderColor: rgba(80, 80, 80, 0.89);
+  --SmartThemeBlurStrength: 3px;
+  --SmartThemeShadowWidth: 1;
+  --mainFontSize: 15px;
+  --mainFontFamily: "Noto Sans", system-ui, sans-serif;
+  --fontFamily: "Noto Sans", system-ui, sans-serif;
+  --avatar-base-width: 50px;
+  --avatar-base-border-radius: 2px;
+  --custom-ChatAvatar: 40px;
+  --customThemeColor: rgba(81, 160, 222, 1);
+  --customThemeColor2: rgba(250, 198, 121, 1);
+  --customMesPadding: 1em;
+  --customRippleAvatarWidth: 180px;
+  --customRippleAvatarRatio: 1.5;
+  --customRippleAvatarMobileWidth: 120px;
+  --big-avatar-width-factor: 1.2;
+  --big-avatar-height-factor: 1.8;
+  --sheldWidth: 100%;
+  --topBarIconSize: 30px;
+  --topBarBlockPadding: 5px;
+  --customBgColor1: rgba(255, 255, 255, 0.1);
+  --customBgColor2: rgba(255, 255, 255, 0.05);
+  --custom-EchoAvatarWidth: 25%;
+  --custom-EchoAvatarMobileWidth: 40%;
+  --sheldBlurStrength: 5;
+  --customCSS-bg-blur: 3;
+  --customCSS-bg-opacity: 1;
+}
+
+/* Заставляем окно чата #sheld заполнить iframe (в ST это делает JS/movingUI) */
+html, body { height: 100%; margin: 0; background: transparent !important; }
+#sheld {
+  position: static !important; inset: auto !important; transform: none !important;
+  width: var(--rlm-sheld-width, 100%) !important; max-width: 100% !important; margin: 0 auto !important;
+  height: 100% !important; max-height: 100% !important;
+  left: 0 !important; top: 0 !important; display: flex !important; flex-direction: column !important;
+}
+#chat { flex: 1 !important; overflow-y: auto !important; }
+/* Слой фоновой картинки (его блюрит опция «Блюр фоновой картинки» через Moonlit) */
+#bg1 {
+  position: fixed !important; inset: 0 !important; z-index: -1 !important;
+  background-size: cover !important; background-position: center !important; background-repeat: no-repeat !important;
+}
