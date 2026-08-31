@@ -26,4 +26,7 @@ IP=$(ifconfig 2>/dev/null | awk '/inet /{print $2}' | grep -v 127.0.0.1 | head -
 echo "   холст:      http://127.0.0.1:8100/rlm/"
 [ -n "$IP" ] && echo "   с ПК/сети:  http://$IP:8100/rlm/"
 echo
+# браузер откроется сам через несколько секунд (если termux-api установлен)
+( sleep 6; command -v termux-open-url >/dev/null 2>&1 && termux-open-url "http://127.0.0.1:8100/rlm/" ) &
+
 cd server && exec node server.js
