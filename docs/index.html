@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RLM — Roleplay Machine</title>
+<style>
+  :root { --bg:#14100f; --panel:#1b1614; --line:#2a2320; --text:#e8e0da; --muted:#8b8a86; --accent:#e5544a; --mono: ui-monospace, "JetBrains Mono", Consolas, monospace; }
+  * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--text); font:15px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  .wrap { max-width:940px; margin:0 auto; padding:48px 20px 80px; }
+  h1 { font-size:44px; letter-spacing:6px; margin:0 0 6px; color:var(--accent); }
+  .sub { color:var(--muted); margin:0 0 34px; font-size:17px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; margin:28px 0 34px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:6px; padding:20px; }
+  .card h2 { margin:0 0 6px; font-size:19px; } .card p { margin:0 0 16px; color:var(--muted); font-size:14px; }
+  .btn { display:inline-block; padding:11px 18px; border-radius:5px; background:var(--accent); color:#14100f; font-weight:700; text-decoration:none; }
+  .btn.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  pre { background:#0f0c0b; border:1px solid var(--line); border-radius:5px; padding:14px 16px; overflow-x:auto; font-family:var(--mono); font-size:13px; }
+  h3 { margin:34px 0 10px; font-size:15px; letter-spacing:2px; text-transform:uppercase; color:var(--muted); }
+  ul { padding-left:20px; color:var(--muted); } li { margin:4px 0; } li b { color:var(--text); }
+  footer { margin-top:50px; padding-top:18px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
+  a { color:var(--accent); }
+</style></head><body><div class="wrap">
+
+<h1>RLM</h1>
+<p class="sub">Roleplay Machine — узловой клиент для ролеплея с ИИ. Память, Хроника, Критик, честный кубик и сетевая игра на несколько живых игроков.</p>
+
+<div class="cards">
+  <div class="card">
+    <h2>Скачать для ПК</h2>
+    <p>Windows. Полный набор, включая озвучку.</p>
+    <a class="btn" href="https://github.com/Leosmaru/rlm/archive/refs/heads/main.zip">Скачать ZIP</a>
+  </div>
+  <div class="card">
+    <h2>Termux (телефон)</h2>
+    <p>Всё то же, кроме голоса. Запуск командой <code>rlm</code>.</p>
+    <a class="btn ghost" href="https://github.com/Leosmaru/rlm/tree/main/termux">Инструкция</a>
+  </div>
+</div>
+
+<h3>ПК — установка</h3>
+<pre>git clone https://github.com/Leosmaru/rlm
+cd rlm/pc/server &amp;&amp; npm install --omit=dev</pre>
+<p class="sub">Запуск — <b>Запустить RLM.bat</b> в папке <code>pc</code>. Холст откроется на <code>http://127.0.0.1:8100/rlm/</code></p>
+
+<h3>Termux — установка</h3>
+<pre>pkg install -y git nodejs-lts
+git clone --depth 1 https://github.com/Leosmaru/rlm
+cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
+<p class="sub">Дальше — одна команда: <code>rlm</code></p>
+
+<h3>Что внутри</h3>
+<ul>
+  <li><b>Узловой холст</b> — карточка, промт, лорбуки, API и опции собираются проводами, видно, что уходит модели.</li>
+  <li><b>Душа</b> — ИИ ведёт память в документах: дневник, состояние сцены, факты мира, психология, темы.</li>
+  <li><b>Хроника</b> — сцены сжимаются в главы лорбука и сворачиваются в арки и эпосы.</li>
+  <li><b>Критик</b> — заворачивает подлиз, безволие, игру за игрока, разрывы логики и читы.</li>
+  <li><b>Рандомайзер</b> — честный кубик: исход брошен до сцены, модель не может его подменить.</li>
+  <li><b>Сетевая игра</b> — партия на несколько живых игроков через Telegram-бота, у каждого своя персона, память и состояние.</li>
+</ul>
+
+<footer>
+  Исходники: <a href="https://github.com/Leosmaru/rlm">github.com/Leosmaru/rlm</a> · основа — движок SillyTavern (AGPL-3.0)
+</footer>
+</div></body></html>
