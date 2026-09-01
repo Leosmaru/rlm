@@ -340,10 +340,12 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   a.volume = 0.35;
   v.volume = 0.9;   // голос звучит один раз, параллельно с музыкой
   document.body.classList.add('gated');
+  const KEY = 'rlm-entered';
   let started = false;
   const enter = () => {
     if (started) return;
     started = true;
+    try { localStorage.setItem(KEY, '1'); } catch (_) {}
     a.play().catch(() => {});
     v.currentTime = 0;
     v.play().catch(() => {});
@@ -354,6 +356,12 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   };
   play.addEventListener('click', enter);
   gate.addEventListener('pointerdown', enter);   // жест в любом месте входного экрана
-  // никакого автостарта: и музыка, и голос ждут нажатия ▶
+  // Первый заход — только по кнопке. Если человек уже входил и браузер даёт этому домену
+  // звук без жеста, вход пропускается: сайт открывается сразу с музыкой.
+  let was = false;
+  try { was = localStorage.getItem(KEY) === '1'; } catch (_) {}
+  if (was) {
+    a.play().then(() => { if (!a.paused) enter(); }).catch(() => {});
+  }
 </script>
 </body></html>
