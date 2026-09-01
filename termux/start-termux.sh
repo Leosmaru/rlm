@@ -18,6 +18,10 @@ echo "   R o l e p l a y   M a c h i n e   ·   termux"
 printf "%s\n" "$W"
 
 cd "$(dirname "$0")" || exit 1
+if ! command -v node >/dev/null 2>&1; then
+  echo "   нет node. Поставь: pkg install -y nodejs, затем запусти установку: bash install-termux.sh"
+  exit 1
+fi
 if [ ! -d server/node_modules ]; then
   echo "   ставлю зависимости (один раз, это долго)…"
   (cd server && npm install --omit=dev) || { echo "   не удалось поставить зависимости"; exit 1; }
