@@ -241,7 +241,7 @@
       </ul>
       <a class="btn" href="https://github.com/Leosmaru/rlm">Исходники</a>
     </div>
-    <div class="pic"><img src="media/shot.webp?v=20260901-145654" alt="Холст RLM"></div>
+    <div class="pic"><img src="media/shot.webp?v=20260901-150007" alt="Холст RLM"></div>
   </div>
 </section>
 
@@ -373,8 +373,8 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   <span id="ver" style="opacity:.45;font-size:11px;letter-spacing:1px"></span>
 </footer>
 
-<audio id="bg" src="media/theme.wav?v=20260901-145654" loop preload="auto"></audio>
-<audio id="voice" src="media/voice.wav?v=20260901-145654" preload="auto"></audio>
+<audio id="bg" src="media/theme.wav?v=20260901-150007" loop preload="auto"></audio>
+<audio id="voice" src="media/voice.wav?v=20260901-150007" preload="auto"></audio>
 <script>
   // Входной экран: единственный клик по ▶ открывает сайт и включает трек — жест получен,
   // поэтому звук стартует сразу и больше не прерывается.
@@ -461,13 +461,17 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   let was = false;
   try { was = localStorage.getItem(KEY) === '1'; } catch (_) {}
   if (was) {
-    a.play().then(() => { if (!a.paused) enter(); }).catch(() => {});
+    // вход пропускаем ТОЛЬКО если звук реально пошёл; иначе кнопка остаётся на месте
+    a.play().then(() => setTimeout(() => {
+      if (!a.paused && a.currentTime > 0.05) enter();
+      else { try { a.pause(); a.currentTime = 0; } catch (_) {} }
+    }, 350)).catch(() => {});
   }
 </script>
 <script>
   // Свежесть страницы: если на сервере лежит версия новее той, с которой открыт этот файл,
   // страница сама перезагружается по уникальной ссылке — кэш браузера не мешает.
-  const SITE_VER = '20260901-145654';
+  const SITE_VER = '20260901-150007';
   const hint = document.getElementById('scroll-hint');
   if (hint) {
     const hide = () => { if (scrollY > 40) hint.classList.add('gone'); else hint.classList.remove('gone'); };
