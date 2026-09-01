@@ -5,3 +5,13 @@ server/data/rlm-store/rlm.chats.*.json
 server/data/rlm-store/rlm.telegram.json
 server/plugins/soul-md/data/
 *.log
+
+# следы локального запуска сервера
+server/data/_storage/
+server/data/_webpack/
+server/data/default-user/
+server/data/cookie-secret.txt
+*/server/data/_storage/
+*/server/data/_webpack/
+*/server/data/default-user/
+*/server/data/cookie-secret.txt
