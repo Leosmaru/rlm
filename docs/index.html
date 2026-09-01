@@ -110,6 +110,7 @@
     max-width:1600px;margin:0 auto;padding:clamp(48px,5vw,80px) 0 clamp(48px,5vw,80px) clamp(20px,3vw,44px)}
   .fuse .txt{padding:0 0 0 clamp(4px,1vw,16px)}
   .fuse h2{text-align:left;margin-bottom:6px}
+  .fuse .sub2{margin:0;color:var(--muted);font-size:13px;letter-spacing:2px;text-transform:uppercase}
   .fuse ul{list-style:none;padding:0;margin:22px 0 28px}
   .fuse li{margin:9px 0;font-size:14px;color:var(--text);padding-left:18px;position:relative}
   .fuse li::before{content:"·";position:absolute;left:4px;color:var(--accent)}
@@ -173,7 +174,7 @@
   <div class="in">
     <h1>RLM</h1>
     <div class="sub">Roleplay Machine</div>
-    <p>Узловой клиент для ролеплея с ИИ. Память, которую ведёт сама модель, хроника сцен, критик ответа, кубик и сетевая игра в Telegram. Основа — движок SillyTavern.</p>
+    <p>Узловой клиент для ролеплея с ИИ.<br>Выжимает максимум из каждой модели, создавая более глубокий опыт ролеплея.</p>
     <div class="row">
       <a class="btn acc" href="https://github.com/Leosmaru/rlm/archive/refs/heads/main.zip">Скачать</a>
       <a class="btn" href="#install">Установка</a>
@@ -205,15 +206,19 @@
 <section class="fuse" id="why">
   <div class="row2">
     <div class="txt">
-      <h2>Что <em>внутри</em></h2>
+      <h2>Автоматические <em>системы</em></h2>
+      <p class="sub2">работают без вашего ведома</p>
       <ul>
-        <li>Память живёт в документах, а не в контексте</li>
-        <li>Консоль запросов: что ушло, сколько токенов, что вернулось</li>
-        <li>Свой лимит контекста и температура у каждой подсистемы</li>
-        <li>Сетевая игра в Telegram: у каждого игрока своя персона, память и состояние</li>
-        <li>Ветвление партии от любого сообщения</li>
-        <li>Каталог карточек: chub.ai, Character Tavern, RisuRealm</li>
-        <li>Работает на ПК и на телефоне в Termux</li>
+        <li>Умная память — держит историю свыше 8 тысяч сообщений</li>
+        <li>Авто-создание NPC и приглашение любой карточки в чат: гость вписывается в контекст по короткому промту</li>
+        <li>Самокритика перед ответом — убирает мягкость модели, проверяет верность личности и поступков, следит за логикой мира и не даёт топтаться на месте</li>
+        <li>Душа — оперативная память: сама следит за психической динамикой и восприятием. Никто больше не простит просто так</li>
+        <li>Цель — вдыхает жизнь в сюжет и держит его этапы</li>
+        <li>Программный DRY — никаких заезженных фраз и повторяющихся словосочетаний</li>
+        <li>Всё это в пределах 32k контекста: распределитель следит, чтобы уместилось самое важное</li>
+        <li>Генератор событий</li>
+        <li>Система метрик — напряжение, доверие и прочее, свои задаются вручную</li>
+        <li>Настоящий бросок на успех или провал для боевых сцен и важных событий</li>
       </ul>
       <a class="btn" href="https://github.com/Leosmaru/rlm">Исходники</a>
     </div>
@@ -349,8 +354,8 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   <span id="ver" style="opacity:.45;font-size:11px;letter-spacing:1px"></span>
 </footer>
 
-<audio id="bg" src="media/theme.wav?v=20260901-133844" loop preload="auto"></audio>
-<audio id="voice" src="media/voice.wav?v=20260901-133844" preload="auto"></audio>
+<audio id="bg" src="media/theme.wav?v=20260901-142019" loop preload="auto"></audio>
+<audio id="voice" src="media/voice.wav?v=20260901-142019" preload="auto"></audio>
 <script>
   // Входной экран: единственный клик по ▶ открывает сайт и включает трек — жест получен,
   // поэтому звук стартует сразу и больше не прерывается.
@@ -443,7 +448,7 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
 <script>
   // Свежесть страницы: если на сервере лежит версия новее той, с которой открыт этот файл,
   // страница сама перезагружается по уникальной ссылке — кэш браузера не мешает.
-  const SITE_VER = '20260901-133844';
+  const SITE_VER = '20260901-142019';
   const verBox = document.getElementById('ver');
   if (verBox) verBox.textContent = 'сборка ' + SITE_VER;
   const checkVer = () => fetch('version.txt?ts=' + Date.now(), { cache: 'no-store' })
