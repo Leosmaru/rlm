@@ -112,6 +112,7 @@
   .fuse h2{text-align:left;margin-bottom:6px}
   .fuse .sub2{margin:0;color:var(--muted);font-size:13px;letter-spacing:2px;text-transform:uppercase}
   .fuse ul{list-style:none;padding:0;margin:22px 0 28px}
+  .fuse .row2{grid-template-columns:minmax(300px,52%) 1fr}
   .fuse li{margin:13px 0;font-size:14px;line-height:1.65;color:var(--muted);padding-left:20px;position:relative}
   .fuse li b{color:var(--text);font-weight:700;letter-spacing:.5px}
   .fuse li::before{content:"■";font-size:8px;position:absolute;left:2px;top:6px;color:var(--accent)}
@@ -220,6 +221,14 @@
         <li><b>Генератор событий</b> — мир двигается сам, а не ждёт игрока</li>
         <li><b>Метрики</b> — напряжение, доверие и что угодно ещё — свои задаются вручную</li>
         <li><b>Броски</b> — настоящий успех или провал в боевых сценах и важных решениях</li>
+        <li><b>Мультиплеер</b> — совместная игра по одной карточке за нескольких персонажей с друзьями — через Telegram</li>
+        <li><b>Хроника</b> — сцены сжимаются в главы, главы — в арки и эпосы, история не теряется</li>
+        <li><b>Лорбуки мира</b> — записи всплывают по смыслу сказанного, а не только по точным словам</li>
+        <li><b>Ветвление</b> — от любого сообщения — своя ветка партии</li>
+        <li><b>Каталог карточек</b> — chub.ai, Character Tavern и RisuRealm прямо в приложении</li>
+        <li><b>Перевод</b> — играешь на своём языке, модель работает на своём</li>
+        <li><b>Озвучка</b> — голос для реплик с плеером под сообщением</li>
+        <li><b>Телефон</b> — то же самое работает в Termux, без ПК</li>
       </ul>
       <a class="btn" href="https://github.com/Leosmaru/rlm">Исходники</a>
     </div>
@@ -355,8 +364,8 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   <span id="ver" style="opacity:.45;font-size:11px;letter-spacing:1px"></span>
 </footer>
 
-<audio id="bg" src="media/theme.wav?v=20260901-142141" loop preload="auto"></audio>
-<audio id="voice" src="media/voice.wav?v=20260901-142141" preload="auto"></audio>
+<audio id="bg" src="media/theme.wav?v=20260901-142250" loop preload="auto"></audio>
+<audio id="voice" src="media/voice.wav?v=20260901-142250" preload="auto"></audio>
 <script>
   // Входной экран: единственный клик по ▶ открывает сайт и включает трек — жест получен,
   // поэтому звук стартует сразу и больше не прерывается.
@@ -449,7 +458,7 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
 <script>
   // Свежесть страницы: если на сервере лежит версия новее той, с которой открыт этот файл,
   // страница сама перезагружается по уникальной ссылке — кэш браузера не мешает.
-  const SITE_VER = '20260901-142141';
+  const SITE_VER = '20260901-142250';
   const verBox = document.getElementById('ver');
   if (verBox) verBox.textContent = 'сборка ' + SITE_VER;
   const checkVer = () => fetch('version.txt?ts=' + Date.now(), { cache: 'no-store' })
