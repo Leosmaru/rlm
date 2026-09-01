@@ -380,10 +380,13 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
 <script>
   // Свежесть страницы: если на сервере лежит версия новее той, с которой открыт этот файл,
   // страница сама перезагружается по уникальной ссылке — кэш браузера не мешает.
-  const SITE_VER = '20260901-124658';
-  fetch('version.txt?ts=' + Date.now(), { cache: 'no-store' })
+  const SITE_VER = '20260901-124912';
+  const checkVer = () => fetch('version.txt?ts=' + Date.now(), { cache: 'no-store' })
     .then((r) => r.ok ? r.text() : '')
     .then((t) => { t = (t || '').trim(); if (t && t !== SITE_VER) location.replace(location.pathname + '?v=' + t); })
     .catch(() => {});
+  checkVer();                                   // при открытии
+  setInterval(checkVer, 60000);                 // и дальше раз в минуту — открытая вкладка тоже обновится
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkVer(); });
 </script>
 </body></html>
