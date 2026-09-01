@@ -1,0 +1,142 @@
+[
+  {
+    "kind": "node-char",
+    "label": "Персонаж",
+    "file": "char.png",
+    "w": 544,
+    "h": 1200
+  },
+  {
+    "kind": "node-sys",
+    "label": "Правила игры",
+    "file": "sys.png",
+    "w": 304,
+    "h": 391
+  },
+  {
+    "kind": "node-prompt",
+    "label": "Промт комплитер",
+    "file": "prompt.png",
+    "w": 324,
+    "h": 1200
+  },
+  {
+    "kind": "node-embedder",
+    "label": "Эмбеддер",
+    "file": "embedder.png",
+    "w": 264,
+    "h": 146
+  },
+  {
+    "kind": "node-lore",
+    "label": "Лорбук · World Info",
+    "file": "lore.png",
+    "w": 564,
+    "h": 483
+  },
+  {
+    "kind": "node-api",
+    "label": "Комплитер · API",
+    "file": "api.png",
+    "w": 274,
+    "h": 473
+  },
+  {
+    "kind": "node-opts",
+    "label": "Опции · Комплитер",
+    "file": "opts.png",
+    "w": 324,
+    "h": 472
+  },
+  {
+    "kind": "node-telegram",
+    "label": "Телеграм сетевая игра",
+    "file": "telegram.png",
+    "w": 1084,
+    "h": 808
+  },
+  {
+    "kind": "node-chronicle",
+    "label": "Хроника",
+    "file": "chronicle.png",
+    "w": 324,
+    "h": 810
+  },
+  {
+    "kind": "node-tts",
+    "label": "Озвучка",
+    "file": "tts.png",
+    "w": 346,
+    "h": 1200
+  },
+  {
+    "kind": "node-translator",
+    "label": "Транслитер",
+    "file": "translator.png",
+    "w": 326,
+    "h": 537
+  },
+  {
+    "kind": "node-critic",
+    "label": "Критик",
+    "file": "critic.png",
+    "w": 404,
+    "h": 1155
+  },
+  {
+    "kind": "node-soul",
+    "label": "Душа",
+    "file": "soul.png",
+    "w": 1224,
+    "h": 953
+  },
+  {
+    "kind": "node-persona",
+    "label": "Deni",
+    "file": "persona.png",
+    "w": 274,
+    "h": 368
+  },
+  {
+    "kind": "node-state",
+    "label": "Состояние",
+    "file": "state.png",
+    "w": 344,
+    "h": 732
+  },
+  {
+    "kind": "node-objective",
+    "label": "Цель",
+    "file": "objective.png",
+    "w": 354,
+    "h": 952
+  },
+  {
+    "kind": "node-note",
+    "label": "Заметка автора",
+    "file": "note.png",
+    "w": 324,
+    "h": 337
+  },
+  {
+    "kind": "node-random",
+    "label": "Рандомайзер",
+    "file": "random.png",
+    "w": 344,
+    "h": 505
+  },
+  {
+    "kind": "node-chat",
+    "label": "Чат",
+    "file": "chat.png",
+    "w": 824,
+    "h": 629
+  },
+  {
+    "kind": "node-dry",
+    "label": "Программный DRY",
+    "file": "dry.png",
+    "w": 354,
+    "h": 1200
+  }
+]

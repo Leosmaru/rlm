@@ -102,6 +102,19 @@
   .fuse .pic{display:flex;justify-content:flex-end;align-items:center}
   .fuse .pic img{width:100%;height:auto;display:block;border:1px solid var(--line);border-right:0;border-radius:2px 0 0 2px}
 
+  .ngrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:20px}
+  .ncard{margin:0;background:var(--panel);border:1px solid var(--line);border-radius:2px;overflow:hidden;
+    display:flex;flex-direction:column;position:relative}
+  .ncard::before,.ncard::after{content:"";position:absolute;width:9px;height:9px;border:0 solid var(--corner);z-index:2}
+  .ncard::before{top:-1px;left:-1px;border-top-width:1px;border-left-width:1px}
+  .ncard::after{bottom:-1px;right:-1px;border-bottom-width:1px;border-right-width:1px}
+  .ncard:hover{border-color:var(--corner)}
+  .nshot{display:block;height:220px;overflow:hidden;background:var(--inset);border-bottom:1px solid var(--line)}
+  .nshot img{width:100%;display:block;object-fit:cover;object-position:top center;height:100%}
+  .ncard figcaption{padding:16px 16px 20px}
+  .ncard h3{margin:0 0 6px;font-size:13px;letter-spacing:2px;text-transform:uppercase;font-weight:400;color:var(--text)}
+  .ncard p{margin:0;font-size:13px;color:var(--muted)}
+
   .author .wrap{max-width:760px}
   .author p{margin:0;text-align:center;color:var(--muted);font-size:15px;line-height:1.9}
 
@@ -136,7 +149,7 @@
 
 <header>
   <nav>
-    <a href="#what">Что это</a><a href="#why">Возможности</a><a href="#install">Установка</a>
+    <a href="#what">Что это</a><a href="#why">Возможности</a><a href="#nodes">Ноды</a><a href="#install">Установка</a>
     <a href="https://github.com/Leosmaru/rlm">GitHub</a>
   </nav>
 </header>
@@ -187,6 +200,95 @@
       <a class="btn" href="https://github.com/Leosmaru/rlm">Исходники</a>
     </div>
     <div class="pic"><img src="media/shot.webp" alt="Холст RLM"></div>
+  </div>
+</section>
+
+<section id="nodes">
+  <div class="wrap">
+    <h2>Ноды <em>по одной</em></h2>
+    <p class="lead">Каждая нода — отдельный кусок игры. Клик по картинке открывает её целиком.</p>
+    <div class="ngrid">
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/chat.png" target="_blank" rel="noopener"><img src="media/nodes/chat.png" alt="Чат" loading="lazy"></a>
+        <figcaption><h3>Чат</h3><p>Живой чат SillyTavern прямо в ноде: ветвление от любого сообщения, правка и удаление реплик, аватары, лента статуса, вижны других нод по гаечному ключу.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/char.png" target="_blank" rel="noopener"><img src="media/nodes/char.png" alt="Персонаж" loading="lazy"></a>
+        <figcaption><h3>Персонаж</h3><p>Карточка героя: имя, описание, первое сообщение, аватар. Всё это уходит в промт, аватар — в чат.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/persona.png" target="_blank" rel="noopener"><img src="media/nodes/persona.png" alt="Персона" loading="lazy"></a>
+        <figcaption><h3>Персона</h3><p>Кто ты в этой игре: имя и описание игрока. В сетевой партии у каждого живого игрока своя.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/sys.png" target="_blank" rel="noopener"><img src="media/nodes/sys.png" alt="Правила игры" loading="lazy"></a>
+        <figcaption><h3>Правила игры</h3><p>Системный промт: как модель ведёт партию. Тон, запреты, формат ответа.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/prompt.png" target="_blank" rel="noopener"><img src="media/nodes/prompt.png" alt="Промт-комплитер" loading="lazy"></a>
+        <figcaption><h3>Промт-комплитер</h3><p>Сборщик запроса: порядок блоков, глубины вставки, что и куда попадает перед отправкой модели.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/api.png" target="_blank" rel="noopener"><img src="media/nodes/api.png" alt="API" loading="lazy"></a>
+        <figcaption><h3>API</h3><p>Провайдер, ключ, модель, режим Chat/Text. Имя ноды = её роль: чат, критик, память, перевод.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/opts.png" target="_blank" rel="noopener"><img src="media/nodes/opts.png" alt="Опции" loading="lazy"></a>
+        <figcaption><h3>Опции</h3><p>Крутилки цепочки: лимит контекста, длина ответа, температура и сэмплеры. Их наследуют все подсистемы этой ветки.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/lore.png" target="_blank" rel="noopener"><img src="media/nodes/lore.png" alt="Лорбук" loading="lazy"></a>
+        <figcaption><h3>Лорбук</h3><p>Записи мира по ключам. Помимо слов-триггеров есть смысловой: запись всплывает, когда о ней говорят своими словами.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/soul.png" target="_blank" rel="noopener"><img src="media/nodes/soul.png" alt="Душа" loading="lazy"></a>
+        <figcaption><h3>Душа</h3><p>Память, которую модель ведёт сама: дневник, состояние сцены, факты мира, психика персонажей. Документы правятся руками.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/embedder.png" target="_blank" rel="noopener"><img src="media/nodes/embedder.png" alt="Эмбеддер" loading="lazy"></a>
+        <figcaption><h3>Эмбеддер</h3><p>Векторный поиск по памяти и лорбуку: подмешивает в промт то, что относится к текущей сцене, а не всё подряд.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/chronicle.png" target="_blank" rel="noopener"><img src="media/nodes/chronicle.png" alt="Хроника" loading="lazy"></a>
+        <figcaption><h3>Хроника</h3><p>Сцены сжимаются в главы, главы — в арки и эпосы. Свёрнутое можно убрать из контекста, оставив призраки в чате.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/critic.png" target="_blank" rel="noopener"><img src="media/nodes/critic.png" alt="Критик" loading="lazy"></a>
+        <figcaption><h3>Критик</h3><p>Проверяет ответ модели: подлиз, безволие, игра за игрока, читы. Заворачивает и просит переписать, ведёт блокнот выводов.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/random.png" target="_blank" rel="noopener"><img src="media/nodes/random.png" alt="Рандомайзер" loading="lazy"></a>
+        <figcaption><h3>Рандомайзер</h3><p>Честный кубик: исходы бросаются заранее, модель их только применяет и не может подменить результат.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/state.png" target="_blank" rel="noopener"><img src="media/nodes/state.png" alt="Состояние" loading="lazy"></a>
+        <figcaption><h3>Состояние</h3><p>Счётчики и статусы сцены: хиты, деньги, раны, что угодно. Модель обновляет их сама и видит в промте.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/objective.png" target="_blank" rel="noopener"><img src="media/nodes/objective.png" alt="Цель" loading="lazy"></a>
+        <figcaption><h3>Цель</h3><p>Задачи, к которым партия ведётся: текущая цель, шаги, отметка о выполнении.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/note.png" target="_blank" rel="noopener"><img src="media/nodes/note.png" alt="Заметка автора" loading="lazy"></a>
+        <figcaption><h3>Заметка автора</h3><p>Короткая заметка ведущего, впрыскивается прямо внутрь истории на заданную глубину и действует нужное число ходов.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/dry.png" target="_blank" rel="noopener"><img src="media/nodes/dry.png" alt="Программный DRY" loading="lazy"></a>
+        <figcaption><h3>Программный DRY</h3><p>Анти-повтор без участия модели: ловит повторы за моделью, держит банк штампов и запретных оборотов.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/translator.png" target="_blank" rel="noopener"><img src="media/nodes/translator.png" alt="Транслитер" loading="lazy"></a>
+        <figcaption><h3>Транслитер</h3><p>Перевод реплик туда и обратно: играешь на своём языке, модель работает на своём.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/tts.png" target="_blank" rel="noopener"><img src="media/nodes/tts.png" alt="Озвучка" loading="lazy"></a>
+        <figcaption><h3>Озвучка</h3><p>Голос для реплик: плеер под сообщением. Работает на ПК, в Termux не ставится.</p></figcaption>
+      </figure>
+      <figure class="ncard">
+        <a class="nshot" href="media/nodes/telegram.png" target="_blank" rel="noopener"><img src="media/nodes/telegram.png" alt="Сетевая игра" loading="lazy"></a>
+        <figcaption><h3>Сетевая игра</h3><p>Партия на несколько живых игроков через Telegram-бота: свои персоны, память, состояния и броски у каждого.</p></figcaption>
+      </figure>
+    </div>
   </div>
 </section>
 
