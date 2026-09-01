@@ -346,8 +346,8 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   Основа — движок SillyTavern (AGPL-3.0)
 </footer>
 
-<audio id="bg" src="media/theme.wav?v=20260901-130726" loop preload="auto"></audio>
-<audio id="voice" src="media/voice.wav?v=20260901-130726" preload="auto"></audio>
+<audio id="bg" src="media/theme.wav?v=20260901-130808" loop preload="auto"></audio>
+<audio id="voice" src="media/voice.wav?v=20260901-130808" preload="auto"></audio>
 <script>
   // Входной экран: единственный клик по ▶ открывает сайт и включает трек — жест получен,
   // поэтому звук стартует сразу и больше не прерывается.
@@ -440,7 +440,7 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
 <script>
   // Свежесть страницы: если на сервере лежит версия новее той, с которой открыт этот файл,
   // страница сама перезагружается по уникальной ссылке — кэш браузера не мешает.
-  const SITE_VER = '20260901-130726';
+  const SITE_VER = '20260901-130808';
   const checkVer = () => fetch('version.txt?ts=' + Date.now(), { cache: 'no-store' })
     .then((r) => r.ok ? r.text() : '')
     .then((t) => { t = (t || '').trim(); if (t && t !== SITE_VER) location.replace(location.pathname + '?v=' + t); })
