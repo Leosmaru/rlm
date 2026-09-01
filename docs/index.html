@@ -2,6 +2,7 @@
 <html lang="ru"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="#141312">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <title>RLM — Roleplay Machine</title>
 <meta name="description" content="Узловой клиент для ролеплея с ИИ: память, Хроника, Критик, кубик, сетевая игра в Telegram.">
 <style>
@@ -375,5 +376,14 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   if (was) {
     a.play().then(() => { if (!a.paused) enter(); }).catch(() => {});
   }
+</script>
+<script>
+  // Свежесть страницы: если на сервере лежит версия новее той, с которой открыт этот файл,
+  // страница сама перезагружается по уникальной ссылке — кэш браузера не мешает.
+  const SITE_VER = '20260901-124658';
+  fetch('version.txt?ts=' + Date.now(), { cache: 'no-store' })
+    .then((r) => r.ok ? r.text() : '')
+    .then((t) => { t = (t || '').trim(); if (t && t !== SITE_VER) location.replace(location.pathname + '?v=' + t); })
+    .catch(() => {});
 </script>
 </body></html>
