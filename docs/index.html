@@ -331,14 +331,22 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
 </footer>
 
 <audio id="bg" src="media/theme.wav" loop autoplay></audio>
+<audio id="voice" src="media/voice.wav" preload="auto"></audio>
 <script>
   // Входной экран: единственный клик по ▶ открывает сайт и включает трек — жест получен,
   // поэтому звук стартует сразу и больше не прерывается.
-  const a = document.getElementById('bg'), gate = document.getElementById('gate'), play = document.getElementById('play');
+  const a = document.getElementById('bg'), v = document.getElementById('voice');
+  const gate = document.getElementById('gate'), play = document.getElementById('play');
   a.volume = 0.35;
+  v.volume = 0.9;   // голос звучит один раз, параллельно с музыкой
   document.body.classList.add('gated');
+  let started = false;
   const enter = () => {
+    if (started) return;
+    started = true;
     a.play().catch(() => {});
+    v.currentTime = 0;
+    v.play().catch(() => {});
     const v = document.querySelectorAll('video');
     v.forEach((el) => el.play().catch(() => {}));
     gate.classList.add('off');
