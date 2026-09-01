@@ -16,7 +16,7 @@
     unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
 
   @font-face{font-family:"PixelMplus";font-weight:700;font-display:swap;
-    src:url("fonts/pixelmplus-bold.ttf?v=20260901-130557") format("truetype")}
+    src:url("fonts/pixelmplus-bold.ttf?v=20260901-131457") format("truetype")}
 
   /* Палитра — пресет «Уголь · коралл» из приложения */
   :root{
@@ -347,8 +347,8 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   <span id="ver" style="opacity:.45;font-size:11px;letter-spacing:1px"></span>
 </footer>
 
-<audio id="bg" src="media/theme.wav?v=20260901-131322" loop preload="auto"></audio>
-<audio id="voice" src="media/voice.wav?v=20260901-131322" preload="auto"></audio>
+<audio id="bg" src="media/theme.wav?v=20260901-131457" loop preload="auto"></audio>
+<audio id="voice" src="media/voice.wav?v=20260901-131457" preload="auto"></audio>
 <script>
   // Входной экран: единственный клик по ▶ открывает сайт и включает трек — жест получен,
   // поэтому звук стартует сразу и больше не прерывается.
@@ -441,7 +441,7 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
 <script>
   // Свежесть страницы: если на сервере лежит версия новее той, с которой открыт этот файл,
   // страница сама перезагружается по уникальной ссылке — кэш браузера не мешает.
-  const SITE_VER = '20260901-131322';
+  const SITE_VER = '20260901-131457';
   const verBox = document.getElementById('ver');
   if (verBox) verBox.textContent = 'сборка ' + SITE_VER;
   const checkVer = () => fetch('version.txt?ts=' + Date.now(), { cache: 'no-store' })
