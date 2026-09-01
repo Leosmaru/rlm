@@ -347,8 +347,7 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
     a.play().catch(() => {});
     v.currentTime = 0;
     v.play().catch(() => {});
-    const v = document.querySelectorAll('video');
-    v.forEach((el) => el.play().catch(() => {}));
+    document.querySelectorAll('video').forEach((el) => el.play().catch(() => {}));
     gate.classList.add('off');
     document.body.classList.remove('gated');
     setTimeout(() => gate.remove(), 600);
