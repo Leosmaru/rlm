@@ -30,9 +30,6 @@
   .brand svg{width:15px;height:15px;fill:var(--accent)}
   nav{margin-left:auto;display:flex;gap:20px;font-size:12px;letter-spacing:2px;text-transform:uppercase}
   nav a{color:var(--muted)} nav a:hover{color:var(--accent)}
-  .snd{margin-left:14px;padding:6px 12px;border:1px solid var(--line);background:transparent;color:var(--muted);
-    font:11px/1 var(--mono);letter-spacing:1px;text-transform:uppercase;cursor:pointer;border-radius:2px}
-  .snd:hover,.snd.on{color:var(--accent);border-color:var(--corner)}
 
   .hero{position:relative;min-height:100vh;display:flex;align-items:center;overflow:hidden}
   .hero video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0}
@@ -109,7 +106,6 @@
     <a href="#what">Что это</a><a href="#why">Возможности</a><a href="#install">Установка</a>
     <a href="https://github.com/Leosmaru/rlm">GitHub</a>
   </nav>
-  <button class="snd" id="snd">♪ звук</button>
 </header>
 
 <div class="hero">
@@ -199,17 +195,12 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
 
 <audio id="bg" src="media/theme.wav" loop autoplay></audio>
 <script>
-  // Трек пытается стартовать сам. Браузеры глушат автозвук без жеста — тогда ловим ПЕРВОЕ
-  // же действие (клик, касание, скролл, клавиша) и включаем; попытки не прекращаем до успеха.
-  const a = document.getElementById('bg'), b = document.getElementById('snd');
+  // Трек играет сам. Если браузер глушит автозвук — включаем на первом же действии, без кнопок.
+  const a = document.getElementById('bg');
   a.volume = 0.35;
-  const mark = () => { const on = !a.paused; b.classList.toggle('on', on); b.textContent = on ? '♪ звук вкл' : '♪ звук'; };
-  const kick = () => a.play().then(mark).catch(() => {});
+  const kick = () => a.play().catch(() => {});
   kick();
-  const evs = ['pointerdown', 'pointerup', 'mousedown', 'click', 'keydown', 'touchstart', 'touchend', 'scroll', 'wheel', 'mousemove'];
-  const onAny = () => { if (a.paused) kick(); else evs.forEach((e) => window.removeEventListener(e, onAny, true)); };
-  evs.forEach((e) => window.addEventListener(e, onAny, true));
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && a.paused) kick(); });
-  b.addEventListener('click', (e) => { e.stopPropagation(); if (a.paused) kick(); else { a.pause(); mark(); } });
+  ['pointerdown', 'keydown', 'touchstart', 'scroll', 'wheel', 'mousemove'].forEach((e) =>
+    window.addEventListener(e, kick, { capture: true, passive: true }));
 </script>
 </body></html>
