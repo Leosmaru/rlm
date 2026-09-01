@@ -84,8 +84,10 @@
   #vol::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--accent);border:0;cursor:pointer}
 
   #scroll-hint{position:absolute;left:50%;bottom:26px;z-index:3;transform:translateX(-50%);
-    display:flex;flex-direction:column;align-items:center;color:var(--accent);opacity:.85;
-    transition:opacity .5s ease}
+    display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--accent);opacity:.85;
+    width:54px;height:54px;border:1px solid var(--line);border-radius:2px;background:rgba(20,19,18,.35);
+    backdrop-filter:blur(3px);transition:opacity .5s ease,border-color .25s ease,background .25s ease}
+  #scroll-hint:hover{border-color:var(--corner);background:rgba(20,19,18,.55)}
   #scroll-hint svg{width:30px;height:30px;display:block;margin-top:-14px;animation:hintFall 1.8s ease-in-out infinite}
   #scroll-hint svg:nth-child(2){animation-delay:.22s;opacity:.5}
   #scroll-hint.gone{opacity:0;pointer-events:none}
@@ -239,7 +241,7 @@
       </ul>
       <a class="btn" href="https://github.com/Leosmaru/rlm">Исходники</a>
     </div>
-    <div class="pic"><img src="media/shot.webp?v=20260901-145233" alt="Холст RLM"></div>
+    <div class="pic"><img src="media/shot.webp?v=20260901-145654" alt="Холст RLM"></div>
   </div>
 </section>
 
@@ -371,8 +373,8 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   <span id="ver" style="opacity:.45;font-size:11px;letter-spacing:1px"></span>
 </footer>
 
-<audio id="bg" src="media/theme.wav?v=20260901-145233" loop preload="auto"></audio>
-<audio id="voice" src="media/voice.wav?v=20260901-145233" preload="auto"></audio>
+<audio id="bg" src="media/theme.wav?v=20260901-145654" loop preload="auto"></audio>
+<audio id="voice" src="media/voice.wav?v=20260901-145654" preload="auto"></audio>
 <script>
   // Входной экран: единственный клик по ▶ открывает сайт и включает трек — жест получен,
   // поэтому звук стартует сразу и больше не прерывается.
@@ -465,7 +467,7 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
 <script>
   // Свежесть страницы: если на сервере лежит версия новее той, с которой открыт этот файл,
   // страница сама перезагружается по уникальной ссылке — кэш браузера не мешает.
-  const SITE_VER = '20260901-145233';
+  const SITE_VER = '20260901-145654';
   const hint = document.getElementById('scroll-hint');
   if (hint) {
     const hide = () => { if (scrollY > 40) hint.classList.add('gone'); else hint.classList.remove('gone'); };
