@@ -3,6 +3,7 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="#141312">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<link rel="canonical" href="https://leosmaru.github.io/rlm/">
 <title>RLM — Roleplay Machine</title>
 <meta name="description" content="Узловой клиент для ролеплея с ИИ: память, Хроника, Критик, кубик, сетевая игра в Telegram.">
 <style>
@@ -221,7 +222,7 @@
       </ul>
       <a class="btn" href="https://github.com/Leosmaru/rlm">Исходники</a>
     </div>
-    <div class="pic"><img src="media/shot.webp?v=20260901-143726" alt="Холст RLM"></div>
+    <div class="pic"><img src="media/shot.webp?v=20260901-143851" alt="Холст RLM"></div>
   </div>
 </section>
 
@@ -353,8 +354,8 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   <span id="ver" style="opacity:.45;font-size:11px;letter-spacing:1px"></span>
 </footer>
 
-<audio id="bg" src="media/theme.wav?v=20260901-143726" loop preload="auto"></audio>
-<audio id="voice" src="media/voice.wav?v=20260901-143726" preload="auto"></audio>
+<audio id="bg" src="media/theme.wav?v=20260901-143851" loop preload="auto"></audio>
+<audio id="voice" src="media/voice.wav?v=20260901-143851" preload="auto"></audio>
 <script>
   // Входной экран: единственный клик по ▶ открывает сайт и включает трек — жест получен,
   // поэтому звук стартует сразу и больше не прерывается.
@@ -447,12 +448,19 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
 <script>
   // Свежесть страницы: если на сервере лежит версия новее той, с которой открыт этот файл,
   // страница сама перезагружается по уникальной ссылке — кэш браузера не мешает.
-  const SITE_VER = '20260901-143726';
+  const SITE_VER = '20260901-143851';
   const verBox = document.getElementById('ver');
   if (verBox) verBox.textContent = 'сборка ' + SITE_VER;
   const checkVer = () => fetch('version.txt?ts=' + Date.now(), { cache: 'no-store' })
     .then((r) => r.ok ? r.text() : '')
-    .then((t) => { t = (t || '').trim(); if (t && t !== SITE_VER) location.reload();   // адрес не трогаем — выданные ссылки остаются рабочими })
+    .then((t) => { t = (t || '').trim(); if (!t || t === SITE_VER) return;
+      // адрес не трогаем: тянем свежую страницу мимо кэша и подменяем содержимое
+      return fetch('./?nc=' + Date.now(), { cache: 'no-store' })
+        .then((r) => r.ok ? r.text() : '')
+        .then((html) => {
+          if (!html || html.indexOf(t) === -1) return;
+          document.open(); document.write(html); document.close();
+        }); })
     .catch(() => {});
   checkVer();                                   // при открытии
   setInterval(checkVer, 60000);                 // и дальше раз в минуту — открытая вкладка тоже обновится
