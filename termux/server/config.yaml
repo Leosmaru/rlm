@@ -1,4 +1,4 @@
-# -- DATA CONFIGURATION --
+﻿# -- DATA CONFIGURATION --
 # Root directory for user data storage
 dataRoot: ./data
 # -- SERVER CONFIGURATION --
@@ -19,7 +19,7 @@ dnsPreferIPv6: false
 # -- BROWSER LAUNCH CONFIGURATION --
 browserLaunch:
   # Open the browser automatically on server startup.
-  enabled: false  # RLM: сервер не открывает браузер сам — UI у нас свой (узловой холст)
+  enabled: false  # RLM: СЃРµСЂРІРµСЂ РЅРµ РѕС‚РєСЂС‹РІР°РµС‚ Р±СЂР°СѓР·РµСЂ СЃР°Рј вЂ” UI Сѓ РЅР°СЃ СЃРІРѕР№ (СѓР·Р»РѕРІРѕР№ С…РѕР»СЃС‚)
   # Browser to use for opening the URL.
   # NOT SUPPORTED ON ANDROID DEVICES.
   # - Use "default" to use the system default browser
@@ -36,7 +36,7 @@ browserLaunch:
   # Avoids using 'localhost' as the hostname in auto mode.
   # Use if you don't have 'localhost' in your hosts file
   avoidLocalhost: false
-# Server port (RLM: свой порт, чтобы не конфликтовать с эталонным ST на 8000)
+# Server port (RLM: СЃРІРѕР№ РїРѕСЂС‚, С‡С‚РѕР±С‹ РЅРµ РєРѕРЅС„Р»РёРєС‚РѕРІР°С‚СЊ СЃ СЌС‚Р°Р»РѕРЅРЅС‹Рј ST РЅР° 8000)
 port: 8100
 # -- SSL options --
 ssl:
@@ -228,8 +228,8 @@ extensions:
     # Additional models for extensions. Expects model IDs from HuggingFace model hub in ONNX format
     classification: Cohee/distilbert-base-uncased-go-emotions-onnx
     captioning: Xenova/vit-gpt2-image-captioning
-    # RLM: многоязычный эмбеддер (знает русский) — для смыслового поиска памяти/лорбука.
-    # Требует e5-префиксы query:/passage: (их ставит обёртка в endpoints/rlm-soul.js). Дефолт по плану §6.
+    # RLM: РјРЅРѕРіРѕСЏР·С‹С‡РЅС‹Р№ СЌРјР±РµРґРґРµСЂ (Р·РЅР°РµС‚ СЂСѓСЃСЃРєРёР№) вЂ” РґР»СЏ СЃРјС‹СЃР»РѕРІРѕРіРѕ РїРѕРёСЃРєР° РїР°РјСЏС‚Рё/Р»РѕСЂР±СѓРєР°.
+    # РўСЂРµР±СѓРµС‚ e5-РїСЂРµС„РёРєСЃС‹ query:/passage: (РёС… СЃС‚Р°РІРёС‚ РѕР±С‘СЂС‚РєР° РІ endpoints/rlm-soul.js). Р”РµС„РѕР»С‚ РїРѕ РїР»Р°РЅСѓ В§6.
     embedding: Xenova/multilingual-e5-small
     speechToText: Xenova/whisper-small
     textToSpeech: Xenova/speecht5_tts
