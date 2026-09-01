@@ -1,0 +1,11 @@
+{
+  "name": "RLM — Roleplay Machine",
+  "short_name": "RLM",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#141312",
+  "theme_color": "#141312",
+  "icons": [
+    { "src": "media/logo.png", "sizes": "1280x768", "type": "image/png", "purpose": "any" }
+  ]
+}
