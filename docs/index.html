@@ -69,8 +69,8 @@
   .btn.acc{background:var(--accent);border-color:var(--accent);color:#161312;font-weight:700}
   .btn.acc:hover{filter:brightness(1.12);color:#161312}
 
-  .vol{display:flex;align-items:center;gap:12px;margin:22px 0 0;max-width:280px}
-  .vol-ic{color:var(--muted);font-size:14px}
+  .vol{display:flex;align-items:center;gap:14px;margin:22px 0 0;max-width:330px}
+  #viz{width:120px;height:22px;flex:none;opacity:.9}
   #vol{-webkit-appearance:none;appearance:none;width:100%;height:2px;background:var(--line);border-radius:2px;outline:none}
   #vol::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;
     background:var(--accent);border:0;cursor:pointer;box-shadow:0 0 0 4px rgba(229,84,74,.18)}
@@ -173,7 +173,7 @@
       <a class="btn" href="#install">Установка</a>
     </div>
     <div class="vol">
-      <span class="vol-ic">♪</span>
+      <canvas id="viz" width="120" height="22" aria-hidden="true"></canvas>
       <input id="vol" type="range" min="0" max="100" value="100" aria-label="Громкость звука">
     </div>
   </div>
@@ -364,6 +364,38 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   });
   applyVol();
 
+  // визуализация трека: столбики по спектру, оживают вместе со звуком
+  const viz = document.getElementById('viz'), vctx = viz.getContext('2d');
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  viz.width = 120 * dpr; viz.height = 22 * dpr; vctx.scale(dpr, dpr);
+  let ana = null, data = null;
+  const wireViz = () => {
+    if (ana) return;
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const mix = ctx.createGain();
+      ctx.createMediaElementSource(a).connect(mix);
+      ctx.createMediaElementSource(v).connect(mix);
+      ana = ctx.createAnalyser(); ana.fftSize = 128; ana.smoothingTimeConstant = 0.8;
+      mix.connect(ana); mix.connect(ctx.destination);
+      data = new Uint8Array(ana.frequencyBinCount);
+      if (ctx.state !== 'running') ctx.resume();
+    } catch (_) { ana = null; }
+  };
+  const drawViz = () => {
+    requestAnimationFrame(drawViz);
+    vctx.clearRect(0, 0, 120, 22);
+    const bars = 22, gap = 1.6, bw = (120 - gap * (bars - 1)) / bars;
+    if (ana) ana.getByteFrequencyData(data);
+    for (let i = 0; i < bars; i++) {
+      const raw = ana ? data[Math.floor(i * data.length / bars / 1.6)] / 255 : 0;
+      const h = Math.max(1.5, raw * 22);
+      vctx.fillStyle = raw > 0.02 ? 'rgba(229,84,74,' + (0.35 + raw * 0.65) + ')' : 'rgba(255,255,255,.12)';
+      vctx.fillRect(i * (bw + gap), 22 - h, bw, h);
+    }
+  };
+  drawViz();
+
   const fade = (el, to, ms) => {
     const from = el.volume, t0 = performance.now();
     const step = () => {
@@ -382,6 +414,7 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
     if (started) return;
     started = true;
     try { localStorage.setItem(KEY, '1'); } catch (_) {}
+    wireViz();
     a.play().catch(() => {});
     v.currentTime = 0;
     v.play().catch(() => {});
@@ -403,7 +436,7 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
 <script>
   // Свежесть страницы: если на сервере лежит версия новее той, с которой открыт этот файл,
   // страница сама перезагружается по уникальной ссылке — кэш браузера не мешает.
-  const SITE_VER = '20260901-125510';
+  const SITE_VER = '20260901-125650';
   const checkVer = () => fetch('version.txt?ts=' + Date.now(), { cache: 'no-store' })
     .then((r) => r.ok ? r.text() : '')
     .then((t) => { t = (t || '').trim(); if (t && t !== SITE_VER) location.replace(location.pathname + '?v=' + t); })
