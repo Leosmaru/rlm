@@ -199,14 +199,17 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
 
 <audio id="bg" src="media/theme.wav" loop autoplay></audio>
 <script>
-  // Трек включается сам; если браузер запретил автоплей — стартуем на первом же действии.
+  // Трек пытается стартовать сам. Браузеры глушат автозвук без жеста — тогда ловим ПЕРВОЕ
+  // же действие (клик, касание, скролл, клавиша) и включаем; попытки не прекращаем до успеха.
   const a = document.getElementById('bg'), b = document.getElementById('snd');
   a.volume = 0.35;
-  const mark = (on) => { b.classList.toggle('on', on); b.textContent = on ? '♪ звук вкл' : '♪ звук'; };
-  const kick = () => { a.play().then(() => mark(true)).catch(() => {}); };
+  const mark = () => { const on = !a.paused; b.classList.toggle('on', on); b.textContent = on ? '♪ звук вкл' : '♪ звук'; };
+  const kick = () => a.play().then(mark).catch(() => {});
   kick();
-  ['pointerdown', 'keydown', 'scroll', 'touchstart'].forEach((ev) =>
-    window.addEventListener(ev, function once() { if (a.paused) kick(); }, { once: true, passive: true }));
-  b.addEventListener('click', () => { if (a.paused) kick(); else { a.pause(); mark(false); } });
+  const evs = ['pointerdown', 'pointerup', 'mousedown', 'click', 'keydown', 'touchstart', 'touchend', 'scroll', 'wheel', 'mousemove'];
+  const onAny = () => { if (a.paused) kick(); else evs.forEach((e) => window.removeEventListener(e, onAny, true)); };
+  evs.forEach((e) => window.addEventListener(e, onAny, true));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && a.paused) kick(); });
+  b.addEventListener('click', (e) => { e.stopPropagation(); if (a.paused) kick(); else { a.pause(); mark(); } });
 </script>
 </body></html>
