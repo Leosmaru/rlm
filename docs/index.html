@@ -221,11 +221,12 @@
         <li>Генератор событий.</li>
         <li>Настоящая система метрик [напряжения, доверия и прочее] и возможность кастомно их задавать.</li>
         <li>Настоящая система успеха или провала для боевых сцен или важных событий.</li>
+        <li>Семантический выбор записей — смысловой, наиболее точный и современный.</li>
         <li>Мультиплеер — совместная игра в карточку за нескольких персонажей с друзьями.</li>
       </ul>
       <a class="btn" href="https://github.com/Leosmaru/rlm">Исходники</a>
     </div>
-    <div class="pic"><img src="media/shot.webp?v=20260901-143414" alt="Холст RLM"></div>
+    <div class="pic"><img src="media/shot.webp?v=20260901-143507" alt="Холст RLM"></div>
   </div>
 </section>
 
@@ -357,8 +358,8 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   <span id="ver" style="opacity:.45;font-size:11px;letter-spacing:1px"></span>
 </footer>
 
-<audio id="bg" src="media/theme.wav?v=20260901-143414" loop preload="auto"></audio>
-<audio id="voice" src="media/voice.wav?v=20260901-143414" preload="auto"></audio>
+<audio id="bg" src="media/theme.wav?v=20260901-143507" loop preload="auto"></audio>
+<audio id="voice" src="media/voice.wav?v=20260901-143507" preload="auto"></audio>
 <script>
   // Входной экран: единственный клик по ▶ открывает сайт и включает трек — жест получен,
   // поэтому звук стартует сразу и больше не прерывается.
@@ -451,7 +452,7 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
 <script>
   // Свежесть страницы: если на сервере лежит версия новее той, с которой открыт этот файл,
   // страница сама перезагружается по уникальной ссылке — кэш браузера не мешает.
-  const SITE_VER = '20260901-143414';
+  const SITE_VER = '20260901-143507';
   const verBox = document.getElementById('ver');
   if (verBox) verBox.textContent = 'сборка ' + SITE_VER;
   const checkVer = () => fetch('version.txt?ts=' + Date.now(), { cache: 'no-store' })
