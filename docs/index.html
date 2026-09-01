@@ -337,7 +337,7 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   // поэтому звук стартует сразу и больше не прерывается.
   const a = document.getElementById('bg'), v = document.getElementById('voice');
   const gate = document.getElementById('gate'), play = document.getElementById('play');
-  const MUS = 0.5, MUS_DUCK = 0.3, VOICE = 0.3;   // пока говорит голос — музыка приседает
+  const MUS = 1.0, MUS_DUCK = 0.7, VOICE = 0.28;   // пока говорит голос — музыка приседает
   a.volume = MUS;
   v.volume = VOICE;   // голос звучит один раз, параллельно с музыкой
   const fade = (el, to, ms) => {
