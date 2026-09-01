@@ -104,14 +104,22 @@
   .cell h3{margin:0 0 5px;font-size:13px;letter-spacing:2px;text-transform:uppercase;font-weight:400}
   .cell p{margin:0;font-size:13px;color:var(--muted)}
 
-  .fuse{position:relative;overflow:hidden;background:var(--bg);border-top:1px solid var(--line);
+  .fuse{position:relative;overflow:hidden;isolation:isolate;background:var(--bg);border-top:1px solid var(--line);
     border-bottom:1px solid var(--line);padding:0}
+  .fuse::before{content:"";position:absolute;inset:0;z-index:-1;background:url("media/logo.png") center/cover no-repeat;
+    opacity:.22;filter:saturate(.75)}
+  .fuse::after{content:"";position:absolute;inset:0;z-index:-1;
+    background:linear-gradient(180deg,var(--bg) 0%,rgba(20,19,18,.55) 45%,var(--bg) 100%)}
   .fuse .row2{display:grid;grid-template-columns:minmax(300px,38%) 1fr;align-items:center;gap:clamp(20px,3vw,48px);
     max-width:1600px;margin:0 auto;padding:clamp(48px,5vw,80px) 0 clamp(48px,5vw,80px) clamp(20px,3vw,44px)}
   .fuse .txt{padding:0 clamp(20px,2.5vw,40px) 0 clamp(4px,1vw,16px)}
   .fuse h2{text-align:left;margin-bottom:6px}
   .fuse .sub2{margin:0;color:var(--muted);font-size:13px;letter-spacing:2px;text-transform:uppercase}
   .fuse ul{list-style:none;padding:0;margin:22px 0 28px}
+  .fuse::before{content:"";position:absolute;inset:0;z-index:-1;background:url("media/logo.png") center/cover no-repeat;
+    opacity:.22;filter:saturate(.75)}
+  .fuse::after{content:"";position:absolute;inset:0;z-index:-1;
+    background:linear-gradient(180deg,var(--bg) 0%,rgba(20,19,18,.55) 45%,var(--bg) 100%)}
   .fuse .row2{grid-template-columns:minmax(300px,46%) 1fr;align-items:center}
   .fuse li{margin:13px 0;font-size:14px;line-height:1.65;color:var(--muted);padding-left:20px;position:relative}
   .fuse li b{color:var(--text);font-weight:700;letter-spacing:.5px}
@@ -145,7 +153,11 @@
 
   @media (max-width:880px){
     nav{display:none}
-    .fuse .row2{grid-template-columns:1fr;padding:56px 0 56px 0}
+    .fuse::before{content:"";position:absolute;inset:0;z-index:-1;background:url("media/logo.png") center/cover no-repeat;
+    opacity:.22;filter:saturate(.75)}
+  .fuse::after{content:"";position:absolute;inset:0;z-index:-1;
+    background:linear-gradient(180deg,var(--bg) 0%,rgba(20,19,18,.55) 45%,var(--bg) 100%)}
+  .fuse .row2{grid-template-columns:1fr;padding:56px 0 56px 0}
     .fuse .txt{padding:0 20px}
     .fuse .pic{margin-top:26px}
     .fuse .pic img{width:calc(100% + 20px);margin-right:-20px}
@@ -166,7 +178,7 @@
 
 <header>
   <nav>
-    <a href="#what">Что это</a><a href="#why">Возможности</a><a href="#nodes">Ноды</a><a href="#install">Установка</a>
+    <a href="#why">Возможности</a><a href="#nodes">Ноды</a><a href="#install">Установка</a>
     <a href="https://github.com/Leosmaru/rlm">GitHub</a>
   </nav>
 </header>
@@ -187,23 +199,6 @@
     </div>
   </div>
 </div>
-
-<section id="what" class="paper">
-  <div class="wrap">
-    <h2>Части <em>партии</em></h2>
-    <p class="lead">Карточка, промт, лорбуки, память и модель — отдельные ноды на холсте. Видно, что уходит модели и почему пришёл такой ответ.</p>
-    <div class="grid">
-      <div class="cell"><svg viewBox="0 0 24 24"><path d="M4 3h9l3 3v15H4z"/><path d="M13 3v3h3"/><path d="M7 11h6M7 14h6M7 17h4"/></svg>
-        <h3>Душа</h3><p>Модель ведёт дневник, состояние сцены, факты мира и психологию персонажей</p></div>
-      <div class="cell"><svg viewBox="0 0 24 24"><path d="M3 5h12v15H3z"/><path d="M15 8h6v12H9"/><path d="M6 9h6M6 12h6M6 15h4"/></svg>
-        <h3>Хроника</h3><p>Сцены сжимаются в главы, главы — в арки и эпосы</p></div>
-      <div class="cell"><svg viewBox="0 0 24 24"><path d="M12 4v16M5 8h14"/><path d="M5 8l-2 6h4zM19 8l-2 6h4z"/><path d="M8 20h8"/></svg>
-        <h3>Критик</h3><p>Заворачивает подлиз, безволие, игру за игрока и читы</p></div>
-      <div class="cell"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8.5 8.5h.01M15.5 8.5h.01M12 12h.01M8.5 15.5h.01M15.5 15.5h.01" stroke-width="2.6" stroke-linecap="round"/></svg>
-        <h3>Кубик</h3><p>Исход брошен до сцены — модель не может его подменить</p></div>
-    </div>
-  </div>
-</section>
 
 <section class="fuse" id="why">
   <div class="row2">
@@ -226,7 +221,7 @@
       </ul>
       <a class="btn" href="https://github.com/Leosmaru/rlm">Исходники</a>
     </div>
-    <div class="pic"><img src="media/shot.webp?v=20260901-143507" alt="Холст RLM"></div>
+    <div class="pic"><img src="media/shot.webp?v=20260901-143726" alt="Холст RLM"></div>
   </div>
 </section>
 
@@ -358,8 +353,8 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   <span id="ver" style="opacity:.45;font-size:11px;letter-spacing:1px"></span>
 </footer>
 
-<audio id="bg" src="media/theme.wav?v=20260901-143507" loop preload="auto"></audio>
-<audio id="voice" src="media/voice.wav?v=20260901-143507" preload="auto"></audio>
+<audio id="bg" src="media/theme.wav?v=20260901-143726" loop preload="auto"></audio>
+<audio id="voice" src="media/voice.wav?v=20260901-143726" preload="auto"></audio>
 <script>
   // Входной экран: единственный клик по ▶ открывает сайт и включает трек — жест получен,
   // поэтому звук стартует сразу и больше не прерывается.
@@ -452,7 +447,7 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
 <script>
   // Свежесть страницы: если на сервере лежит версия новее той, с которой открыт этот файл,
   // страница сама перезагружается по уникальной ссылке — кэш браузера не мешает.
-  const SITE_VER = '20260901-143507';
+  const SITE_VER = '20260901-143726';
   const verBox = document.getElementById('ver');
   if (verBox) verBox.textContent = 'сборка ' + SITE_VER;
   const checkVer = () => fetch('version.txt?ts=' + Date.now(), { cache: 'no-store' })
