@@ -56,8 +56,10 @@
   .hero .in{position:relative;z-index:2;margin:0 30px 0 clamp(26px,6vw,90px);max-width:660px;
     padding:clamp(26px,3vw,38px) clamp(24px,3vw,40px);border:1px solid var(--line);border-radius:2px;
     background:rgba(20,19,18,.62);backdrop-filter:blur(6px);box-shadow:0 18px 60px rgba(0,0,0,.45)}
-  .hero h1{margin:0;font-size:clamp(16px,2vw,22px);font-weight:400;letter-spacing:4px;
-    text-transform:uppercase;color:var(--text)}
+  .hero h1{margin:0;font-size:clamp(38px,5vw,62px);font-weight:700;letter-spacing:10px;
+    text-transform:uppercase;color:var(--text);line-height:1}
+  .hero .sub{margin:8px 0 0;font-size:clamp(12px,1.4vw,15px);letter-spacing:5px;
+    text-transform:uppercase;color:var(--muted)}
   .hero p{margin:14px 0 26px;font-size:15px;color:var(--muted);max-width:620px}
   .row{display:flex;gap:12px;flex-wrap:wrap}
   .btn{display:inline-block;padding:11px 22px;border:1px solid var(--line);border-radius:2px;background:transparent;
@@ -142,7 +144,8 @@
 <div class="hero">
   <video src="media/hero.mp4" autoplay muted loop playsinline></video>
   <div class="in">
-    <h1>Roleplay Machine</h1>
+    <h1>RLM</h1>
+    <div class="sub">Roleplay Machine</div>
     <p>Узловой клиент для ролеплея с ИИ. Память, которую ведёт сама модель, хроника сцен, критик ответа, кубик и сетевая игра в Telegram. Основа — движок SillyTavern.</p>
     <div class="row">
       <a class="btn acc" href="https://github.com/Leosmaru/rlm/archive/refs/heads/main.zip">Скачать</a>
