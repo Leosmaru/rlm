@@ -241,7 +241,7 @@
       </ul>
       <a class="btn" href="https://github.com/Leosmaru/rlm">Исходники</a>
     </div>
-    <div class="pic"><img src="media/shot.webp?v=20260901-150007" alt="Холст RLM"></div>
+    <div class="pic"><img src="media/shot.webp?v=20260901-150243" alt="Холст RLM"></div>
   </div>
 </section>
 
@@ -373,8 +373,8 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   <span id="ver" style="opacity:.45;font-size:11px;letter-spacing:1px"></span>
 </footer>
 
-<audio id="bg" src="media/theme.wav?v=20260901-150007" loop preload="auto"></audio>
-<audio id="voice" src="media/voice.wav?v=20260901-150007" preload="auto"></audio>
+<audio id="bg" src="media/theme.wav?v=20260901-150243" loop preload="auto"></audio>
+<audio id="voice" src="media/voice.wav?v=20260901-150243" preload="auto"></audio>
 <script>
   // Входной экран: единственный клик по ▶ открывает сайт и включает трек — жест получен,
   // поэтому звук стартует сразу и больше не прерывается.
@@ -471,7 +471,7 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
 <script>
   // Свежесть страницы: если на сервере лежит версия новее той, с которой открыт этот файл,
   // страница сама перезагружается по уникальной ссылке — кэш браузера не мешает.
-  const SITE_VER = '20260901-150007';
+  const SITE_VER = '20260901-150243';
   const hint = document.getElementById('scroll-hint');
   if (hint) {
     const hide = () => { if (scrollY > 40) hint.classList.add('gone'); else hint.classList.remove('gone'); };
@@ -482,14 +482,15 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   if (verBox) verBox.textContent = 'сборка ' + SITE_VER;
   const checkVer = () => fetch('version.txt?ts=' + Date.now(), { cache: 'no-store' })
     .then((r) => r.ok ? r.text() : '')
-    .then((t) => { t = (t || '').trim(); if (!t || t === SITE_VER) return;
-      // адрес не трогаем: тянем свежую страницу мимо кэша и подменяем содержимое
-      return fetch('./?nc=' + Date.now(), { cache: 'no-store' })
-        .then((r) => r.ok ? r.text() : '')
-        .then((html) => {
-          if (!html || html.indexOf(t) === -1) return;
-          document.open(); document.write(html); document.close();
-        }); })
+    .then((t) => {
+      t = (t || '').trim();
+      if (!t || t === SITE_VER) { try { sessionStorage.removeItem('rlm-rl'); } catch (_) {} return; }
+      // адрес не трогаем: обычная перезагрузка идёт на сервер за свежим HTML.
+      // счётчик страхует от повторов, если сервер вдруг отдаёт старое.
+      let tries = 0;
+      try { tries = +(sessionStorage.getItem('rlm-rl') || 0); sessionStorage.setItem('rlm-rl', String(tries + 1)); } catch (_) {}
+      if (tries < 2) location.reload();
+    })
     .catch(() => {});
   checkVer();                                   // при открытии
   setInterval(checkVer, 60000);                 // и дальше раз в минуту — открытая вкладка тоже обновится
