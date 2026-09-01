@@ -15,6 +15,9 @@
   @font-face{font-family:"Ubuntu Mono";font-weight:700;font-display:swap;src:url("fonts/ubuntu-mono-cyrillic-700-normal.woff2") format("woff2");
     unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
 
+  @font-face{font-family:"PixelMplus";font-weight:700;font-display:swap;
+    src:url("fonts/pixelmplus-bold.ttf?v=20260901-130557") format("truetype")}
+
   /* Палитра — пресет «Уголь · коралл» из приложения */
   :root{
     --bg:#141312; --panel:#201f1d; --inset:#191817;
@@ -57,8 +60,9 @@
   .hero .in{position:relative;z-index:2;margin:0 30px 0 clamp(26px,6vw,90px);max-width:660px;
     padding:clamp(26px,3vw,38px) clamp(24px,3vw,40px);border:1px solid var(--line);border-radius:2px;
     background:rgba(20,19,18,.62);backdrop-filter:blur(6px);box-shadow:0 18px 60px rgba(0,0,0,.45)}
-  .hero h1{margin:0;font-size:clamp(38px,5vw,62px);font-weight:700;letter-spacing:10px;
-    text-transform:uppercase;color:var(--text);line-height:1}
+  .hero h1{margin:0;font-family:"PixelMplus","Ubuntu Mono",monospace;font-size:clamp(46px,6vw,78px);
+    font-weight:700;letter-spacing:12px;text-transform:uppercase;color:var(--text);line-height:1;
+    -webkit-font-smoothing:none;image-rendering:pixelated}
   .hero .sub{margin:8px 0 0;font-size:clamp(12px,1.4vw,15px);letter-spacing:5px;
     text-transform:uppercase;color:var(--muted)}
   .hero p{margin:14px 0 26px;font-size:15px;color:var(--muted);max-width:620px}
@@ -342,8 +346,8 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   Основа — движок SillyTavern (AGPL-3.0)
 </footer>
 
-<audio id="bg" src="media/theme.wav?v=20260901-130501" loop preload="auto"></audio>
-<audio id="voice" src="media/voice.wav?v=20260901-130501" preload="auto"></audio>
+<audio id="bg" src="media/theme.wav?v=20260901-130557" loop preload="auto"></audio>
+<audio id="voice" src="media/voice.wav?v=20260901-130557" preload="auto"></audio>
 <script>
   // Входной экран: единственный клик по ▶ открывает сайт и включает трек — жест получен,
   // поэтому звук стартует сразу и больше не прерывается.
@@ -436,7 +440,7 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
 <script>
   // Свежесть страницы: если на сервере лежит версия новее той, с которой открыт этот файл,
   // страница сама перезагружается по уникальной ссылке — кэш браузера не мешает.
-  const SITE_VER = '20260901-130501';
+  const SITE_VER = '20260901-130557';
   const checkVer = () => fetch('version.txt?ts=' + Date.now(), { cache: 'no-store' })
     .then((r) => r.ok ? r.text() : '')
     .then((t) => { t = (t || '').trim(); if (t && t !== SITE_VER) location.replace(location.pathname + '?v=' + t); })
