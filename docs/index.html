@@ -88,16 +88,15 @@
 
   .fuse{position:relative;overflow:hidden;background:var(--bg);border-top:1px solid var(--line);
     border-bottom:1px solid var(--line);padding:0}
-  .fuse .row2{display:grid;grid-template-columns:minmax(320px,44%) 1fr;align-items:center;gap:0;
-    max-width:1560px;margin:0 auto}
-  .fuse .txt{padding:clamp(56px,6vw,96px) clamp(24px,4vw,64px)}
+  .fuse .row2{display:grid;grid-template-columns:minmax(300px,38%) 1fr;align-items:center;gap:clamp(20px,3vw,48px);
+    max-width:1600px;margin:0 auto;padding:clamp(48px,5vw,80px) clamp(20px,3vw,44px)}
+  .fuse .txt{padding:0 0 0 clamp(4px,1vw,16px)}
   .fuse h2{text-align:left;margin-bottom:6px}
   .fuse ul{list-style:none;padding:0;margin:22px 0 28px}
   .fuse li{margin:9px 0;font-size:14px;color:var(--text);padding-left:18px;position:relative}
   .fuse li::before{content:"·";position:absolute;left:4px;color:var(--accent)}
-  .fuse .pic{position:relative;align-self:stretch;min-height:520px;overflow:hidden}
-  .fuse .pic img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:left center;
-    -webkit-mask-image:linear-gradient(90deg,transparent 0,#000 14%);mask-image:linear-gradient(90deg,transparent 0,#000 14%)}
+  .fuse .pic{display:flex;justify-content:flex-end;align-items:center}
+  .fuse .pic img{width:100%;height:auto;display:block;border:1px solid var(--line);border-radius:2px}
 
   .author .wrap{max-width:760px}
   .author p{margin:0;text-align:center;color:var(--muted);font-size:15px;line-height:1.9}
