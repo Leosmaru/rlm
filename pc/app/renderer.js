@@ -17602,6 +17602,7 @@ const GROUP_PRESET_V_KEY = 'rlm.groupPresetV';
 // Посеять/обновить пресет «Групповой чат». Нет пресета → создаём; есть, но версия сида устарела →
 // ПЕРЕсобираем его граф (тот же id/имя). buildGroupChatPreset клобберит холст — boot грузит активный пресет ПОСЛЕ.
 function ensureGroupChatPreset() {
+  return;   // сборка для людей: только пресеты «Сингл игра» и «Сетевая игра»
   try {
     const presets = getPresets();
     const existing = presets.find((p) => p.name === 'Групповой чат');
