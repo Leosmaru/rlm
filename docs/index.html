@@ -338,7 +338,7 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   // поэтому звук стартует сразу и больше не прерывается.
   const a = document.getElementById('bg'), v = document.getElementById('voice');
   const gate = document.getElementById('gate'), play = document.getElementById('play');
-  const MUS = 0.55, MUS_DUCK = 0.33, VOICE = 0.38;   // пока говорит голос — музыка приседает
+  const MUS = 0.32, MUS_DUCK = 0.19, VOICE = 0.22;   // пока говорит голос — музыка приседает
   a.volume = MUS;
   v.volume = VOICE;   // голос звучит один раз, параллельно с музыкой
   const fade = (el, to, ms) => {
@@ -380,7 +380,7 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
 <script>
   // Свежесть страницы: если на сервере лежит версия новее той, с которой открыт этот файл,
   // страница сама перезагружается по уникальной ссылке — кэш браузера не мешает.
-  const SITE_VER = '20260901-125256';
+  const SITE_VER = '20260901-125355';
   const checkVer = () => fetch('version.txt?ts=' + Date.now(), { cache: 'no-store' })
     .then((r) => r.ok ? r.text() : '')
     .then((t) => { t = (t || '').trim(); if (t && t !== SITE_VER) location.replace(location.pathname + '?v=' + t); })
