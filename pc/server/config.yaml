@@ -37,7 +37,7 @@ browserLaunch:
   # Use if you don't have 'localhost' in your hosts file
   avoidLocalhost: false
 # Server port (RLM: СЃРІРѕР№ РїРѕСЂС‚, С‡С‚РѕР±С‹ РЅРµ РєРѕРЅС„Р»РёРєС‚РѕРІР°С‚СЊ СЃ СЌС‚Р°Р»РѕРЅРЅС‹Рј ST РЅР° 8000)
-port: 8177
+port: 8100
 # -- SSL options --
 ssl:
   # Enable SSL/TLS encryption
