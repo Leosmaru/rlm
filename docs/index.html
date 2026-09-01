@@ -330,7 +330,7 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   Основа — движок SillyTavern (AGPL-3.0)
 </footer>
 
-<audio id="bg" src="media/theme.wav" loop autoplay></audio>
+<audio id="bg" src="media/theme.wav" loop preload="auto"></audio>
 <audio id="voice" src="media/voice.wav" preload="auto"></audio>
 <script>
   // Входной экран: единственный клик по ▶ открывает сайт и включает трек — жест получен,
@@ -354,7 +354,6 @@ cd rlm/termux &amp;&amp; ./install-termux.sh</pre>
   };
   play.addEventListener('click', enter);
   gate.addEventListener('pointerdown', enter);   // жест в любом месте входного экрана
-  // если браузер и так пускает звук (установленное приложение, разрешение для сайта) — входной экран не нужен
-  a.play().then(() => { if (!a.paused) enter(); }).catch(() => {});
+  // никакого автостарта: и музыка, и голос ждут нажатия ▶
 </script>
 </body></html>
