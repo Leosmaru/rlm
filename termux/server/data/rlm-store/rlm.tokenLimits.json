@@ -1,1 +1,1 @@
-{"api.test":60,"ctx..soul-maxtok@.node-soul":8000,"ctx.chat.reply":32000,"ctx.critic.off":12000,"ctx.critic.low":12000,"ctx.critic.medium":12000,"ctx.critic.high":12000,"ctx.critic.lesson":4000,"ctx.critic.consistency":6000,"ctx..dg-maxtok@.node-director":8000,"ctx.obj.invent":4000,"ctx.obj.tasks":6000,"ctx.obj.check":3000,"ctx..chr-maxtok@.node-chronicle":12000,"ctx.chr.consol":12000,"ctx.tr.neuro":4000,"ctx.tts.tag":4000,"ctx.api.test":1000,"chat.reply":1024,"ctx.state.tally":6000,"ctx..prm:nth-of-type(2) input@.node-opts":32000}
+{"critic.low":3000}

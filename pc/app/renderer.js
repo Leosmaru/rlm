@@ -833,8 +833,9 @@ const TOK_KEY = 'rlm.tokenLimits';       // { ключ: число } — пра�
 const TOK_REG = [
   // ОПЦИИ API — общие настройки конвейера: отсюда берут значение все, кто своего не задал.
   // Правится тут же — поле пишется прямо в ноду «Опции» (одно значение, два места правки).
-  { g: 'Опции API', node: '.node-opts', input: '.prm:nth-of-type(2) input', t: 'Контекст — лимит всего промта', d: 4096, tempInput: '.prm:nth-of-type(3) input' },
-  { g: 'Опции API', node: '.node-opts', input: '.prm:nth-of-type(1) input', t: 'Ответ модели — сколько пишет за ход', d: 300, cfg: true },
+  // optsCtx/optsAns — это САМИ «Опции»: их число живёт в своей колонке и не дублируется соседней
+  { g: 'Опции API', node: '.node-opts', input: '.prm:nth-of-type(2) input', t: 'Контекст — лимит всего промта', d: 4096, tempInput: '.prm:nth-of-type(3) input', optsCtx: true },
+  { g: 'Опции API', node: '.node-opts', input: '.prm:nth-of-type(1) input', t: 'Ответ модели — сколько пишет за ход', d: 300, cfg: true, optsAns: true },
   // Ответ в игре
   { g: 'Чат', node: '.node-chat, .node-netgame, .node-telegram', k: 'chat.reply', t: 'Ответ модели (если в «Опциях» не задан)', d: 512, t0: null, inhOptsAns: true },
   // Правка по фидбеку (💬 «Переписать» и «✎ Точечно») — СВОЙ запрос: свои токены на ответ, свой
@@ -3520,6 +3521,14 @@ function soulNoteBind(el) {
     soulNoteSync(el);
   };
   sec.querySelector('.soul-note-text').addEventListener('change', (e) => push('.note-text', e.target.value));
+  const snTr = sec.querySelector('.soul-note-tr');
+  if (snTr) snTr.addEventListener('click', async (e) => {
+    const ta = sec.querySelector('.soul-note-text');
+    const prev = e.target.closest('.tr-b-prev');
+    if (prev) { e.stopPropagation(); trTogglePreview(ta, prev); return; }
+    const repl = e.target.closest('.tr-b-repl');
+    if (repl) { e.stopPropagation(); await trDoReplace(ta, repl); ta.dispatchEvent(new Event('change')); }   // change → текст уедет в саму ноду
+  });
   sec.querySelector('.soul-note-turns').addEventListener('change', (e) => push('.note-turns', e.target.value));
   sec.querySelector('.soul-note-reset').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -3586,6 +3595,7 @@ function buildSoulNode() {
       <div class="soul-sec soul-note-sec" hidden>
         <div class="soul-sec-hd">📌 Заметка автора <span class="soul-note-hint">(рычаг «прямо сейчас», рядом с законами)</span></div>
         <textarea class="field ta soul-note-text" rows="2" spellcheck="false" placeholder="Стража теряет терпение; толпа начинает расходиться…"></textarea>
+        <div class="tr-btns soul-note-tr"><button class="tr-b tr-b-prev" type="button" title="Предпросмотр перевода EN→RU (повторно — оригинал)">RU</button><button class="tr-b tr-b-repl" type="button" title="Перевести RU→EN и заменить текст — модель понимает английский точнее">EN</button></div>
         <div class="soul-note-row">
           <label class="soul-opt" title="Через сколько ответов заметка сама погаснет. 0 — висит всегда">действует<input class="field num soul-note-turns" type="number" min="0" max="99" value="0" spellcheck="false">ходов</label>
           <span class="soul-note-left" title="Сколько ходов осталось">—</span>
@@ -5506,6 +5516,7 @@ function buildNoteNode() {
     <div class="node-body note-body">
       <div class="note-hint">Короткая заметка ведущего — впрыскивается ВНУТРЬ истории (плашка «Заметка автора», по умолчанию глубина 1: перед последней репликой). Оттуда влияет сильнее всего: одна фраза «стража теряет терпение» работает лучше абзаца в правилах. Глубину меняй в самой плашке комплитера.</div>
       <textarea class="field ta note-text" rows="3" spellcheck="false" placeholder="Сейчас сцена должна нагнетаться: стража теряет терпение, толпа расходится…"></textarea>
+      <div class="tr-btns note-tr"><button class="tr-b tr-b-prev" type="button" title="Предпросмотр перевода EN→RU (повторно — оригинал)">RU</button><button class="tr-b tr-b-repl" type="button" title="Перевести RU→EN и заменить текст — модель понимает английский точнее">EN</button></div>
       <div class="note-row">
         <label class="note-opt" title="Через сколько ответов заметка сама погаснет. 0 — висит всегда, пока не сотрёшь">действует<input class="field num note-turns" type="number" min="0" max="99" value="0" spellcheck="false"> ходов</label>
         <span class="note-left" title="Сколько ходов осталось">—</span>
@@ -5525,6 +5536,16 @@ function buildNoteNode() {
   };
   el._notePaint = paint;
   el.querySelector('.note-text').addEventListener('change', () => { el._noteLeft = null; paint(); persistCurrentGraph(); });
+  // Перевод заметки: RU — обратимый предпросмотр, EN — настоящая замена текста. После замены шлём
+  // change, чтобы правка ушла в снимок и в зеркало заметки внутри «Души».
+  const noteTr = el.querySelector('.note-tr');
+  if (noteTr) noteTr.addEventListener('click', async (e) => {
+    const ta = el.querySelector('.note-text');
+    const prev = e.target.closest('.tr-b-prev');
+    if (prev) { e.stopPropagation(); trTogglePreview(ta, prev); return; }
+    const repl = e.target.closest('.tr-b-repl');
+    if (repl) { e.stopPropagation(); await trDoReplace(ta, repl); ta.dispatchEvent(new Event('change')); }
+  });
   el.querySelector('.note-turns').addEventListener('change', () => { el._noteLeft = null; paint(); persistCurrentGraph(); });
   el.querySelector('.note-reset').addEventListener('click', (e) => { e.stopPropagation(); el._noteLeft = null; paint(); persistCurrentGraph(); });
   paint();
@@ -7225,6 +7246,14 @@ ${CRITIC_RULE_OFFRAMP}
 Pacing: a brief beat of hesitation is human and fine. The failure is SUSTAINED stalling — check the recent lines: if {{char}} or an NPC keeps dodging a decision without committing, that's a fail. On a fail, name the motivated action they should take and push toward it.
 
 Calibrate to the sheet: a timid or self-destructive agent behaving that way is CORRECT. You strip the model's assistant-like deference — you do NOT impose generic boldness. Harm, conflict and refusal toward {{user}} are fine when in character. Judge secondary characters and NPCs by this same standard, by their own nature and role in the scene.`;
+// Вступление для галочки «проверка по списку» (экспериментальное). Стандартное начало велит критику
+// «вычислить одну вещь» — и он выхватывает первое попавшееся нарушение, а до остальных пунктов не
+// доходит. Здесь он обязан пройти КАЖДЫЙ пункт по очереди и отчитаться, и только потом судить.
+const CRITIC_CHECKLIST_HEAD = `You are the consistency core of a simulation engine. You are NOT an assistant and you are NOT talking to anyone — there is no user to satisfy, no one to be polite to. You judge whether the agent {{char}} — and any secondary character or NPC the reply portrays — acted according to their own motivation, drives, values and psychology, given their sheet and the situation.
+
+WORK AS A CHECKLIST, NOT AS AN IMPRESSION. Go through EVERY rule given to you below — the list that follows, and any extra rule blocks appended after it (multiplayer, dice, writing freshness) — one by one, in order. Do not stop at the first problem you notice and do not skip a rule because the reply "feels fine": a rule you did not examine is a rule you failed to check.
+
+Report the pass in the CHECKS section of the answer format, then judge. If even one rule fails, the reply is rejected and your reason must name that rule and quote the offending line. If all pass, approve — do not invent a flaw to look thorough, and do not reject for anything outside these rules.`;
 const CRITIC_MULTIPLAYER_BLOCK = `MULTIPLAYER — SEVERAL LIVING PLAYERS SHARE THIS GAME.
 {{user}} is not one person: it is a compiled turn of several real people, one line per player ("Persona: action"). Each player is a separate human being with their own character sheet, their own state values and their own memory. Never collapse them into one.
 Reject the reply if it:
@@ -7235,6 +7264,14 @@ Reject the reply if it:
 — leaks knowledge between players: lets one know what only another saw, said apart from the group, or merely thought;
 — flattens them: hands every player the same reaction, tone or outcome instead of judging each by their own sheet and state.
 Keep the players apart in every beat: name who does what, and let outcomes differ from person to person.`;
+// Галочка «проверка по списку» меняет ТОЛЬКО вступление промта — список пунктов и всё, что ниже
+// (в том числе правки самого пользователя и мультиплеерный блок), остаётся как есть.
+function critPromptApplyMode(text, checklist) {
+  const src = String(text || '');
+  if (!checklist) return src;
+  const i = src.indexOf('\n\n');
+  return CRITIC_CHECKLIST_HEAD + (i >= 0 ? src.slice(i) : '');
+}
 const CRITIC_DEFAULT_PROMPT_MP = CRITIC_DEFAULT_PROMPT + '\n\n' + CRITIC_MULTIPLAYER_BLOCK;
 const CRITIC_FORMAT = `Reply STRICTLY in this format, in English, nothing else:
 REASON: <1–2 sentences: in character or not and why, with evidence if possible>
@@ -7243,6 +7280,17 @@ VERDICT: ACCEPT
 REASON: <2–3 sentences: what exactly is wrong, and what the rewrite must change — the motivated action or line it should land on>
 VERDICT: REJECT
 LESSON: <a short GENERAL rule to remember — about THIS CHARACTER specifically OR about roleplay conduct in general (narration, pacing, tone, honesty, anti-sycophancy, how scenes are handled) — so the mistake does not recur; or NONE if this was a one-off not worth remembering>`;
+// Формат ответа под галочку «проверка по списку»: тот же REASON/VERDICT/LESSON, но с коротким
+// отчётом впереди. Строки нарочно скупые (цитата только у провала) — длинный отчёт съедал лимит
+// токенов, ответ обрывался до VERDICT, а разбор без VERDICT считается «принято».
+const CRITIC_FORMAT_CHECKLIST = `Reply STRICTLY in this format, in English, nothing else:
+CHECKS:
+<rule name> — PASS
+<rule name> — FAIL — "<the exact line from the reply that fails it>"
+(one line per rule you were given, in order; quote ONLY on FAIL, keep it to a few words)
+REASON: <1–3 sentences: what is wrong and what the rewrite must land on — or why it is in character>
+VERDICT: ACCEPT or REJECT
+LESSON: <a short GENERAL rule to remember so the mistake does not recur; or NONE>`;
 let criticBusy = false;
 
 function buildCriticNode() {
@@ -7261,6 +7309,8 @@ function buildCriticNode() {
       <label class="crit-opt crit-wide">Рассуждение критика<span class="crit-reason-mount"></span></label>
       <label class="crit-opt" title="Сколько предыдущих реплик показать критику как ситуацию">реплик в контекст<input class="crit-ctx" value="6"></label>
       <label class="crit-opt crit-wide">Промт критика <span class="crit-sp-hint">(его характер и на что смотреть)</span><button class="crit-prompt-reset" data-mode="single" type="button" title="Дефолтный промт для игры один на один. Текущий текст не пропадёт — вернуть его можно кнопкой «↩ прежний»">↺ дефолт: сингл</button><button class="crit-prompt-reset" data-mode="mp" type="button" title="Дефолтный промт для сетевой игры: то же ядро плюс проверки по нескольким игрокам — не сливать их, не терять, не путать имена">↺ дефолт: мультиплеер</button><button class="crit-prompt-restore" type="button" title="Вернуть промт, который был до нажатия «↺ дефолт»" hidden>↩ прежний</button><textarea class="field ta crit-prompt" rows="7" spellcheck="false"></textarea></label>
+      <label class="crit-check" title="Экспериментально: критик обязан пройти КАЖДЫЙ пункт своих правил по очереди и отчитаться построчно (PASS/FAIL + цитата), а не выхватывать первое попавшееся нарушение. Меняется только вступление промта — сам список пунктов и твои правки остаются"><input type="checkbox" class="crit-checklist"> Проверка по списку</label>
+      <div class="crit-odesc">Пункты проверяются по одному, с построчным отчётом. Работает и в сингле, и в сетевой игре.</div>
       <div class="crit-sec">
         <div class="crit-sec-hd">Рамка «нет пользователя» <span class="crit-sp-hint">(снимает подлиз-фильтр)</span></div>
         <label class="crit-check"><input type="checkbox" class="crit-sys" checked> Кейс в роли <b>system</b></label>
@@ -7368,6 +7418,8 @@ function buildCriticNode() {
     }
   });
   // «Ядерный режим» гасит верхние два пункта (кейс в system + префилл) — они в него уже входят.
+  const critChecklistChk = el.querySelector('.crit-checklist');   // «Проверка по списку»: состояние живёт в снимке
+  if (critChecklistChk) { critChecklistChk.closest('label').addEventListener('pointerdown', (e) => e.stopPropagation()); critChecklistChk.addEventListener('change', () => persistCurrentGraph()); }
   const nuc = el.querySelector('.crit-nuclear');
   const syncNuclear = () => { const on = nuc.checked; el.querySelectorAll('.crit-sys, .crit-prefill').forEach((c) => { c.disabled = on; const lab = c.closest('.crit-check'); if (lab) lab.classList.toggle('crit-off', on); }); };
   nuc.addEventListener('change', syncNuclear); syncNuclear();
@@ -7417,7 +7469,7 @@ async function criticCheckConsistency(critic) {
     const mctx = chat ? chatNames(chat) : {};
     // Сверяем уроки НЕ только между собой, но и с ПРОМТОМ критика: урок, противоречащий его директивам
     // (напр. «будь мягче» против анти-подлиза), — тоже противоречие, иначе блокнот тихо ломает промт.
-    const promptText = substituteMacros((trSafeVal(critic.querySelector('.crit-prompt')) || CRITIC_DEFAULT_PROMPT).trim(), mctx);
+    const promptText = critPromptApplyMode(substituteMacros((trSafeVal(critic.querySelector('.crit-prompt')) || CRITIC_DEFAULT_PROMPT).trim(), mctx), !!((critic.querySelector('.crit-checklist') || {}).checked));   // галочка «проверка по списку» меняет вступление
     const sys = 'You maintain the rulebook of a roleplay critic' + (mctx.char ? ' for the character ' + mctx.char : '')
       + '. Below are the critic\'s STANDING DIRECTIVES (its main prompt — authoritative, cannot be changed) and the current list of short rules it has collected. Rules may DUPLICATE or CONTRADICT each other, OR contradict the standing directives. '
       + 'Return a CLEANED, CONSISTENT list: merge duplicates, resolve contradictions (keep the more specific / correct rule, drop the weaker one), and DROP or fix any rule that fights the standing directives, lightly reword only for clarity. '
@@ -7632,9 +7684,9 @@ async function criticJudge(node, critic, opts) {
       const st = (typeof stateNodeForChat === 'function') ? stateNodeForChat(node) : null;   // «Состояние» этого чата — Критик следит, что уровни отыграны
       if (st && typeof stateLinesText === 'function') stateBlk = stateLinesText(st, node._msgs || []);
     } catch (e) { /* улики опциональны */ }
-    const promptText = (trSafeVal(critic.querySelector('.crit-prompt')) || CRITIC_DEFAULT_PROMPT).trim();
+    const promptText = critPromptApplyMode((trSafeVal(critic.querySelector('.crit-prompt')) || CRITIC_DEFAULT_PROMPT).trim(), !!((critic.querySelector('.crit-checklist') || {}).checked));   // галочка «проверка по списку» меняет вступление
     const rndExtra = (typeof randomCriticBlock === 'function') ? randomCriticBlock(node) : '';   // модуль ноды «Рандомайзер» (живёт ТАМ, а не в критике)
-    const sys = substituteMacros(promptText, mctx) + (rndExtra ? '\n\n' + substituteMacros(rndExtra, mctx) : '') + '\n\n' + CRITIC_FORMAT;
+    const sys = substituteMacros(promptText, mctx) + (rndExtra ? '\n\n' + substituteMacros(rndExtra, mctx) : '') + '\n\n' + (((critic.querySelector('.crit-checklist') || {}).checked) ? CRITIC_FORMAT_CHECKLIST : CRITIC_FORMAT);
     let userMsg = '';
     const lessons = (critic._lessons || []).slice(-8);   // блокнот критика — прошлые уроки, чтобы не повторять
     if (lessons.length) userMsg += 'NOTES YOU FLAGGED BEFORE for this character (watch for these patterns repeating):\n' + lessons.map((s) => '— ' + s).join('\n') + '\n\n';
@@ -7848,10 +7900,10 @@ async function tgCriticJudge(el, critic, api, convo, replyText, compEl, mctx) {
       evidence = compEl ? criticEvidence(compEl, msgs) : '';
       if (el.classList.contains('node-netgame') && typeof tgNgStateBlock === 'function') stateBlk = tgNgStateBlock(el) || '';
     } catch (e) { /* улики опциональны */ }
-    const promptText = (trSafeVal(critic.querySelector('.crit-prompt')) || CRITIC_DEFAULT_PROMPT).trim();
+    const promptText = critPromptApplyMode((trSafeVal(critic.querySelector('.crit-prompt')) || CRITIC_DEFAULT_PROMPT).trim(), !!((critic.querySelector('.crit-checklist') || {}).checked));   // галочка «проверка по списку» меняет вступление
     const ngExtra = el.classList.contains('node-netgame') ? ('\n\n' + substituteMacros(NETGAME_CRITIC_DIRECTIVES, mctx)) : '';   // директивы «игрок не всесилен» — ТОЛЬКО в сетевой игре
     const rndExtra2 = (typeof randomCriticBlock === 'function') ? randomCriticBlock(el) : '';    // модуль ноды «Рандомайзер»
-    const sys = substituteMacros(promptText, mctx) + ngExtra + (rndExtra2 ? '\n\n' + substituteMacros(rndExtra2, mctx) : '') + '\n\n' + CRITIC_FORMAT;
+    const sys = substituteMacros(promptText, mctx) + ngExtra + (rndExtra2 ? '\n\n' + substituteMacros(rndExtra2, mctx) : '') + '\n\n' + (((critic.querySelector('.crit-checklist') || {}).checked) ? CRITIC_FORMAT_CHECKLIST : CRITIC_FORMAT);
     let userMsg = '';
     const lessons = (critic._lessons || []).slice(-8);
     if (lessons.length) userMsg += 'NOTES YOU FLAGGED BEFORE for this character (watch for these patterns repeating):\n' + lessons.map((s) => '— ' + s).join('\n') + '\n\n';
@@ -7890,6 +7942,35 @@ async function tgCriticLearn(el, feedback, oldReply, newReply) {
 // Мотор — тот же telegramReply с opts.directive/editLast (перекат вердиктом впереди).
 // opts.soft — мягкая точечная правка («✎ Точечно»): менять только названное, остальное не трогать.
 // Галочка «✎ править на месте» решает доставку: editMessageText вместо «удалить + новое сообщение».
+// Что именно изменила точечная правка — подчёркиваем, чтобы игрок увидел разницу, а не гадал.
+// Сравниваем по словам: общий кусок оставляем как есть, новые куски заворачиваем в <u>…</u>
+// (Rich Messages принимают markdown с html-тегами, как <details>). Разбивка по пробелам —
+// нам нужны не идеальные диффы, а подсветка того, что реально переписали.
+function tgUnderlineDiff(oldText, newText) {
+    const A = String(oldText || '').split(/(\s+)/);
+    const B = String(newText || '').split(/(\s+)/);
+    if (!A.length || !B.length) return String(newText || '');
+    // самый длинный общий подсписок (обычный LCS — тексты короткие, реплика чата)
+    const n = A.length, m = B.length;
+    if (n * m > 400000) return String(newText || '');            // слишком длинно — не подсвечиваем
+    const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+    for (let i = n - 1; i >= 0; i--) {
+        for (let j = m - 1; j >= 0; j--) dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+    let i = 0, j = 0, out = '', buf = '';
+    const flush = () => { if (buf.trim()) out += '<u>' + buf + '</u>'; else out += buf; buf = ''; };
+    while (i < n && j < m) {
+        if (A[i] === B[j]) { flush(); out += B[j]; i++; j++; }
+        else if (dp[i + 1][j] >= dp[i][j + 1]) i++;              // слово выкинули
+        else { buf += B[j]; j++; }                               // слово добавили/заменили
+    }
+    while (j < m) { buf += B[j]; j++; }
+    flush();
+    // Соседние подчёркивания склеиваем: «<u>медленно</u> <u>расходится</u>» читается рвано.
+    return out.replace(/<\/u>(\s+)<u>/g, '$1');
+}
+const FB_MARK = '\n\n— _отработано по фидбеку_';   // только для чата игроков; в историю модели не идёт
+
 async function tgFeedbackRewrite(el, note, opts) {
   opts = opts || {};
   note = String(note || '').trim();
@@ -7902,7 +7983,9 @@ async function tgFeedbackRewrite(el, note, opts) {
   let last = '';   // последний ответ бота
   for (let i = (convo.msgs || []).length - 1; i >= 0; i--) { if (convo.msgs[i].role === 'char') { last = convo.msgs[i].text || ''; break; } if (convo.msgs[i].role === 'user') break; }
   if (!last) { el._setStatus('нет ответа бота для правки', 'err'); return; }
-  const inPlace = !!(el.querySelector('.tg-fb-inplace') || {}).checked;   // галочка рядом с кнопками фидбека
+  // Точечная правка ВСЕГДА идёт на месте: она меняет пару слов, и сносить ради этого сообщение
+  // (а с ним и голосовое) незачем — игроки увидели бы подмену. Полная правка слушается галочки.
+  const inPlace = !!opts.soft || !!(el.querySelector('.tg-fb-inplace') || {}).checked;
   if (inPlace && (!convo.lastSent || convo.lastSent.messageId == null || convo.lastSent.voice)) el._setStatus('на месте править нельзя (голос/нет id) — правка уйдёт новым сообщением', '');
   const thread = tgOutThread(el);   // заперта тема → строго она
   await telegramReply(el, token, chatId, null, thread, { directive: note, editLast: true, rejectedText: last, softEdit: !!opts.soft, editInPlace: inPlace });
@@ -9891,7 +9974,7 @@ async function telegramSendVoice(el, token, chatId, text, threadId, opts) {
       ? await tgSendAudioFile(token, chatId, r.audioB64, 'voice', 'audio/ogg', 'voice.ogg', threadId, mk(true))
       : await tgSendAudioFile(token, chatId, r.audioB64, 'audio', 'audio/wav', 'voice.wav', threadId, mk(true));
   }
-  if (sent && sent.ok) return true;
+  if (sent && sent.ok) return { ok: true, messageId: ((sent.result || {}).message_id != null ? sent.result.message_id : null) };   // id нужен, чтобы правка по фидбеку могла снести это голосовое
   el._setStatus('⚠ голос не ушёл: ' + ((sent && sent.description) || 'ошибка') + ' — шлю текстом', 'err');
   return false;
 }
@@ -10677,8 +10760,8 @@ function tgFeed(el, text, dir, name, opts) {
         + '<button class="tg-act" data-act="fb" type="button" title="Фидбек: правка по замечанию — точечно или заново (кнопки под лентой)">⚖</button>'
         + '<button class="tg-act" data-act="ru" type="button" title="Показать по-русски (предпросмотр, обратимо)">🌐</button>'
       + '</span>' : '')
-    + '</span>'
-    + '<button class="tg-line-x" type="button" title="Удалить реплику">✕</button>';
+    + '<button class="tg-line-x" type="button" title="Удалить реплику">✕</button>'   // ✕ ВНУТРИ пузыря, в его правом верхнем углу — одинаково у реплик ИИ и игроков
+    + '</span>';
   const dropTurn = () => { const mid = row.dataset.msgId != null ? Number(row.dataset.msgId) : null; if (mid != null && Array.isArray(el._ngTurn)) { const i = el._ngTurn.findIndex((t) => t.msgId === mid); if (i >= 0) el._ngTurn.splice(i, 1); } if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); };
   if (cand) {   // ☑ выбрать / ☐ снять — членство реплики в ходе
     const sb = row.querySelector('.tg-sel-box');
@@ -12311,11 +12394,24 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
     // Галочка «✎ править на месте»: правим ТО ЖЕ сообщение (editMessageText) — в чате ничего нового не
     // всплывает. Без галочки (как было всегда) — прежнее сносим и шлём новым, чтобы игроки увидели правку.
     if (opts.editInPlace) {
-      const edR = await tgEditPretty(el, token, chatId, convo.lastSent.messageId, outText, !!convo.lastSent.rich, kbR ? { reply_markup: kbR } : undefined);
+      // Игрокам уходит текст с пометкой; при точечной правке — с подчёркнутыми изменениями.
+      // В истории модели (convo.msgs) остаётся чистый ответ: ни пометки, ни разметки диффа.
+      const shown = (opts.softEdit && opts.rejectedText) ? tgUnderlineDiff(opts.rejectedText, outText) : outText;
+      const edR = await tgEditPretty(el, token, chatId, convo.lastSent.messageId, shown + FB_MARK, !!convo.lastSent.rich, kbR ? { reply_markup: kbR } : undefined);
       if (edR && edR.ok) {
         convo.lastSent = Object.assign({}, convo.lastSent, { thread, voice: false, kb: !!kbR });
-        tgFeed(el, outText, 'out', cn, { kb: kbR, ctx: tgLastCtx(convo) });
+        tgFeed(el, shown, 'out', cn, { kb: kbR, ctx: tgLastCtx(convo) });
         el._setStatus('✎ ' + what + ' на месте', 'ok');
+        // «⚖ Править» + галочка «озвучивать правку»: прежнее голосовое сносим и озвучиваем заново —
+        // заменить голосовое редактированием Telegram не позволяет. Точечную правку не переозвучиваем:
+        // уже созданное голосовое остаётся на месте (по просьбе — иначе игроки заметят подмену).
+        const fbVoice = !!(el.querySelector('.tg-fb-voice') || {}).checked;
+        if (fbVoice && !opts.softEdit) {
+          const oldVoice = convo.lastSent.voiceId;
+          if (oldVoice != null) { await tgCall(token, 'deleteMessage', { chat_id: chatId, message_id: oldVoice }); convo.lastSent.voiceId = null; }
+          const vres = await telegramSendVoice(el, token, chatId, spokenText, thread);
+          if (vres) convo.lastSent.voiceId = (vres && vres.messageId) || null;
+        }
       } else el._setStatus('✗ правка на месте: ' + ((edR && edR.description) || 'ошибка'), 'err');
       if (r && r.ok) { noteTick(); if (!ngMd) maybeUpdateMemory(el); maybeUpdateChronicle(el); }
       if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
@@ -12334,7 +12430,7 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
     // В ленте НОДЫ показываем то же, что ушло игрокам (outText: перевод + сводка «Состояния» + разметка) —
     // лента = предпросмотр Telegram, а не сырой вывод модели. Оригинал модели виден в Консоли (>_).
     if (sentVoice) {
-      convo.lastSent = { messageId: null, thread, voice: true };   // голосовое править нельзя
+      convo.lastSent = { messageId: null, voiceId: (sentVoice && sentVoice.messageId) || null, thread, voice: true };   // голосовое править нельзя, но можно снести и переозвучить
       tgFeed(el, '🔊 ' + outText, 'out', cn);                    // ушло голосовым — в ленте то, что озвучено
       el._setStatus('@' + (el._botName || 'бот') + ' · слушаю…', 'ok');
     } else {
@@ -13204,8 +13300,9 @@ function buildTelegramNode() {
           <input class="field tg-fb-note" type="text" spellcheck="false" placeholder="замечание к последнему ответу бота…">
           <button class="btn ghost tg-fb-tr" type="button" data-dir="en" title="Перевести своё замечание на английский (замена текста в поле) — модель понимает его точнее">EN</button>
           <button class="btn ghost tg-fb-tr" type="button" data-dir="ru" title="Перевести своё замечание на русский (замена текста в поле)">RU</button>
-          <button class="btn ghost tg-fb-soft" type="button" title="Мягкая точечная правка: модель исправляет ТОЛЬКО то, что ты назвал, остальной текст оставляет слово в слово (те же события, тот же объём). Когда надо чуть-чуть подрихтовать">✎ Точечно</button>
-          <button class="btn ghost tg-fb-go" type="button" title="Переписать заново: ответ должен заметно измениться — другое решение, действие или чувство персонажа, а не переформулировка того же">⚖ Править</button>
+          <button class="btn ghost tg-fb-go" type="button" title="Отправить замечание (Enter). Правка приходит в чат по выбранному ниже режиму">⚖ Править</button>
+          <label class="tg-aud-opt tg-fb-soft-opt" title="Снято — ответ переписывается заново: другое решение, действие или чувство персонажа. Поставлено — мягкая точечная правка: модель исправляет ТОЛЬКО названное, остальной текст оставляет слово в слово"><input type="checkbox" class="tg-fb-soft"> ✎ точечно (менять только названное)</label>
+          <label class="tg-aud-opt tg-fb-voice-opt" title="Правка «⚖ Править» доставляется незаметно: текст исправляется на месте, прежнее голосовое сносится, новое уходит следом. Без галочки голос после правки не трогается"><input type="checkbox" class="tg-fb-voice"> 🔊 озвучивать правку</label>
           <label class="tg-aud-opt tg-fb-place" title="Снято — прежнее сообщение бота удаляется, правка приходит НОВЫМ сообщением (игроки видят, что ход изменился). Поставлено — сообщение правится НА МЕСТЕ, в чате ничего нового не всплывает (голосовое на месте править нельзя)"><input type="checkbox" class="tg-fb-inplace"> ✎ править на месте (не удалять)</label>
         </div>
       </div>
@@ -13257,7 +13354,7 @@ function buildTelegramNode() {
   const localChk = el.querySelector('.tg-local');     // 🔌 локальный режим (без Telegram)
   const fbNote = el.querySelector('.tg-fb-note');      // ручной фидбек: замечание
   const fbGo = el.querySelector('.tg-fb-go');          // ручной фидбек: переписать последний ответ заново
-  const fbSoft = el.querySelector('.tg-fb-soft');      // ручной фидбек: мягкая точечная правка (менять только названное)
+  const fbSoft = el.querySelector('.tg-fb-soft');      // ГАЛОЧКА «точечно»: правка меняет только названное
   const fbInPlace = el.querySelector('.tg-fb-inplace');// доставка правки: на месте (editMessageText) вместо «удалить + новое»
   const audProbRow = el.querySelector('.tg-aud-prob-row');   // «доля голосовых» — только для режима «комбинировать»
   const clearBtn = el.querySelector('.tg-clear');
@@ -13455,15 +13552,23 @@ function buildTelegramNode() {
   // правка: меняем только названное, остальное слово в слово) и «⚖ Править» (перекат заново, ответ
   // должен заметно отличаться). Галочка рядом решает ДОСТАВКУ: на месте или удалить + новое.
   fbNote.addEventListener('pointerdown', (e) => e.stopPropagation());
+  // Enter в поле замечания = «⚖ Править» (переписать заново), Shift+Enter = «✎ Точечно» (мягкая правка).
+  // Раньше отправить можно было только мышью по кнопке — писать замечание и тянуться к кнопке неудобно.
+  fbNote.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    e.preventDefault(); e.stopPropagation();
+    if (!(fbNote.value || '').trim()) return;               // пустое замечание отправлять нечего
+    if (fbGo && !fbGo.disabled) fbGo.click();               // режим задаёт галочка «точечно», отдельной клавиши не нужно
+  });
   if (fbInPlace) {
     fbInPlace.closest('label').addEventListener('pointerdown', (e) => e.stopPropagation());
     fbInPlace.addEventListener('change', persist);
   }
-  const fbRun = async (btn, soft) => {
+  const fbRun = async (btn) => {
     if (btn.disabled) return;   // защита от повторного клика, пока идёт перекат
-    const both = [fbGo, fbSoft].filter(Boolean);
-    both.forEach((b) => { b.disabled = true; });
-    try { await tgFeedbackRewrite(el, fbNote.value, { soft }); fbNote.value = ''; } finally { both.forEach((b) => { b.disabled = false; }); }
+    const soft = !!(fbSoft && fbSoft.checked);   // мягкая правка или переписать заново — решает галочка
+    btn.disabled = true;
+    try { await tgFeedbackRewrite(el, fbNote.value, { soft }); fbNote.value = ''; } finally { btn.disabled = false; }
   };
   // Перевод замечания прямо в поле (как RU/EN в окне фидбека сингла): текст заменяется, никуда не уходит.
   el.querySelectorAll('.tg-fb-tr').forEach((b) => {
@@ -13482,10 +13587,10 @@ function buildTelegramNode() {
     });
   });
   fbGo.addEventListener('pointerdown', (e) => e.stopPropagation());
-  fbGo.addEventListener('click', (e) => { e.stopPropagation(); fbRun(fbGo, false); });
+  fbGo.addEventListener('click', (e) => { e.stopPropagation(); fbRun(fbGo); });
   if (fbSoft) {
-    fbSoft.addEventListener('pointerdown', (e) => e.stopPropagation());
-    fbSoft.addEventListener('click', (e) => { e.stopPropagation(); fbRun(fbSoft, true); });
+    fbSoft.closest('label').addEventListener('pointerdown', (e) => e.stopPropagation());
+    fbSoft.addEventListener('change', persist);   // выбор режима переживает перезаход
   }
   // 🗑 Очистить историю — стереть лог и контекст всех бесед (память Души НЕ трогаем — это отдельная система).
   clearBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -13930,6 +14035,18 @@ function renderTokPanel(ov) {
     const ansPh = '';
     const ansCls = inh ? ' inh' : '';
     const ansTitle = inh ? ' title="Это число сейчас берётся из «Опций». Впишешь своё — оно перебьёт «Опции»."' : '';
+    // Сами «Опции»: их число — это и есть источник для всех остальных строк, поэтому показываем его
+    // РОВНО в своей колонке. Контекст — в «контекст», ответ — в «ответ», соседняя клетка пустая:
+    // раньше одно и то же 32k стояло в строке дважды и читалось как «три разных лимита».
+    if (row.r.optsCtx || row.r.optsAns) {
+      const поле = '<input class="con-tok-i" type="number" min="0" data-g="' + gi + '" data-r="' + ri + '" value="' + escapeConsole(tokRowValue(row)) + '"'
+        + ' title="' + escapeConsole(row.r.optsCtx ? 'Общий контекст цепочки: отсюда его берут все подсистемы, у которых нет своего' : 'Сколько модель пишет за ход, если у подсистемы не задано своё') + '">';
+      return '<label class="con-tok-row" data-rid="' + gi + '-' + ri + '">' + tokRowTitle(row)
+        + (row.r.optsAns ? поле : '<span class="con-tok-slot"></span>')
+        + '<span class="con-tok-u">' + escapeConsole(unit) + '</span>'
+        + (row.r.optsCtx ? поле : '<span class="con-tok-slot"></span>')
+        + tmp + '</label>';
+    }
     return '<label class="con-tok-row" data-rid="' + gi + '-' + ri + '">' + tokRowTitle(row)
       + '<input class="con-tok-i' + ansCls + '" type="number" min="0"' + ansTitle + ' data-g="' + gi + '" data-r="' + ri + '" value="' + escapeConsole(ansVal) + '" placeholder="' + escapeConsole(ansPh) + '">'
       + '<span class="con-tok-u">' + escapeConsole(unit) + '</span>' + def + tmp + '</label>';
@@ -17227,6 +17344,7 @@ function nodeValues(el, type) {
     sysRole: (el.querySelector('.crit-sys') || {}).checked !== false,
     prefill: (el.querySelector('.crit-prefill') || {}).checked !== false,
     nuclear: !!(el.querySelector('.crit-nuclear') || {}).checked,
+    checklist: !!(el.querySelector('.crit-checklist') || {}).checked,   // «Проверка по списку» — экспериментальное вступление промта
     tally: !!(el.querySelector('.crit-tally') || {}).checked,   // Счетовод: значения считает отдельный проход
     lessons: Array.isArray(el._lessons) ? el._lessons.slice() : [],
   };
@@ -17286,7 +17404,7 @@ function nodeValues(el, type) {
     lastChatId: (el._lastChatId != null ? el._lastChatId : null), // активная беседа (раньше угадывалась «по длине»)
     lastThreadId: (el._lastThreadId != null ? el._lastThreadId : null),
     ngTurnCount: el._ngTurnCount || 0,
-    scene: el._scene || null, cast: (el._cast || []).map((p) => ({ id: p.id, name: p.name, color: p.color, muted: !!p.muted })), topicFilter: (el._topicFilter != null ? el._topicFilter : null), topicPick: (el._topicPick != null ? el._topicPick : null), topics: el._topics || {}, chatFilter: (el._chatFilter != null ? el._chatFilter : null), chats: el._chats || {}, hideMuted: !!((el.querySelector('.tg-hide-muted') || {}).checked), ngBatch: (el.querySelector('.tg-ng-batch') || {}).value || '', ngTally: !!((el.querySelector('.tg-ng-tally') || {}).checked), noSeed: !!((el.querySelector('.tg-noseed') || {}).checked), fbInPlace: !!((el.querySelector('.tg-fb-inplace') || {}).checked), ngStates: el._ngStates || {}, ngTurn: (el._ngTurn || []).map((t) => ({ authorId: t.authorId, persona: t.persona, text: t.text, msgId: t.msgId })), convos: el._convos || {} };   // ngTurn — ход в сборке: без него написанное до старта пропадало   // convos — история переписки (chat_id→msgs), переживает перезапуск. Токен НЕ в граф (секрет) — он в store; связи участник↔персонаж сериализуются сами через portKey; ngBatch — «каждые N ходов» для Душ сетевой игры
+    scene: el._scene || null, cast: (el._cast || []).map((p) => ({ id: p.id, name: p.name, color: p.color, muted: !!p.muted })), topicFilter: (el._topicFilter != null ? el._topicFilter : null), topicPick: (el._topicPick != null ? el._topicPick : null), topics: el._topics || {}, chatFilter: (el._chatFilter != null ? el._chatFilter : null), chats: el._chats || {}, hideMuted: !!((el.querySelector('.tg-hide-muted') || {}).checked), ngBatch: (el.querySelector('.tg-ng-batch') || {}).value || '', ngTally: !!((el.querySelector('.tg-ng-tally') || {}).checked), noSeed: !!((el.querySelector('.tg-noseed') || {}).checked), fbInPlace: !!((el.querySelector('.tg-fb-inplace') || {}).checked), fbSoft: !!((el.querySelector('.tg-fb-soft') || {}).checked), fbVoice: !!((el.querySelector('.tg-fb-voice') || {}).checked), ngStates: el._ngStates || {}, ngTurn: (el._ngTurn || []).map((t) => ({ authorId: t.authorId, persona: t.persona, text: t.text, msgId: t.msgId })), convos: el._convos || {} };   // ngTurn — ход в сборке: без него написанное до старта пропадало   // convos — история переписки (chat_id→msgs), переживает перезапуск. Токен НЕ в граф (секрет) — он в store; связи участник↔персонаж сериализуются сами через portKey; ngBatch — «каждые N ходов» для Душ сетевой игры
   if (type === 'state') return {
     preset: (el.querySelector('.st-preset') || {}).value || 'none',
     prompt: (el.querySelector('.st-prompt') || {}).value || '',
@@ -17397,6 +17515,7 @@ function applyValues(el, type, d) {
     const cs = el.querySelector('.crit-sys'); if (cs && d.sysRole != null) cs.checked = !!d.sysRole;
     const cp = el.querySelector('.crit-prefill'); if (cp && d.prefill != null) cp.checked = !!d.prefill;
     const cn = el.querySelector('.crit-nuclear'); if (cn && d.nuclear != null) { cn.checked = !!d.nuclear; cn.dispatchEvent(new Event('change')); }
+    const ccl = el.querySelector('.crit-checklist'); if (ccl && d.checklist != null) ccl.checked = !!d.checklist;
     const ct = el.querySelector('.crit-tally'); if (ct && d.tally != null) ct.checked = !!d.tally;   // Счетовод
     if (Array.isArray(d.lessons)) { el._lessons = d.lessons.slice(); criticRenderLessons(el); }
   } else if (type === 'chronicle') {
@@ -17453,7 +17572,7 @@ function applyValues(el, type, d) {
     const nb = el.querySelector('.tg-ng-batch'); if (nb && d.ngBatch) nb.value = d.ngBatch;   // «каждые N ходов» (нода «Сетевая игра»)
     const tl = el.querySelector('.tg-ng-tally'); if (tl && d.ngTally != null) tl.checked = !!d.ngTally;   // Счетовод (значения отдельным проходом)
     const ns = el.querySelector('.tg-noseed'); if (ns) ns.checked = !!d.noSeed;   // «не обновлять Души на старте»
-    const fbip = el.querySelector('.tg-fb-inplace'); if (fbip) fbip.checked = !!d.fbInPlace;   // «✎ править на месте» у кнопок фидбека
+    const fbip = el.querySelector('.tg-fb-inplace'); if (fbip) fbip.checked = !!d.fbInPlace;   const fbsf = el.querySelector('.tg-fb-soft'); if (fbsf) fbsf.checked = !!d.fbSoft;   const fbvc = el.querySelector('.tg-fb-voice'); if (fbvc) fbvc.checked = !!d.fbVoice;   // «✎ точечно» — выбранный режим правки   // «✎ править на месте» у кнопок фидбека
     if (d.chatId) el._chatId = d.chatId;                                               // папка памяти партии
     if (d.lastChatId != null) el._lastChatId = d.lastChatId;                           // активная беседа — из снимка, а не «самая длинная»
     if (d.lastThreadId != null) el._lastThreadId = d.lastThreadId;                     // тема форума без замка
@@ -18467,7 +18586,10 @@ function storeSetFlush(k, keepalive) {
   // Страховка от «вечного busy»: если прошлая отправка не ответила (обрыв, зависший fetch), ключ навсегда
   // переставал сохраняться — правки жили только в памяти вкладки. Через 20 с считаем её мёртвой и шлём снова.
   if (p.busy) {
-    if (!p.busyAt || (Date.now() - p.busyAt) < 20000) return;
+    // Метки нет — значит флаг достался ПО НАСЛЕДСТВУ от предыдущей записи (lsSet копирует busy, но не
+    // момент старта). Раньше условие читалось наоборот, и такой ключ выходил отсюда НАВСЕГДА: игра
+    // жила только в памяти вкладки и пропадала при закрытии. Нет метки = отправка не начиналась, шлём.
+    if (p.busyAt && (Date.now() - p.busyAt) < 20000) return;
     p.busy = false;
   }
   p.busy = true; p.busyAt = Date.now();
@@ -18494,7 +18616,7 @@ function lsSet(k, v) {
   if (_lsSig[k] === sig && !_setPending[k]) return;   // то же самое и всё доставлено — не долбим сервер
   _lsSig[k] = sig;
   const prev = _setPending[k];
-  _setPending[k] = { val: v, timer: null, delay: 0, busy: !!(prev && prev.busy) };
+  _setPending[k] = { val: v, timer: null, delay: 0, busy: !!(prev && prev.busy), busyAt: (prev && prev.busyAt) || 0 };   // busyAt переносим вместе с busy — иначе ключ залипает навсегда
   if (prev) clearTimeout(prev.timer);
   if (!_setPending[k].busy) storeSetFlush(k);
 }
@@ -18722,7 +18844,22 @@ function presetById(id) { return getPresets().find((p) => p.id === id) || null; 
 const ACTIVE_PRESET_KEY = 'rlm.activePreset';
 function activePresetId() { const id = lsGet(ACTIVE_PRESET_KEY, null); return (id && presetById(id)) ? id : defaultPresetId(); }
 function setActivePreset(id) { if (id && presetById(id)) { lsSet(ACTIVE_PRESET_KEY, id); startMenuRender(); } }
-function savePresetGraph(id) { if (id) { flushVisionsBeforeSnapshot(); lsSet(presetGraphKeyOf(id), serializeGraph()); } }   // слить открытый разворот в мастер ПЕРЕД снимком (иначе теряется, напр. голос Озвучки)
+// Пресет = СБОРКА (ноды, провода, настройки), а НЕ партия. Историю игры из него вычищаем: иначе она
+// уезжала в пресет вместе со снимком, и КАЖДАЯ новая игра по нему начиналась с чужих сообщений —
+// со стороны это выглядело как «моя история пропала». История партии живёт только в снимке чата.
+function stripPlayFromGraph(g) {
+  (g && g.nodes || []).forEach((n) => {
+    if (!n || !n.data || (n.type !== 'netgame' && n.type !== 'telegram')) return;
+    n.data.convos = {};          // переписка по беседам
+    n.data.ngTurn = [];          // недособранный ход
+    n.data.ngStates = {};        // состояния игроков этой партии
+    n.data.ngTurnCount = 0;
+    n.data.chatId = '';          // папка памяти партии — у новой игры она своя
+    n.data.lastChatId = null;
+  });
+  return g;
+}
+function savePresetGraph(id) { if (id) { flushVisionsBeforeSnapshot(); lsSet(presetGraphKeyOf(id), stripPlayFromGraph(serializeGraph())); } }   // слить открытый разворот в мастер ПЕРЕД снимком (иначе теряется, напр. голос Озвучки)
 function loadPresetGraph(id) {
   const g = lsGet(presetGraphKeyOf(id), null);
   if (g && Array.isArray(g.nodes) && g.nodes.length) { restoreGraph(g); return true; }
@@ -19020,7 +19157,7 @@ function savePresetAsNew(btn) {
     if (!name) return;
     const presets = getPresets();
     const id = 'p-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 5);
-    flushVisionsBeforeSnapshot(); lsSet(presetGraphKeyOf(id), serializeGraph());     // текущий граф → отдельный новый пресет
+    flushVisionsBeforeSnapshot(); lsSet(presetGraphKeyOf(id), stripPlayFromGraph(serializeGraph()));     // текущий граф → отдельный новый пресет (без истории партии)
     presets.push({ id, name }); setPresets(presets);
     setCurrent({ mode: 'preset', presetId: id });      // дальше правим уже новый пресет
     flashBtn(btn || document.getElementById('btn-save'), true);
@@ -19098,6 +19235,11 @@ function persistCurrentGraph() {
     flushVisionsBeforeSnapshot();                              // правки открытого вижна/разворота → в мастер, чтобы снимок их не потерял
     const key = chatgraphKeyOf(current.chatId);
     const g = serializeGraph();
+    // ПУСТОЙ холст сохранять нельзя. Между «current показал на чат» и «граф восстановлен с сервера»
+    // есть окно, где нод на холсте ещё нет: автосейв, попавший в него, писал снимок в 35 байт ПОВЕРХ
+    // партии — и вся игра исчезала (сервер честно оставлял копию в _backups, но клиент этого не знал).
+    // Граф без нод не бывает осмысленным состоянием, поэтому просто выходим.
+    if (!g || !Array.isArray(g.nodes) || !g.nodes.length) return;
     // Клиентских «а вдруг это гонка» здесь больше нет: сервер не принимает запись, которая короче
     // уже лежащей истории, и делает копию перед каждой перезаписью. Клиент просто отправляет то,
     // что есть на экране — как ты и просил: изменилось → ушло.
@@ -19148,7 +19290,7 @@ function chatlogFlush(chatId) {
   const p = _chatlogPending[chatId]; if (!p) return;
   // Если прошлая отправка не ответила (обрыв Wi-Fi, убитый сервер), busy оставался навсегда — и лог
   // переставал писаться до конца сессии, молча. Через 20 секунд считаем ту попытку мёртвой.
-  if (p.busy) { if (!p.busyAt || (Date.now() - p.busyAt) < 20000) return; }
+  if (p.busy) { if (p.busyAt && (Date.now() - p.busyAt) < 20000) return; p.busy = false; }   // нет метки = отправка не начиналась (флаг унаследован) — шлём, иначе лог залипал навсегда
   p.busy = true; p.busyAt = Date.now();
   rlmApi('/api/rlm/store/set', { key: p.key, value: p.val, clientId: RLM_CLIENT_ID, shrinkOk: !!_shrinkOk[p.key] })
     .then((r) => {
@@ -19186,7 +19328,7 @@ function persistChatLog(node) {
   db[key] = val; _lsSig[key] = JSON.stringify(val);      // зеркало и дедуп держим в согласии вручную
   _chatDirty[chatId] = true;                             // «грязно», пока сервер не подтвердит
   const prev = _chatlogPending[chatId];
-  _chatlogPending[chatId] = { key, val, sig, busy: !!(prev && prev.busy), timer: null, delay: 0 };
+  _chatlogPending[chatId] = { key, val, sig, busy: !!(prev && prev.busy), busyAt: (prev && prev.busyAt) || 0, timer: null, delay: 0 };
   if (prev) clearTimeout(prev.timer);
   if (!_chatlogPending[chatId].busy) chatlogFlush(chatId);
 }

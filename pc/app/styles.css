@@ -359,8 +359,10 @@ html, body { height: 100%; overflow: hidden; background: var(--canvas-grad); col
   background: color-mix(in srgb, var(--tg-bub-ai, color-mix(in srgb, var(--accent) 16%, var(--inset))) var(--tg-bub-a, 100%), transparent);
   border-color: color-mix(in srgb, var(--accent) 38%, transparent);
 }
-.tg-line-x { order: 3; flex: 0 0 auto; align-self: center; border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; line-height: 1.4; padding: 0 2px; opacity: 0; }
-.tg-line.out .tg-line-x { order: 0; }               /* у своих ✕ слева от пузыря — не лезет на текст */
+/* ✕ удаления — В ВЕРХНЕМ УГЛУ САМОГО ПУЗЫРЯ (и у ИИ, и у игроков). Раньше он висел сбоку от строки:
+   у своих слева, у чужих справа — приходилось искать глазами, где именно. Виден при наведении. */
+.tg-line-x { position: absolute; top: 1px; right: 4px; z-index: 2; border: none; background: transparent;
+  color: var(--muted); cursor: pointer; font-size: 11px; line-height: 1.2; padding: 0 2px; opacity: 0; }
 .tg-line:hover .tg-line-x { opacity: 0.6; }
 .tg-line-x:hover { color: #e0736b; opacity: 1; }
 /* Разметка ответа — ровно та, что уйдёт в Telegram (rich markdown). */
@@ -777,6 +779,9 @@ html, body { height: 100%; overflow: hidden; background: var(--canvas-grad); col
 .tg-test-name { font-weight: 700; font-size: 11px; flex: none; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tg-test-input { flex: 1; min-width: 0; }
 .node-telegram .tg-test-send { width: auto; flex: none; padding: 4px 10px; }
+/* ↻ «ответить по собранной истории» — такая же компактная кнопка, как ▶. Без этого она тянулась
+   на всю строку (417 px при поле ввода в 18 px) и писать было негде. */
+.node-telegram .tg-test-again { width: auto; flex: none; padding: 4px 9px; }
 .tg-test-close { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; padding: 0 4px; flex: none; }
 .tg-test-close:hover { color: #e0736b; }
 .port.tg-pulse { animation: tgPortPulse 0.75s ease-out 2; }
