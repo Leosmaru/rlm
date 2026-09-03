@@ -126,7 +126,11 @@ function mergePresetList(remoteBuf, dest) {
     if (!Array.isArray(local)) local = [];
     const factoryIds = new Set(remote.map((p) => p && p.id));
     const mine = local.filter((p) => p && !factoryIds.has(p.id));
-    writeAtomic(dest, Buffer.from(JSON.stringify([...remote, ...mine]), 'utf8'));
+    const merged = [...remote, ...mine];
+    // Состав тот же — файл не трогаем: иначе каждое обновление переписывало бы его заново
+    // (только ради другого расположения пробелов) и числило бы себя «обновившим файл».
+    if (JSON.stringify(merged) === JSON.stringify(local)) return true;
+    writeAtomic(dest, Buffer.from(JSON.stringify(merged), 'utf8'));
     return true;
 }
 

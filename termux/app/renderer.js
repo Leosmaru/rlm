@@ -20545,12 +20545,31 @@ function updateAsk(from, to) {
 // он же считает, сколько файлов реально изменилось.
 const UPD_PHASE = { list: 'Смотрю, что изменилось…', check: 'Сверяю файлы…', files: 'Обновляю файлы',
   deps: 'Доустанавливаю зависимости…', done: 'Готово', error: 'Не получилось' };
+// Пока идёт обновление — фон экрана загрузки отдан двум роликам, они играют ПО ОЧЕРЕДИ и по кругу
+// (RLM1V → RLM2V → RLM1V …). Случайный арт на это время убираем: у обновления свой вид.
+function updateClips() {
+  const bg = document.getElementById('rlm-splash-bg');
+  if (!bg) return;
+  const clips = ['loading/RLM1V.mp4', 'loading/RLM2V.mp4'];
+  let i = 0;
+  bg.innerHTML = ''; bg.style.backgroundImage = 'none'; bg.style.animation = 'none';
+  const v = document.createElement('video');
+  v.className = 'rlm-splash-vid'; v.muted = true; v.autoplay = true; v.playsInline = true;
+  v.setAttribute('playsinline', '');
+  v.src = clips[0];
+  // loop не ставим: смена ролика идёт по концу текущего — иначе второй никогда не покажется.
+  v.addEventListener('ended', () => { i = (i + 1) % clips.length; v.src = clips[i]; v.play().catch(() => {}); });
+  bg.appendChild(v);
+  v.play().catch(() => {});
+}
+
 async function updateRun() {
   const note = document.getElementById('rlm-upd-note');
   const bar = document.getElementById('rlm-upd-bar');
   const fill = document.getElementById('rlm-upd-fill');
   const btns = document.getElementById('rlm-upd-btns');
   btns.classList.add('hidden'); bar.classList.remove('hidden');
+  updateClips();   // фон на время обновления — два ролика по очереди
   note.textContent = UPD_PHASE.list;
   let started = null;
   try { started = await rlmApi('/api/rlm/update/apply', {}); } catch (_) { /* ниже честно скажем */ }
