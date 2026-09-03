@@ -323,29 +323,31 @@ const OPTIONS_PARAMS = [
 //   LOCAL_PARAMS — умные крутилки, что применяются в фиксированных точках; порядок им не задаётся.
 // tip — подсказка при наведении (простыми словами, что делает).
 const LOCAL_ORDER = [
-  { id: 'top_k',   name: 'Top K',       def: '40', tip: 'Оставить только N самых вероятных слов, остальное выкинуть. 0 = выкл.' },
-  { id: 'top_a',   name: 'Top A',       def: '0',  tip: 'Отсечка по порогу, который сам подстраивается под уверенность модели. 0 = выкл.' },
-  { id: 'top_p',   name: 'Top P',       def: '1',  tip: 'Оставить верхушку кандидатов, пока их сумма не наберёт эту долю. 1 = выкл.' },
-  { id: 'tfs',     name: 'TFS',         def: '1',  tip: 'Tail Free Sampling: срезает «хвост» маловероятных по форме распределения. 1 = выкл.' },
-  { id: 'typical', name: 'Typical P',   def: '1',  tip: 'Оставляет слова с «типичной» неожиданностью, отбрасывая слишком банальные и слишком дикие. 1 = выкл.' },
-  { id: 'temp',    name: 'Температура', def: '1',  tip: 'Насколько смело модель отходит от самого вероятного. Ниже — суше, выше — разнообразнее.' },
+  { id: 'top_k',   name: 'Top K',       def: '40', tip: 'Оставить только N самых вероятных слов, остальное выкинуть. 0 = выкл.', desc: "Берём только N самых вероятных слов, остальные не рассматриваются вовсе. 40 — обычный выбор, 0 = выкл." },
+  { id: 'top_a',   name: 'Top A',       def: '0',  tip: 'Отсечка по порогу, который сам подстраивается под уверенность модели. 0 = выкл.', desc: "Порог отсечки, который сам подстраивается: чем увереннее модель, тем жёстче отсев. 0.1 — мягко, 0 = выкл." },
+  { id: 'top_p',   name: 'Top P',       def: '1',  tip: 'Оставить верхушку кандидатов, пока их сумма не наберёт эту долю. 1 = выкл.', desc: "Оставляем верхушку, пока их суммарная вероятность не наберёт эту долю. 0.9 — берём кандидатов на 90%, хвост прочь. 1 = выкл." },
+  { id: 'tfs',     name: 'TFS',         def: '1',  tip: 'Tail Free Sampling: срезает «хвост» маловероятных по форме распределения. 1 = выкл.', desc: "Срезает длинный хвост маловероятных по форме распределения — там, где Top P ещё не решается. 0.95 — умеренно, 1 = выкл." },
+  { id: 'typical', name: 'Typical P',   def: '1',  tip: 'Оставляет слова с «типичной» неожиданностью, отбрасывая слишком банальные и слишком дикие. 1 = выкл.', desc: "Оставляет слова обычной степени неожиданности: и банальные, и дикие уходят. 0.9 — заметно, 1 = выкл." },
+  { id: 'temp',    name: 'Температура', def: '1',  tip: 'Насколько смело модель отходит от самого вероятного. Ниже — суше, выше — разнообразнее.', desc: "Смелость выбора. 0.7 — послушно и суховато, 1 — обычно, 1.2 — живее и рискованнее." },
 ];
 const LOCAL_PARAMS = [
-  { id: 'min_p',             name: 'Min P',             def: '0.05', tip: 'Выкинуть всё слабее этой доли от самого вероятного слова. Главный современный обрезатель хвоста.' },
-  { range: true, min: 'dynatemp_min', max: 'dynatemp_max', name: 'DynaTemp темп.', def: '0', tip: 'Динамическая температура: модель гуляет между мин. и макс. по своей уверенности. Оба 0 = выкл.' },
-  { id: 'dynatemp_exponent', name: 'DynaTemp кривая',   def: '1',    tip: 'Как именно температура гуляет внутри диапазона DynaTemp.' },
-  { id: 'smoothing_factor',  name: 'Smoothing',         def: '0',    tip: 'Мягкая замена температуре: давит слабых кандидатов, почти не трогая сильных. 0 = выкл.' },
-  { id: 'mirostat_mode',     name: 'Mirostat режим',    def: '0',    tip: 'Держит постоянный уровень «неожиданности» через обратную связь. 0 = выкл, 1/2 = версии.' },
-  { id: 'mirostat_tau',      name: 'Mirostat tau',      def: '5',    tip: 'Целевой уровень неожиданности для Mirostat: ниже — предсказуемее.' },
-  { id: 'mirostat_eta',      name: 'Mirostat eta',      def: '0.1',  tip: 'Скорость, с которой Mirostat подстраивается на ходу.' },
-  { id: 'dry_multiplier',    name: 'DRY множитель',     def: '0',    tip: 'DRY: сила штрафа за повтор целых фраз (умный анти-повтор). 0 = выкл.' },
-  { id: 'dry_base',          name: 'DRY база',          def: '1.75', tip: 'Насколько резко растёт штраф DRY с длиной повтора.' },
-  { id: 'dry_allowed_length',name: 'DRY длина',         def: '2',    tip: 'До какой длины повтор ещё разрешён, прежде чем DRY включится.' },
-  { id: 'xtc_threshold',     name: 'XTC порог',         def: '0.1',  tip: 'XTC: выкидывает слишком очевидные варианты выше этого порога — ради свежести.' },
-  { id: 'xtc_probability',   name: 'XTC вероятность',   def: '0',    tip: 'С какой вероятностью XTC срабатывает на каждом слове. 0 = выкл.' },
-  { id: 'rep_pen',           name: 'Rep. penalty',      def: '1',    tip: 'Обычный штраф за повтор отдельных слов. 1 = выкл.' },
-  { id: 'rep_pen_range',     name: 'Rep. pen диапазон', def: '0',    tip: 'На сколько последних слов смотрит штраф за повтор. 0 = весь контекст.' },
-  { id: 'no_repeat_ngram',   name: 'No-repeat n-gram',  def: '0',    tip: 'Жёстко запретить дословный повтор цепочек такой длины. 0 = выкл.' },
+  { id: 'min_p',             name: 'Min P',             def: '0.05', tip: 'Выкинуть всё слабее этой доли от самого вероятного слова. Главный современный обрезатель хвоста.', desc: "Выкидывает всё слабее этой доли от лучшего кандидата: при 0.05 и лучшем в 40% отсекается всё ниже 2%. Главный современный отсекатель." },
+  { range: true, min: 'dynatemp_min', max: 'dynatemp_max', name: 'DynaTemp темп.', def: '0', tip: 'Динамическая температура: модель гуляет между мин. и макс. по своей уверенности. Оба 0 = выкл.', desc: 'Температура не фиксированная, а гуляет по уверенности модели. 0.5—1.5: на очевидных местах пишет ровно, на развилках смелее. 0—0 = выкл.' },
+  { id: 'dynatemp_exponent', name: 'DynaTemp кривая',   def: '1',    tip: 'Как именно температура гуляет внутри диапазона DynaTemp.', desc: "Форма кривой внутри диапазона DynaTemp. 1 — ровно; больше 1 — дольше держится у нижней границы." },
+  { id: 'smoothing_factor',  name: 'Smoothing',         def: '0',    tip: 'Мягкая замена температуре: давит слабых кандидатов, почти не трогая сильных. 0 = выкл.', desc: "Мягкая замена температуре: придавливает слабых кандидатов, почти не трогая сильных. 0.3 — лёгкое оживление, 0 = выкл." },
+  { id: 'smoothing_curve',   name: 'Smoothing кривая',  def: '1',    tip: 'Насколько круто работает Smoothing. 1 = обычная кривая.', desc: 'Крутизна сглаживания. 1 — как обычно; 2—3 сильнее давят середину, оставляя явных фаворитов и редкие неожиданности. Работает только при включённом Smoothing.' },
+  { id: 'mirostat_mode',     name: 'Mirostat режим',    def: '0',    tip: 'Держит постоянный уровень «неожиданности» через обратную связь. 0 = выкл, 1/2 = версии.', desc: "Держит постоянный уровень неожиданности, подстраиваясь на ходу. 0 = выкл, 2 — обычный выбор." },
+  { id: 'mirostat_tau',      name: 'Mirostat tau',      def: '5',    tip: 'Целевой уровень неожиданности для Mirostat: ниже — предсказуемее.', desc: "Целевая неожиданность для Mirostat: 3 — предсказуемее, 5 — умеренно, 8 — свободнее." },
+  { id: 'mirostat_eta',      name: 'Mirostat eta',      def: '0.1',  tip: 'Скорость, с которой Mirostat подстраивается на ходу.', desc: "Скорость подстройки Mirostat. 0.1 — плавно, 0.5 — резко реагирует." },
+  { id: 'dry_multiplier',    name: 'DRY множитель',     def: '0',    tip: 'DRY: сила штрафа за повтор целых фраз (умный анти-повтор). 0 = выкл.', desc: "Штраф за дословный повтор целых фраз — умный анти-повтор. 0.8 — рабочее значение, 0 = выкл." },
+  { id: 'dry_base',          name: 'DRY база',          def: '1.75', tip: 'Насколько резко растёт штраф DRY с длиной повтора.', desc: "Насколько резко растёт штраф с длиной повтора. 1.75 — стандарт." },
+  { id: 'dry_allowed_length',name: 'DRY длина',         def: '2',    tip: 'До какой длины повтор ещё разрешён, прежде чем DRY включится.', desc: "Сколько слов подряд можно повторить безнаказанно. 2 — повтор из трёх слов уже штрафуется." },
+  { id: 'dry_sequence_breakers', name: 'DRY разделители', def: '\\n, :, ", *', text: true, tip: 'Знаки, на которых DRY обнуляет счёт повтора.', desc: 'На этих знаках DRY начинает считать повтор заново — чтобы разметка, имена и реплики не выглядели повтором. Через запятую: \\n (перенос строки), :, ", *. Работает при включённом DRY.' },
+  { id: 'xtc_threshold',     name: 'XTC порог',         def: '0.1',  tip: 'XTC: выкидывает слишком очевидные варианты выше этого порога — ради свежести.', desc: "С какой вероятности вариант считается «слишком очевидным». 0.1 — стандарт." },
+  { id: 'xtc_probability',   name: 'XTC вероятность',   def: '0',    tip: 'С какой вероятностью XTC срабатывает на каждом слове. 0 = выкл.', desc: "Как часто выбрасывать очевидный вариант ради свежего. 0.5 — в половине случаев, 0 = выкл." },
+  { id: 'rep_pen',           name: 'Rep. penalty',      def: '1',    tip: 'Обычный штраф за повтор отдельных слов. 1 = выкл.', desc: "Штраф за повтор отдельных слов. 1.1 — лёгкий, 1 = выкл. Выше 1.3 начинает ломать грамматику." },
+  { id: 'rep_pen_range',     name: 'Rep. pen диапазон', def: '0',    tip: 'На сколько последних слов смотрит штраф за повтор. 0 = весь контекст.', desc: "Сколько последних слов помнит штраф за повтор. 1024 — недавняя история, 0 = весь контекст." },
+  { id: 'no_repeat_ngram',   name: 'No-repeat n-gram',  def: '0',    tip: 'Жёстко запретить дословный повтор цепочек такой длины. 0 = выкл.', desc: "Жёсткий запрет повторять цепочки такой длины. 3 — ни одна тройка слов не повторится дословно; ломает устойчивые обороты. 0 = выкл." },
 ];
 
 // Кусочки промта — заготовки в дефолтном порядке SillyTavern (promptManagerDefaultPromptOrder).
@@ -966,6 +968,33 @@ const API_CFG_KEY = 'rlm.apiConfig';
 const store = { get: (key) => lsGet(key, null), set: (key, value) => lsSet(key, value) };
 const loadApiCfg = () => store.get(API_CFG_KEY) || {};
 const saveApiCfg = (cfg) => store.set(API_CFG_KEY, cfg);
+// Ключи по СЕРВИСАМ: { 'OpenRouter': 'sk-...', 'ArliAI': '...' }. В проекте две ноды API и они
+// могут работать одновременно с разными сервисами — общий ключ на всё приложение это ломал:
+// вписал ключ второго сервиса, потерял первый.
+const API_KEYS_KEY = 'rlm.apiKeys';
+const loadApiKeys = () => store.get(API_KEYS_KEY) || {};
+function apiKeyFor(provider) {
+    const p = String(provider || '').trim();
+    const keys = loadApiKeys();
+    if (p && keys[p]) return keys[p];
+    const cfg = loadApiCfg();                       // старая общая настройка — как запас
+    return (!p || cfg.provider === p) ? (cfg.key || '') : '';
+}
+// Перенос старого единого ключа в хранилище по сервисам. Без него первый же ключ ДРУГОГО сервиса
+// перезаписывал общий конфиг — и прежний ключ терялся, хотя пользователь его не трогал.
+function migrateApiKeys() {
+  const keys = store.get(API_KEYS_KEY);
+  if (keys && Object.keys(keys).length) return;            // уже разложены по сервисам
+  const cfg = loadApiCfg();
+  if (cfg.key && cfg.provider) store.set(API_KEYS_KEY, { [cfg.provider]: cfg.key });
+}
+function saveApiKeyFor(provider, key) {
+    const p = String(provider || '').trim();
+    if (!p) return;
+    const keys = loadApiKeys();
+    if (String(key || '').trim()) keys[p] = key; else delete keys[p];
+    store.set(API_KEYS_KEY, keys);
+}
 // Настройки ноды Telegram (токен + режим). Токен в граф НЕ пишем (секрет) — он живёт в базе под своим ключом.
 const TG_CFG_KEY = 'rlm.telegram';
 const loadTgCfg = () => store.get(TG_CFG_KEY) || {};
@@ -1047,7 +1076,7 @@ function buildApiNode() {
     }
   }
 
-  const persist = () => saveApiCfg({ provider: cur.textContent, base: base.value, key: key.value, model: model.value, mode: el.dataset.mode || 'chat' });
+  const persist = () => { saveApiKeyFor(cur.textContent, key.value); saveApiCfg({ provider: cur.textContent, base: base.value, key: key.value, model: model.value, mode: el.dataset.mode || 'chat' }) };
   const setStatus = (text, state) => { status.textContent = text; status.dataset.state = state || ''; };
   // Переключатель Chat/Text: подсветить активную кнопку, запомнить режим.
   // skipPersist — при ЗАГРУЗКЕ (восстановление конфига): не писать обратно на сервер то, что только что прочитали.
@@ -1074,6 +1103,7 @@ function buildApiNode() {
     cur.textContent = opt.dataset.name || '';
     base.value = opt.dataset.base || '';
     model.value = opt.dataset.model || '';
+    key.value = apiKeyFor(cur.textContent);   // у каждого сервиса свой ключ — подставляем сохранённый
     setMode(opt.dataset.mode);   // пресет сам ставит нужный режим (RP-хостинги → Text)
     list.classList.add('hidden');
     persist();
@@ -1148,7 +1178,7 @@ function buildApiNode() {
   const cfg = loadApiCfg();
   if (cfg.provider) cur.textContent = cfg.provider;
   if (cfg.base) base.value = cfg.base;
-  if (cfg.key) key.value = cfg.key;
+  key.value = apiKeyFor(cur.textContent);   // ключ этого сервиса (нет своего — старый общий)
   if (cfg.model) model.value = cfg.model;
   setMode(cfg.mode, true); // восстановить режим (нет в конфиге → chat); skipPersist — не писать конфиг обратно на сервер при загрузке
 
@@ -1207,24 +1237,30 @@ function readOptionsParams(optsEl) {
 const LOCAL_KEY_MAP = {
   top_k: 'top_k', top_a: 'top_a', top_p: 'top_p', tfs: 'tfs', typical: 'typical_p', temp: 'temperature',
   min_p: 'min_p', dynatemp_min: 'dynatemp_min', dynatemp_max: 'dynatemp_max', dynatemp_exponent: 'dynatemp_exponent',
-  smoothing_factor: 'smoothing_factor', mirostat_mode: 'mirostat_mode', mirostat_tau: 'mirostat_tau',
+  smoothing_factor: 'smoothing_factor', smoothing_curve: 'smoothing_curve', mirostat_mode: 'mirostat_mode', mirostat_tau: 'mirostat_tau',
   mirostat_eta: 'mirostat_eta', dry_multiplier: 'dry_multiplier', dry_base: 'dry_base',
-  dry_allowed_length: 'dry_allowed_length', xtc_threshold: 'xtc_threshold', xtc_probability: 'xtc_probability',
+  dry_allowed_length: 'dry_allowed_length', dry_sequence_breakers: 'dry_sequence_breakers', xtc_threshold: 'xtc_threshold', xtc_probability: 'xtc_probability',
   rep_pen: 'repetition_penalty', rep_pen_range: 'repetition_penalty_range', no_repeat_ngram: 'no_repeat_ngram_size',
 };
 const LOCAL_NEUTRAL = { top_k: 0, top_a: 0, top_p: 1, tfs: 1, typical: 1, temp: 1, min_p: 0,
   dynatemp_min: 0, dynatemp_max: 0, smoothing_factor: 0, mirostat_mode: 0, dry_multiplier: 0, xtc_probability: 0,
   rep_pen: 1, rep_pen_range: 0, no_repeat_ngram: 0 };
 // «Спутники», которые бессмысленно слать, если их выключатель в нейтрали.
-const LOCAL_GATE = { dynatemp_exponent: 'dynatemp_max', mirostat_tau: 'mirostat_mode',
+const LOCAL_GATE = { dynatemp_exponent: 'dynatemp_max', smoothing_curve: 'smoothing_factor', dry_sequence_breakers: 'dry_multiplier', mirostat_tau: 'mirostat_mode',
   mirostat_eta: 'mirostat_mode', dry_base: 'dry_multiplier', dry_allowed_length: 'dry_multiplier',
   xtc_threshold: 'xtc_probability' };
 
 function readLocalParams(localEl) {
-  const raw = {}; // все непустые числовые поля ноды: key → число
+  const raw = {}; // непустые поля ноды: key → число, а у разделителей DRY — список строк
   localEl.querySelectorAll('[data-key]').forEach((inp) => {
     if (inp.disabled) return;                 // погашенная гейтом крутилка — не шлём
     const v = String(inp.value).trim(); if (v === '') return;
+    if (inp.dataset.key === 'dry_sequence_breakers') {   // «\n, :, ", *» → ["\n", ":", "\"", "*"]
+      const list = v.split(',').map((s) => s.trim()).filter(Boolean)
+        .map((s) => s.replace(/\\n/g, '\n').replace(/\\t/g, '\t'));
+      if (list.length) raw[inp.dataset.key] = list;
+      return;
+    }
     const n = Number(v); if (Number.isFinite(n)) raw[inp.dataset.key] = n;
   });
   const isNeutral = (k) => k in LOCAL_NEUTRAL && raw[k] === LOCAL_NEUTRAL[k];
@@ -1266,18 +1302,21 @@ function optionsForApi(apiEl) { return sourceForApi(apiEl, 'options', '.node-opt
 function buildLocalNode() {
   const el = document.createElement('div');
   el.className = 'node panel node-local';
-  const orderRows = LOCAL_ORDER.map(({ id, name, def, tip }) =>
-    `<div class="ls-item" data-id="${id}" title="${tip}">
+  // desc — подпись под строкой: что крутилка делает и какие числа осмысленны. Раньше это жило
+  // только в подсказке при наведении, и голые цифры в полях ничего не объясняли.
+  const dsc = (p) => (p.desc ? `<div class="ls-desc">${p.desc}</div>` : '');
+  const orderRows = LOCAL_ORDER.map((p) =>
+    `<div class="ls-item" data-id="${p.id}" title="${esc(p.tip)}">
        <span class="ls-drag" title="Перетащить — сменить порядок">⋮⋮</span>
-       <span class="ls-name">${name}</span>
-       <input class="field num ls-val" spellcheck="false" data-key="${id}" value="${def}"></div>`).join('');
+       <span class="ls-name">${p.name}</span>
+       <input class="field num ls-val" spellcheck="false" data-key="${p.id}" value="${esc(p.def)}"></div>${dsc(p)}`).join('');
   const paramRows = LOCAL_PARAMS.map((p) => p.range
-    ? `<div class="prm prm-range" title="${p.tip}"><span class="flabel">${p.name}</span>
-         <span class="rng"><input class="field num" spellcheck="false" data-key="${p.min}" value="${p.def}" title="минимум">
+    ? `<div class="prm prm-range" title="${esc(p.tip)}"><span class="flabel">${p.name}</span>
+         <span class="rng"><input class="field num" spellcheck="false" data-key="${p.min}" value="${esc(p.def)}" title="минимум">
            <span class="rng-dash">—</span>
-           <input class="field num" spellcheck="false" data-key="${p.max}" value="${p.def}" title="максимум"></span></div>`
-    : `<div class="prm" title="${p.tip}"><span class="flabel">${p.name}</span>
-         <input class="field num" spellcheck="false" data-key="${p.id}" value="${p.def}"></div>`).join('');
+           <input class="field num" spellcheck="false" data-key="${p.max}" value="${esc(p.def)}" title="максимум"></span></div>${dsc(p)}`
+    : `<div class="prm${p.text ? ' prm-text' : ''}" title="${esc(p.tip)}"><span class="flabel">${p.name}</span>
+         <input class="field${p.text ? '' : ' num'}" spellcheck="false" data-key="${p.id}" value="${esc(p.def)}"></div>${dsc(p)}`).join('');
   el.innerHTML = `
     ${corners()}
     <span class="port out" data-dir="out" title="Локальные сэмплеры → вход «Опции» ноды API"></span>
@@ -6597,7 +6636,8 @@ function directorCompactWorld(wu) {
 function apiCreds(apiEl) {
   const cfg = (typeof lsGet === 'function') ? (lsGet('rlm.apiConfig', null) || {}) : {};
   const f = (sel) => ((apiEl.querySelector(sel) || {}).value || '').trim();
-  return { base: f('.f-base') || (cfg.base || '').trim(), key: f('.f-key') || cfg.key || '', model: f('.f-model') || (cfg.model || '').trim() };
+  const prov = ((apiEl.querySelector('.dd-current') || {}).textContent || '').trim();
+  return { base: f('.f-base') || (cfg.base || '').trim(), key: f('.f-key') || apiKeyFor(prov) || cfg.key || '', model: f('.f-model') || (cfg.model || '').trim() };
 }
 function fillDirectorPrompt(dir, node, gen) {
   const events = DIR_EVENT_TYPES
@@ -17299,7 +17339,9 @@ function findPort(nodeEl, key) {
 
 // Снять редактируемые значения ноды (по типу).
 function nodeValues(el, type) {
-  if (type === 'api') return { provider: el.querySelector('.dd-current').textContent, base: el.querySelector('.f-base').value, key: el.querySelector('.f-key').value, model: el.querySelector('.f-model').value, mode: el.dataset.mode || 'chat', label: ((el.querySelector('.node-head .label') || {}).textContent || '').trim() };
+  // key в снимок НЕ кладём: он живёт в rlm.apiKeys по сервисам. Раньше уезжал сюда и оседал
+  // в пресетах — перед каждой публикацией его приходилось вычищать руками.
+  if (type === 'api') return { provider: el.querySelector('.dd-current').textContent, base: el.querySelector('.f-base').value, model: el.querySelector('.f-model').value, mode: el.dataset.mode || 'chat', label: ((el.querySelector('.node-head .label') || {}).textContent || '').trim() };
   if (type === 'options') return { values: [...el.querySelectorAll('.prm input')].map((i) => i.value), reason: (el.querySelector('.opt-reason') || {}).value || 'off', label: ((el.querySelector('.node-head .label') || {}).textContent || '').trim() };
   if (type === 'local') return {
     order: [...el.querySelectorAll('.ls-item')].map((it) => it.dataset.id),           // текущий порядок строк
@@ -17475,7 +17517,8 @@ function applyValues(el, type, d) {
   if (type === 'api') {
     if (d.provider) el.querySelector('.dd-current').textContent = d.provider;
     if (d.base != null) el.querySelector('.f-base').value = d.base;
-    if (d.key) el.querySelector('.f-key').value = d.key;
+    // d.key — только у старых снимков (раньше ключ уезжал в граф); иначе берём ключ этого сервиса
+    el.querySelector('.f-key').value = d.key || apiKeyFor(d.provider || (el.querySelector('.dd-current') || {}).textContent);
     if (d.model != null) el.querySelector('.f-model').value = d.model;
     if (d.mode) { el.dataset.mode = d.mode; el.querySelectorAll('.mode-btn').forEach((b) => b.classList.toggle('active', b.dataset.mode === d.mode)); }
     if (d.label) { const l = el.querySelector('.node-head .label'); if (l) l.textContent = d.label; }
@@ -20862,6 +20905,7 @@ async function boot() {
   }
   if (!ok) { Splash.hide(); showServerDownScreen(); return; }   // за минуту не поднялся — экран с кнопкой «Повторить сейчас»
   hideServerDownScreen();
+  migrateApiKeys();   // старый единый ключ → в хранилище по сервисам (один раз)
   updateCheckStart();   // сервер жив — можно спросить про обновление; номер сборки появится под полоской
   await storeClaim();   // база прочитана — только теперь объявляем себя пишущим клиентом
   Splash.set(95);

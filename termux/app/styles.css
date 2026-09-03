@@ -2413,6 +2413,11 @@ html.mobile-mode .tb-left, html.mobile-mode .tb-right { flex: none; }
 
 /* Кнопки перевода на текстовых полях (RU — предпросмотр EN→RU обратимо; EN — замена RU→EN) */
 .tr-btns { display: flex; justify-content: flex-end; gap: 4px; margin-top: 3px; }
+/* Подпись под крутилкой: что делает и какие числа осмысленны. Без неё в ноде одни голые цифры. */
+.ls-desc { grid-column: 1 / -1; margin: -2px 0 7px; font-size: 10px; line-height: 1.4; color: var(--muted); }
+.ls-list .ls-desc { margin: 2px 0 8px 22px; }
+.prm-text input { text-align: left; font-family: var(--mono); font-size: 11px; }
+
 .tr-b { font-family: var(--mono); font-size: 10px; line-height: 1; padding: 2px 6px; background: var(--inset); color: var(--muted); border: 1px solid var(--line); cursor: pointer; }
 .tr-b:hover { color: var(--accent); border-color: var(--accent); }
 .tr-b.on { color: var(--accent); border-color: var(--accent); background: var(--node-head); }
