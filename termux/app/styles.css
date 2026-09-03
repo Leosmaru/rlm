@@ -2101,6 +2101,45 @@ html.browser-build #btn-phone, html.browser-build #mobile-exit { display: none !
 .rlm-splash-ver { font-family: var(--mono, 'Ubuntu Mono', monospace); font-size: 11px; letter-spacing: .14em;
   color: rgba(210,232,245,.55); text-shadow: 0 1px 5px rgba(0,0,0,.7); margin-top: -4px; }
 
+/* ── Экран ПЕРВОГО ЗАПУСКА: установка движка ───────────────────────────────────────
+   Строгая полупрозрачная плашка по центру заставки: почти нет своего фона — арт виден сквозь неё,
+   держится на тонкой линии и моноширинных цифрах. Всё содержимое по центру; ползунок музыки живёт
+   не здесь, а внизу у номера сборки (.rlm-splash-snd). */
+.rlm-setup { position: absolute; inset: 0; z-index: 3; display: flex; align-items: center; justify-content: center; }
+.rlm-setup.hidden { display: none; }
+.rlm-setup-box { position: relative; width: 420px; max-width: 86vw; padding: 22px 26px 20px; overflow: hidden;
+  text-align: center; font-family: var(--mono, 'Ubuntu Mono', monospace);
+  background: rgba(6,10,16,.26);
+  backdrop-filter: blur(10px) saturate(1.05);
+  border: 1px solid rgba(190,225,245,.16);
+  box-shadow: 0 10px 40px rgba(0,0,0,.28); }
+.rlm-setup-hd { display: flex; align-items: center; justify-content: center; gap: 9px; font-size: 10px;
+  letter-spacing: .34em; color: rgba(226,242,252,.62); }
+.rlm-setup-dot { width: 5px; height: 5px; border-radius: 50%; background: rgba(226,242,252,.75);
+  animation: rlm-setup-pulse 1.6s ease-in-out infinite; }
+@keyframes rlm-setup-pulse { 0%, 100% { opacity: .85; } 50% { opacity: .2; } }
+.rlm-setup-phase { margin: 14px 0 12px; font-size: 15px; letter-spacing: .04em; color: rgba(245,251,255,.95); }
+.rlm-setup-bar { height: 2px; background: rgba(255,255,255,.14); overflow: hidden; }
+.rlm-setup-fill { width: 0%; height: 100%; background: rgba(235,248,255,.92); transition: width .4s ease-out; }
+.rlm-setup-nums { display: flex; justify-content: center; gap: 18px; margin-top: 10px; font-size: 11px;
+  letter-spacing: .16em; color: rgba(214,236,250,.6); }
+/* последняя строка npm — доказательство, что процесс живой, а не завис */
+.rlm-setup-log { margin-top: 12px; font-size: 10px; line-height: 1.5; min-height: 15px; letter-spacing: .04em;
+  color: rgba(200,228,245,.42); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 760px) {
+  .rlm-setup-box { padding: 18px 16px 15px; }
+  .rlm-setup-hd { font-size: 9px; letter-spacing: .24em; }
+}
+
+/* Громкость темы — под полоской загрузки, в одном ряду с номером сборки */
+.rlm-splash-snd { display: flex; align-items: center; gap: 8px; width: 62%; max-width: 240px; margin-top: 2px; }
+.rlm-splash-snd.hidden { display: none; }
+.rlm-splash-snd-ico { font-size: 11px; color: rgba(210,232,245,.5); }
+.rlm-splash-vol { flex: 1; height: 2px; appearance: none; -webkit-appearance: none; cursor: pointer;
+  background: rgba(255,255,255,.22); }
+.rlm-splash-vol::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; width: 9px; height: 9px;
+  border-radius: 50%; background: rgba(235,248,255,.9); box-shadow: 0 0 8px rgba(160,215,245,.55); }
+
 /* Табличка «Обновить?» — поверх экрана загрузки, когда на GitHub лежит сборка новее.
    Живёт внутри #rlm-splash, поэтому исчезает вместе с ним и не мешает холсту. */
 .rlm-upd { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center;

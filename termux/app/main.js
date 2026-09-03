@@ -7,6 +7,8 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 
 app.commandLine.appendSwitch('disable-http-cache'); // всегда грузить свежие файлы (без кэша)
+// Экран первого запуска играет тему и голос сам, без клика — иначе Chromium держит звук до жеста.
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 // Официальный значок RLM (тот же логотип-чип, что на сплэше и в фавиконе).
 // На Windows берём .ico (многоразмерный, чёткий на таскбаре/в заголовке), иначе — 512px PNG.
@@ -208,6 +210,79 @@ ipcMain.handle('tts:generate', async (_e, body) => {
   } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
 });
 
+// ── ПЕРВЫЙ ЗАПУСК: ставим зависимости сервера и показываем это в окне ──────────────
+// Раньше первый запуск выглядел как поломка: движок SillyTavern лежит без node_modules, сервер
+// падал молча (stdio 'ignore'), а окно через минуту выдавало «Нет связи с сервером RLM». Теперь
+// приложение ставит зависимости САМО и рассказывает окну, что делает: сколько пакетов, сколько
+// мегабайт, последняя строка npm. Окно рисует это на экране загрузки.
+const SERVER_DEPS_TOTAL = 508;    // столько пакетов и
+const SERVER_DEPS_MB = 361;       // столько мегабайт весит установленный server/node_modules
+const serverDir = () => path.join(__dirname, '..', 'server');
+
+// Состояние отдаём и по запросу (окно спрашивает при старте), и толчком (по мере установки) —
+// иначе сообщение, посланное до готовности страницы, просто пропадёт.
+let setupState = { active: false, phase: '', done: 0, total: SERVER_DEPS_TOTAL, mb: 0, totalMb: SERVER_DEPS_MB, line: '' };
+function setupSend(patch) {
+  setupState = { ...setupState, ...patch };
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win && !win.isDestroyed()) { try { win.webContents.send('rlm:setup', setupState); } catch (_) { /* окно закрылось */ } }
+}
+ipcMain.handle('setup:state', () => setupState);
+
+const depsInstalled = () => fs.existsSync(path.join(serverDir(), 'node_modules', 'express'));
+
+// Сколько пакетов уже распаковано — дёшево (один readdir), поэтому спрашиваем часто.
+function countPackages() {
+  try {
+    const root = path.join(serverDir(), 'node_modules');
+    let n = 0;
+    for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      if (e.name[0] === '.') continue;
+      if (e.name[0] === '@') { try { n += fs.readdirSync(path.join(root, e.name)).length; } catch (_) {} continue; }
+      n++;
+    }
+    return n;
+  } catch (_) { return 0; }
+}
+// Сколько мегабайт легло на диск — обход всего дерева, поэтому реже (раз в пару секунд).
+function dirSizeMb(dir) {
+  let bytes = 0;
+  const walk = (d) => {
+    let items = [];
+    try { items = fs.readdirSync(d, { withFileTypes: true }); } catch (_) { return; }
+    for (const e of items) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else { try { bytes += fs.statSync(p).size; } catch (_) {} }
+    }
+  };
+  walk(dir);
+  return Math.round(bytes / 1048576);
+}
+
+function installServerDeps() {
+  return new Promise((resolve) => {
+    setupSend({ active: true, phase: 'deps', done: 0, mb: 0, line: 'первый запуск: ставлю движок' });
+    const p = spawn('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], { cwd: serverDir(), shell: true, windowsHide: true });
+    const say = (buf) => {                                   // последняя непустая строка npm — чтобы было видно, что идёт работа
+      const line = String(buf).split(/\r?\n/).filter((s) => s.trim()).pop();
+      if (line) setupSend({ line: line.trim().slice(0, 120) });
+    };
+    if (p.stdout) p.stdout.on('data', say);
+    if (p.stderr) p.stderr.on('data', say);
+    const tick = setInterval(() => setupSend({ done: countPackages() }), 500);
+    const tickMb = setInterval(() => setupSend({ mb: dirSizeMb(path.join(serverDir(), 'node_modules')) }), 2500);
+    const finish = (ok) => {
+      clearInterval(tick); clearInterval(tickMb);
+      setupSend({ done: countPackages(), mb: dirSizeMb(path.join(serverDir(), 'node_modules')) });
+      resolve(ok);
+    };
+    p.on('error', () => finish(false));
+    p.on('close', (code) => finish(code === 0));
+  });
+}
+
 // Сам поднимаем сервер RLM, если он ещё не запущен — тогда «Запустить RLM.bat»
 // одним кликом даёт и сервер, и холст. Если сервер уже поднят (напр. запущен
 // вручную при разработке) — не трогаем его.
@@ -217,6 +292,11 @@ async function ensureServer() {
     await fetch(RLM_SERVER + '/', { signal: AbortSignal.timeout(800) });
     return; // отвечает — сервер уже есть
   } catch (_) { /* не поднят — запустим ниже */ }
+  if (!depsInstalled()) {                                  // первый запуск: движка ещё нет на диске
+    const ok = await installServerDeps();
+    if (!ok) { setupSend({ phase: 'error', line: 'не удалось поставить зависимости — открой server/ и выполни: npm install --omit=dev' }); return; }
+  }
+  setupSend({ active: setupState.active, phase: 'server', line: 'поднимаю сервер' });
   try {
     const serverDir = path.join(__dirname, '..', 'server');
     // stdio: 4-м дескриптором добавляем 'ipc' — канал сообщений между Electron и сервером. Через него
@@ -226,6 +306,14 @@ async function ensureServer() {
     serverProc.on('error', (e) => console.error('Не удалось запустить сервер RLM:', e));
     // Сервер попросил перезапуск (кнопка на телефоне) → тот же relaunch, что и кнопка «Перезапуск» на ПК.
     serverProc.on('message', (m) => { if (m && m.rlm === 'relaunch') { app.relaunch(); app.exit(0); } });
+    if (setupState.active) {                               // ждём, пока сервер реально ответит, и гасим экран установки
+      (async () => {
+        for (let i = 0; i < 240; i++) {
+          try { await fetch(RLM_SERVER + '/', { signal: AbortSignal.timeout(1000) }); setupSend({ active: false, phase: 'done' }); return; }
+          catch (_) { await new Promise((r) => setTimeout(r, 500)); }
+        }
+      })();
+    }
   } catch (e) {
     console.error('Не удалось запустить сервер RLM:', e);
   }
@@ -235,8 +323,10 @@ app.whenReady().then(async () => {
   // Свой AppUserModelID — иначе Windows группирует окно под electron.exe и показывает
   // дефолтный значок Electron на таскбаре вместо нашего.
   if (process.platform === 'win32') app.setAppUserModelId('com.rlm.roleplaymachine');
-  await ensureServer();
+  // Окно — ПЕРВЫМ: на первом запуске установка движка идёт минуты, и человек должен видеть процесс,
+  // а не пустой экран, который через минуту скажет «нет связи».
   createWindow();
+  ensureServer();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

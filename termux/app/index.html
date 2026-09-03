@@ -33,11 +33,29 @@
       <div id="rlm-splash-pct" class="rlm-splash-pct">0%</div>
       <!-- Номер сборки под полоской: видно без гаданий, какая версия стоит (в рабочей папке пишет «dev») -->
       <div id="rlm-splash-ver" class="rlm-splash-ver"></div>
+      <!-- Громкость темы — здесь же, под полоской, рядом с номером сборки. Видна только на первом
+           запуске (пока играет музыка установки); в обычной загрузке скрыта. -->
+      <div id="rlm-splash-snd" class="rlm-splash-snd hidden">
+        <span class="rlm-splash-snd-ico">♪</span>
+        <input id="rlm-setup-vol" class="rlm-splash-vol" type="range" min="0" max="100" value="45" title="Громкость музыки">
+      </div>
     </div>
 
     <!-- Табличка обновления: показывается ПОСЛЕ загрузки (полоска дошла до 100%), если на GitHub лежит
          сборка новее. Обновляется только код приложения и стартовые пресеты; чаты, карточки и пресеты,
          сохранённые под своим именем, обновление не трогает. Логика — renderer.js, сервер — rlm-update.js -->
+    <!-- ПЕРВЫЙ ЗАПУСК: пока ставится движок сервера (минуты), окно показывает, что именно идёт —
+         пакеты, мегабайты и последнюю строку npm. Раньше на этом месте был пустой экран, который
+         через минуту говорил «нет связи». Данные шлёт главный процесс (main.js → rlm:setup). -->
+    <div id="rlm-setup" class="rlm-setup hidden">
+      <div class="rlm-setup-box">
+        <div class="rlm-setup-hd"><span class="rlm-setup-dot"></span>ПЕРВЫЙ ЗАПУСК · УСТАНОВКА ДВИЖКА</div>
+        <div id="rlm-setup-phase" class="rlm-setup-phase">подготовка…</div>
+        <div class="rlm-setup-bar"><div id="rlm-setup-fill" class="rlm-setup-fill"></div></div>
+        <div class="rlm-setup-nums"><span id="rlm-setup-mb">0 / 361 МБ</span><span id="rlm-setup-pkg">0 / 508</span></div>
+        <div id="rlm-setup-log" class="rlm-setup-log">жду npm…</div>
+      </div>
+    </div>
     <div id="rlm-upd" class="rlm-upd hidden">
       <div class="rlm-upd-box">
         <div class="rlm-upd-title">Обновить?</div>

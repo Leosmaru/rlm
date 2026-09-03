@@ -20512,6 +20512,82 @@ const Splash = (() => {
   };
 })();
 
+// ── ПЕРВЫЙ ЗАПУСК: установка движка на глазах у человека ──────────────────────────
+// Движок SillyTavern приезжает без node_modules, и первый запуск раньше выглядел так: пустой экран
+// загрузки, а через минуту «Нет связи с сервером RLM». Теперь main.js ставит зависимости сам и шлёт
+// сюда прогресс (пакеты, мегабайты, последняя строка npm), а мы показываем это киберпанк-панелью
+// поверх заставки: ролик RLM1V, тема на повторе, голос один раз и ползунок громкости — как на сайте.
+let _setupActive = false;                 // пока true — boot ждёт сервер столько, сколько нужно
+let _setupAudio = null;                   // { music, voice } — чтобы приглушить, когда установка кончится
+
+function setupSound() {
+  if (_setupAudio) return _setupAudio;
+  const music = new Audio('media/theme.wav');
+  music.loop = true;                                     // тема играет по кругу всю установку
+  music.volume = 0.45;
+  const voice = new Audio('media/voice.wav');            // голос — ОДИН раз, как на сайте
+  voice.volume = 0.9;
+  music.play().catch(() => {});                          // Electron пускает звук без клика (autoplay-policy в main.js)
+  voice.play().catch(() => {});
+  _setupAudio = { music, voice };
+  return _setupAudio;
+}
+function setupSoundStop() {
+  if (!_setupAudio) return;
+  const { music, voice } = _setupAudio;
+  const fade = setInterval(() => {                       // не обрываем на полуслове — уводим в тишину
+    music.volume = Math.max(0, music.volume - 0.05);
+    if (music.volume <= 0.01) { clearInterval(fade); try { music.pause(); voice.pause(); } catch (_) {} }
+  }, 90);
+  _setupAudio = null;
+}
+
+// Рисуем состояние: фаза словами, полоска, объём и сколько пакетов, плюс живая строка от npm.
+function setupRender(s) {
+  const box = document.getElementById('rlm-setup');
+  if (!box) return;
+  const PHASE = { deps: 'Ставлю движок SillyTavern', server: 'Поднимаю сервер', done: 'Готово', error: 'Не получилось' };
+  const pct = s.phase === 'server' ? 100 : Math.min(99, Math.round(((s.mb || 0) / (s.totalMb || 361)) * 100));
+  const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+  set('rlm-setup-phase', PHASE[s.phase] || 'Подготовка…');
+  set('rlm-setup-mb', (s.mb || 0) + ' / ' + (s.totalMb || 361) + ' МБ');
+  set('rlm-setup-pkg', (s.done || 0) + ' / ' + (s.total || 508));
+  set('rlm-setup-log', s.line || '…');
+  const fill = document.getElementById('rlm-setup-fill');
+  if (fill) fill.style.width = pct + '%';
+}
+
+// Включаем экран установки, если главный процесс говорит, что сейчас первый запуск.
+async function setupWatch() {
+  if (!window.rlm || !window.rlm.setupState) return;      // телефон/браузер — там установки нет
+  let st = null;
+  try { st = await window.rlm.setupState(); } catch (_) { return; }
+  const show = () => {
+    const box = document.getElementById('rlm-setup');
+    if (!box || !box.classList.contains('hidden')) return;
+    box.classList.remove('hidden');
+    updateClips(['loading/RLM1V.mp4']);                   // на фоне — RLM1V (сам перезапускается по кругу)
+    setupSound();
+    const snd = document.getElementById('rlm-splash-snd');
+    if (snd) snd.classList.remove('hidden');   // ползунок живёт внизу, у номера сборки — показываем его только сейчас
+    const vol = document.getElementById('rlm-setup-vol');
+    if (vol) vol.addEventListener('input', () => { if (_setupAudio) _setupAudio.music.volume = vol.value / 100; });
+  };
+  if (st && st.active) { _setupActive = true; show(); setupRender(st); }
+  window.rlm.onSetup((s) => {
+    if (s.active) { _setupActive = true; show(); }
+    setupRender(s);
+    if (!s.active && s.phase === 'done') {                // сервер ответил — гасим панель и звук, дальше обычный старт
+      _setupActive = false;
+      const box = document.getElementById('rlm-setup');
+      if (box) box.classList.add('hidden');
+      const snd2 = document.getElementById('rlm-splash-snd');
+      if (snd2) snd2.classList.add('hidden');
+      setupSoundStop();
+    }
+  });
+}
+
 // ── Обновление сборки с GitHub («Обновить?» на экране загрузки) ───────────────────
 // У людей приложение — это папка сборки, скачанная с github.com/Leosmaru/rlm. Сверяет файлы и
 // докачивает изменившиеся СЕРВЕР (server/src/endpoints/rlm-update.js) — он же есть и в Termux, где
@@ -20547,10 +20623,10 @@ const UPD_PHASE = { list: 'Смотрю, что изменилось…', check:
   deps: 'Доустанавливаю зависимости…', done: 'Готово', error: 'Не получилось' };
 // Пока идёт обновление — фон экрана загрузки отдан двум роликам, они играют ПО ОЧЕРЕДИ и по кругу
 // (RLM1V → RLM2V → RLM1V …). Случайный арт на это время убираем: у обновления свой вид.
-function updateClips() {
+function updateClips(clips) {
   const bg = document.getElementById('rlm-splash-bg');
   if (!bg) return;
-  const clips = ['loading/RLM1V.mp4', 'loading/RLM2V.mp4'];
+  clips = clips || ['loading/RLM1V.mp4', 'loading/RLM2V.mp4'];
   let i = 0;
   bg.innerHTML = ''; bg.style.backgroundImage = 'none'; bg.style.animation = 'none';
   const v = document.createElement('video');
@@ -20630,11 +20706,13 @@ async function boot() {
   if (_booting) return; _booting = true;
   try {
   Splash.show(); Splash.set(6);
+  await setupWatch();               // первый запуск? тогда покажем установку движка, а не пустое ожидание
   const onProg = (f) => Splash.set(15 + f * 78);      // загрузка ключей → 15…93%
   let ok = await loadServerStore(onProg);
   if (!ok) {
     let crawl = 8;
-    for (let attempt = 0; attempt < 120 && !ok; attempt++) {   // ~120 × 500мс ≈ 60 сек авто-ожидания
+    // Первая установка идёт минуты — пока она в работе, счётчик не тикает: сдаваться тут нечестно.
+    for (let attempt = 0; (attempt < 120 || _setupActive) && !ok; attempt++) {   // ~120 × 500мс ≈ 60 сек авто-ожидания
       await new Promise((r) => setTimeout(r, 500));
       crawl = Math.min(13, crawl + 0.25); Splash.set(crawl);   // лёгкое «дыхание» полоски, пока ждём сервер
       ok = await loadServerStore(onProg);
