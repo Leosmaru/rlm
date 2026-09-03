@@ -29,9 +29,39 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'index.html'));
 }
 
+// ── ВЫХОД ЖДЁТ СОХРАНЕНИЯ ────────────────────────────────────────────────────────────────────
+// Раньше окно закрывалось мгновенно (крестик, Alt+F4, «Закрыть»), а рендерер в это время дожимал
+// снимок и лог — запросы обрывались вместе с процессом. Теперь первый выход откладываем, просим
+// окно сохраниться и ждём его ответ (или 4 секунды), и только потом выходим по-настоящему.
+let quitting = false;
+function askRendererToSave() {
+  return new Promise((resolve) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (!win || win.isDestroyed()) return resolve();
+    let done = false;
+    const finish = () => { if (done) return; done = true; ipcMain.removeListener('app:saved', finish); resolve(); };
+    ipcMain.once('app:saved', finish);
+    try { win.webContents.send('app:flush'); } catch (_) { return finish(); }
+    setTimeout(finish, 4000);   // не ждать вечно, если окно уже не отвечает
+  });
+}
+app.on('before-quit', (e) => {
+  if (quitting) return;         // второй заход — выходим по-настоящему
+  e.preventDefault();
+  quitting = true;
+  askRendererToSave().then(() => app.quit());
+});
+
 // IPC: кнопки «Закрыть» / «Перезапуск» в тулбаре зовут это через preload.
 ipcMain.handle('app:close', () => app.quit());
-ipcMain.handle('app:restart', () => { app.relaunch(); app.exit(0); });
+ipcMain.handle('app:restart', async () => {
+  await askRendererToSave();                                   // сперва дать окну дописать состояние
+  if (serverProc) { try { serverProc.kill(); } catch (_) {} serverProc = null; }   // гасим свой сервер: иначе он переживает перезапуск и работает на СТАРОМ коде
+  if (ttsProc) { try { ttsProc.kill(); } catch (_) {} ttsProc = null; }
+  app.relaunch();
+  quitting = true;              // before-quit уже не нужен — мы только что сохранились
+  app.exit(0);
+});
 // IPC: открыть внешнюю ссылку (страница карточки на сайте) в системном браузере.
 ipcMain.handle('win:openExternal', (_e, url) => { try { const u = String(url || ''); if (/^https?:\/\//i.test(u)) shell.openExternal(u); } catch (e) {} });
 
@@ -59,8 +89,23 @@ ipcMain.handle('win:mobile', (e, on, size) => {
 // перезапуск надёжно (+ app.exit(0) обрывает дозапись). fs.writeFileSync пишет на диск сразу.
 // Синхронный IPC (sendSync) — чтобы рендерер мог читать конфиг сразу при создании ноды.
 const storePath = () => path.join(app.getPath('userData'), 'rlm-store.json');
-const readStoreAll = () => { try { return JSON.parse(fs.readFileSync(storePath(), 'utf8')); } catch { return {}; } };
-const writeStoreAll = (obj) => { try { fs.writeFileSync(storePath(), JSON.stringify(obj)); } catch (e) { console.error('store write:', e); } };
+const readStoreAll = () => {
+  try { return JSON.parse(fs.readFileSync(storePath(), 'utf8')); } catch { /* нет файла или битый */ }
+  try { return JSON.parse(fs.readFileSync(storePath() + '.bak', 'utf8')); } catch { /* и копии нет */ }
+  return {};
+};
+// Пишем через временный файл: прямая запись при обрыве оставляла обрубок, и файл переставал читаться —
+// вместе с ним молча пропадали ключ API и настройки. Прежняя версия остаётся в .bak.
+const writeStoreAll = (obj) => {
+  try {
+    const dst = storePath();
+    const tmp = dst + '.tmp';
+    try { if (fs.existsSync(dst)) fs.copyFileSync(dst, dst + '.bak'); } catch (_) { /* копия не критична */ }
+    const fd = fs.openSync(tmp, 'w');
+    try { fs.writeFileSync(fd, JSON.stringify(obj)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    fs.renameSync(tmp, dst);
+  } catch (e) { console.error('store write:', e); }
+};
 ipcMain.on('store:get', (e, key) => { const all = readStoreAll(); e.returnValue = key ? (all[key] ?? null) : all; });
 ipcMain.on('store:set', (e, key, value) => { const all = readStoreAll(); all[key] = value; writeStoreAll(all); e.returnValue = true; });
 

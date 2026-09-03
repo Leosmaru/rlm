@@ -33,4 +33,16 @@ echo
 # браузер откроется сам через несколько секунд (если termux-api установлен)
 ( sleep 6; command -v termux-open-url >/dev/null 2>&1 && termux-open-url "http://127.0.0.1:8100/rlm/" ) &
 
-cd server && exec node server.js
+# Цикл перезапуска: после обновления сервер выходит с кодом 42 — поднимаем его заново, уже с новым
+# кодом. Любой другой код выхода = обычное завершение, цикл прекращаем. RLM_RELOOP говорит серверу,
+# что перезапуск тут возможен (на ПК это делает Electron, здесь — этот скрипт).
+cd server || exit 1
+export RLM_RELOOP=1
+while :; do
+  node server.js
+  code=$?
+  [ "$code" = "42" ] || exit "$code"
+  echo
+  echo "   обновление применено — поднимаю заново…"
+  echo
+done

@@ -1129,6 +1129,7 @@
       const idx = Number(fb.dataset.fb);
       const box = openCritModal(idx, '💬 Фидбек — переписать ответ',
           '<div class="mrp-sec"><div class="mrp-h">Что не так? Перепишу ответ по замечанию <button class="tr-b crit-tr-fb interactable" type="button" data-fb-dir="ru" title="Перевести твой текст на русский (замена)">RU</button><button class="tr-b crit-tr-fb interactable" type="button" data-fb-dir="en" title="Перевести твой текст на английский (замена)">EN</button></div><textarea class="mes-edit crit-approve-fb" placeholder="напр.: он слишком легко согласился — перепиши жёстче"></textarea></div>'
+        + '<div class="mrp-sec fb-reason-sec"><div class="mrp-h">Режим правки</div><select class="fb-mode interactable"><option value="hard" selected>⚖ Перепись — написать иначе</option><option value="soft">✎ Точечно — менять только названное</option></select></div>'
         + '<div class="mrp-sec fb-reason-sec"><div class="mrp-h">Рассуждение при переписи</div><select class="fb-reason interactable"><option value="node">Как в ноде «Опции»</option><option value="off">Выкл</option><option value="low" selected>Короткое</option><option value="medium">Среднее</option><option value="high">Длинное</option></select></div>'
         + '<div class="crit-approve-actions">'
         + '<div class="mrp-tr crit-fb-learn interactable" title="Переписать ответ по замечанию И записать урок критику в блокнот">Записать в блокнот</div>'
@@ -1148,16 +1149,18 @@
       if (learn) learn.addEventListener('click', () => {
         const val = (fa && fa.value.trim()) || ''; if (!val) return;
         const rz = box.querySelector('.fb-reason'); const reason = rz ? rz.value : 'node';   // то же рассуждение при переписи, что у «Переписать»
+        const mz = box.querySelector('.fb-mode'); const mode = mz ? mz.value : 'hard';     // точечно / перепись
         learn.textContent = 'переписываю + пишу…';
-        parent.postMessage({ type: 'feedback-learn', idx: idx, text: val, reason: reason }, '*');   // И перекат по замечанию, И урок в блокнот
+        parent.postMessage({ type: 'feedback-learn', idx: idx, text: val, reason: reason, mode: mode }, '*');   // И перекат по замечанию, И урок в блокнот
         if (critModalClose) critModalClose();
       });
       const send = box.querySelector('.crit-fb-send');
       if (send) send.addEventListener('click', () => {
         const val = (fa && fa.value.trim()) || ''; if (!val) return;
         const rz = box.querySelector('.fb-reason'); const reason = rz ? rz.value : 'node';   // рассуждение при переписи (node = как в «Опциях»)
+        const mz = box.querySelector('.fb-mode'); const mode = mz ? mz.value : 'hard';     // точечно (правим только названное) / перепись (пишем иначе)
         send.textContent = 'переписываю…';
-        parent.postMessage({ type: 'feedback', idx: idx, text: val, reason: reason }, '*');   // перекат по замечанию (без авто-урока — урок отдельной кнопкой)
+        parent.postMessage({ type: 'feedback', idx: idx, text: val, reason: reason, mode: mode }, '*');   // перекат по замечанию (без авто-урока — урок отдельной кнопкой)
         if (critModalClose) critModalClose();   // окно закрыть — перекат идёт в чате
       });
     });

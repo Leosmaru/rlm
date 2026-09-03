@@ -31,6 +31,24 @@
     <div class="rlm-splash-bar-wrap">
       <div class="rlm-splash-bar"><div id="rlm-splash-fill" class="rlm-splash-fill"></div></div>
       <div id="rlm-splash-pct" class="rlm-splash-pct">0%</div>
+      <!-- Номер сборки под полоской: видно без гаданий, какая версия стоит (в рабочей папке пишет «dev») -->
+      <div id="rlm-splash-ver" class="rlm-splash-ver"></div>
+    </div>
+
+    <!-- Табличка обновления: показывается ПОСЛЕ загрузки (полоска дошла до 100%), если на GitHub лежит
+         сборка новее. Обновляется только код приложения и стартовые пресеты; чаты, карточки и пресеты,
+         сохранённые под своим именем, обновление не трогает. Логика — renderer.js, сервер — rlm-update.js -->
+    <div id="rlm-upd" class="rlm-upd hidden">
+      <div class="rlm-upd-box">
+        <div class="rlm-upd-title">Обновить?</div>
+        <div class="rlm-upd-vers"><span id="rlm-upd-from">—</span><span class="rlm-upd-arrow">→</span><span id="rlm-upd-to">—</span></div>
+        <div id="rlm-upd-note" class="rlm-upd-note">Твои чаты, карточки и свои пресеты останутся на месте.</div>
+        <div id="rlm-upd-bar" class="rlm-upd-bar hidden"><div id="rlm-upd-fill" class="rlm-upd-fill"></div></div>
+        <div id="rlm-upd-btns" class="rlm-upd-btns">
+          <button id="rlm-upd-no" class="rlm-upd-btn ghost">Нет</button>
+          <button id="rlm-upd-yes" class="rlm-upd-btn go">Да</button>
+        </div>
+      </div>
     </div>
   </div>
 

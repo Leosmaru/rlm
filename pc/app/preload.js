@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld('rlm', {
   openUrl: (url) => ipcRenderer.invoke('win:openExternal', url),
   // Зов серверных маршрутов RLM (нода API): rlm.api('/api/rlm/models', {...}) -> ответ сервера.
   api: (path, body) => ipcRenderer.invoke('rlm:api', { path, body }),
+  // Выход/перезапуск: главный процесс просит окно дописать состояние и ждёт ответа.
+  onFlush: (fn) => ipcRenderer.on('app:flush', () => fn()),
+  flushDone: () => ipcRenderer.send('app:saved'),
   // Надёжное хранилище в файле (переживает перезапуск): синхронно, чтобы читать сразу при старте.
   store: {
     get: (key) => ipcRenderer.sendSync('store:get', key),

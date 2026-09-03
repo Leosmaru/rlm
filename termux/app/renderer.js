@@ -148,6 +148,29 @@ function winPtrUp(e) {
     viewport.classList.add('panning');
   }
 }
+// ЗАЛИПЫ. Если указатель "потерялся" (свернули окно, alt-tab, вход/выход из полноэкранного, система
+// перехватил жест) — pointerup не приходит, и холст навсегда остаётся в состоянии перетаскивания:
+// висит рамка выделения, не работают клики и ПКМ-меню, выпадашки нод не открываются. Сбрасываем
+// всё при потере фокуса и при уходе вкладки в фон — состояние жеста живёт только пока окно активно.
+function resetPointerState() {
+  try {
+    activePtrs.clear(); pinch = null; panning = null;
+    viewport.classList.remove('panning');
+    document.body.classList.remove('canvas-dragging');
+    if (selbox) { try { selbox.box.remove(); } catch (_) {} selbox = null; }
+    if (winPtrOn) {
+      window.removeEventListener('pointermove', winPtrMove);
+      window.removeEventListener('pointerup', winPtrUp);
+      window.removeEventListener('pointercancel', winPtrUp);
+      winPtrOn = false;
+    }
+    if (draggingWp) draggingWp = null;
+    const cm = document.getElementById('ctxmenu'); if (cm) cm.classList.remove('show');   // и зависшее ПКМ-меню
+  } catch (_) {}
+}
+window.addEventListener('blur', resetPointerState);
+document.addEventListener('visibilitychange', () => { if (document.hidden) resetPointerState(); });
+
 viewport.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;   // мышь — только ЛКМ (ПКМ = меню)
   if (e.target.closest('.node')) return;
@@ -577,7 +600,10 @@ const TRIGGER_DESC = {
 // он только создавал шум. Сами запросы уходят как обычно, просто не логируются.
 // В «Консоль» пишем ТОЛЬКО запросы к модели. Свой сервер (хранилище, чтение/запись памяти Души,
 // эмбеддер, переводчик) — служебные ходы, они там лишь мешают.
-const CONSOLE_QUIET = (path) => /^\/api\/rlm\/(store|soul|embed|translate)\//.test(path);
+// Служебные запросы в журнал не пишем. Слеш на конце НЕОБЯЗАТЕЛЕН: путь перевода — /api/rlm/translate,
+// без слеша он раньше не подпадал под фильтр, и каждый перевод создавал в консоли отдельную запись
+// вместо тихого предпросмотра на месте.
+const CONSOLE_QUIET = (path) => /^\/api\/rlm\/(store|soul|embed|translate)(\/|$)/.test(path);
 // UI-метки блоков промта (поле `_src` и любые `_`-поля сообщений) — только для «Консоли».
 // В модель уходит чистый {role, content}: перед отправкой снимаем служебные поля (клон, оригинал в логе цел).
 function stripUiFields(body) {
@@ -756,7 +782,8 @@ function paintPromptTokens(compEl, chatNode) {
 // «Контекст, ток.» из ноды «Опции» ЭТОГО конвейера (комплитер → API → Опции). Фолбэк — любая нода «Опции».
 // 0 или пусто = без ограничения. Это то самое поле, которое раньше стояло в интерфейсе, но ничего не делало.
 function contextLimitFor(compEl) {
-  if (typeof tokHas === 'function' && tokHas('ctx.limit')) return tokVal('ctx.limit', 0);   // вписано в таблице — главнее «Опций»
+  // Общего «своего контекста» больше нет: у каждой цепочки своя нода «Опции», её поле и есть лимит.
+  // Точечно контекст режется в строке подсистемы (ctx.<ключ>) — это ctxLimitForRequest, уровнем выше.
   let opt = null;
   try {
     const out = compEl && compEl.querySelector('.port.out');
@@ -803,15 +830,18 @@ function refreshPromptTokens() {
 // и не правилось. Реестр сводит всё в один список; панель показывает строку ТОЛЬКО если нода-хозяин
 // есть в сборке. Где значение живёт в поле ноды — панель правит само поле (одно значение на двоих).
 const TOK_KEY = 'rlm.tokenLimits';       // { ключ: число } — правки зашитых лимитов
-const TOK_PRESETS_KEY = 'rlm.tokenPresets';   // { имя списка: { ключ: число } }
 const TOK_REG = [
   // ОПЦИИ API — общие настройки конвейера: отсюда берут значение все, кто своего не задал.
   // Правится тут же — поле пишется прямо в ноду «Опции» (одно значение, два места правки).
   { g: 'Опции API', node: '.node-opts', input: '.prm:nth-of-type(2) input', t: 'Контекст — лимит всего промта', d: 4096, tempInput: '.prm:nth-of-type(3) input' },
-  { g: 'Опции API', node: '.node-prompt, .node-mprompt', k: 'ctx.limit', t: 'Контекст — своё значение (перебивает «Опции»)', d: 0, cfg: true, inhOpts: true },
   { g: 'Опции API', node: '.node-opts', input: '.prm:nth-of-type(1) input', t: 'Ответ модели — сколько пишет за ход', d: 300, cfg: true },
   // Ответ в игре
   { g: 'Чат', node: '.node-chat, .node-netgame, .node-telegram', k: 'chat.reply', t: 'Ответ модели (если в «Опциях» не задан)', d: 512, t0: null, inhOptsAns: true },
+  // Правка по фидбеку (💬 «Переписать» и «✎ Точечно») — СВОЙ запрос: свои токены на ответ, свой
+  // контекст и своя температура. Промт тот же, что у хода: перепись видит ровно то же, что видел чат.
+  // «Опции» тут НЕ наследуем: у reasoning-моделей мысли съедают вывод, и обычной тысячи не хватает —
+  // ответ не долетает, а в чате остаётся прежний текст. Поэтому свой дефолт с запасом.
+  { g: 'Чат', node: '.node-chat, .node-netgame, .node-telegram', k: 'chat.rewrite', t: 'Ручная правка ответа (точечно / перепись)', d: 512, t0: null, inhOptsAns: true },
   // Душа
   { g: 'Душа', node: '.node-soul', input: '.soul-maxtok', t: 'Запись в док', d: 400, tempInput: '.soul-temp' },
   { g: 'Душа', node: '.node-soul', k: 'soul.think', t: 'Запас на мысли модели (сверх записи)', d: 4000, cfg: true },
@@ -854,14 +884,34 @@ const TOK_REG = [
   // API
   { g: 'API', node: '.node-api', k: 'api.test', t: 'Проверка связи', d: 50 },
 ];
-const TEMP_KEY = 'rlm.tempOverrides';    // { ключ строки: число } — своя температура подсистемы
-function tempAll() { return (typeof lsGet === 'function' ? (lsGet(TEMP_KEY, null) || {}) : {}); }
+const TEMP_KEY = 'rlm.tempOverrides';    // старый ОБЩИЙ ключ — остался только чтобы перенести прежние значения
+// Лимиты/контексты/температуры принадлежат ЧАТУ (в пресете — пресету), а не приложению целиком:
+// свой файл на сервере, запись прямо при вводе. Ни кнопки «Применить», ни снимка сборки.
+function tokensKeyOf() {
+  // ВАЖНО: до инициализации 'current' обращение к ней бросает ReferenceError (её объявляют ниже по
+  // файлу), а таблица лимитов читается уже при построении нод — приложение падало на старте.
+  let cur = null;
+  try { cur = current; } catch (_) { cur = null; }
+  if (cur && cur.mode === 'chat' && cur.chatId) return 'rlm.tokens.' + cur.chatId;
+  return 'rlm.tokens.preset.' + ((cur && cur.presetId) || 'default');
+}
+function tokensBox() {
+  const box = (typeof lsGet === 'function' ? lsGet(tokensKeyOf(), null) : null);
+  if (box && typeof box === 'object') return { tok: box.tok || {}, temp: box.temp || {} };
+  // Первый заход этого чата: подхватываем прежние общие значения, чтобы ничего не пропало.
+  return {
+    tok: (typeof lsGet === 'function' ? (lsGet(TOK_KEY, null) || {}) : {}),
+    temp: (typeof lsGet === 'function' ? (lsGet(TEMP_KEY, null) || {}) : {}),
+  };
+}
+function tokensSave(box) { if (typeof lsSet === 'function') lsSet(tokensKeyOf(), { tok: box.tok || {}, temp: box.temp || {} }); }
+function tempAll() { return tokensBox().temp; }
 function tempHas(key) { const v = parseFloat(tempAll()[key]); return !isNaN(v); }
 function tempVal(key, def) { const v = parseFloat(tempAll()[key]); return isNaN(v) ? def : v; }
 function tempSetVal(key, val) {
-  const all = tempAll(); const v = parseFloat(val);
-  if (String(val).trim() === '' || isNaN(v)) delete all[key]; else all[key] = v;
-  if (typeof lsSet === 'function') lsSet(TEMP_KEY, all);
+  const box = tokensBox(); const v = parseFloat(val);
+  if (String(val).trim() === '' || isNaN(v)) delete box.temp[key]; else box.temp[key] = v;
+  tokensSave(box);   // сохраняется само, в тот же миг
 }
 // Температура «Опций» ЭТОЙ цепочки (3-е поле ноды «Опции») — её наследуют запросы без своей.
 function tempFromOpts(node) {
@@ -872,7 +922,7 @@ function tempFromOpts(node) {
     return isNaN(v) ? null : v;
   } catch (_) { return null; }
 }
-function tokAll() { return (typeof lsGet === 'function' ? (lsGet(TOK_KEY, null) || {}) : {}); }
+function tokAll() { return tokensBox().tok; }
 // Значение зашитого лимита: правка из панели или дефолт из реестра.
 function tokVal(key, def) { const v = parseInt(tokAll()[key], 10); return (v > 0) ? v : def; }
 // Значение ЗАДАНО РУКАМИ в таблице «Все токены»? Тогда оно главнее «Опций» API (ТЗ: таблица перебивает опции).
@@ -880,9 +930,10 @@ function tokVal(key, def) { const v = parseInt(tokAll()[key], 10); return (v > 0
 function tokHas(key) { const v = parseInt(tokAll()[key], 10); return v > 0; }
 // Записать лимит в базу: 0/пусто — стереть запись (значит «своего нет», слушаем «Опции»/дефолт).
 function tokSetVal(key, val) {
-  const all = tokAll(); const n = parseInt(val, 10);
-  if (!(n > 0)) delete all[key]; else all[key] = n;
-  if (typeof lsSet === 'function') lsSet(TOK_KEY, all);
+  // сохраняется САМО: вписал число — оно уже на сервере, в файле этого чата
+  const box = tokensBox(); const n = parseInt(val, 10);
+  if (!(n > 0)) delete box.tok[key]; else box.tok[key] = n;
+  tokensSave(box);
 }
 // ---- Журнал «Консоль» (отладка как в SillyTavern): что ушло модели и что вернулось ----
 const CONSOLE_LOG = [];   // последние события (с лимитом)
@@ -2374,9 +2425,11 @@ function genPersonaId() { return 'persona-' + Date.now().toString(36) + '-' + Ma
 // ДЕБАУНСОМ (не долбить /store/set на каждую букву — тот же урок, что у лога чата).
 let _personaSaveT = null;
 function personaCommit(list, immediate) {
-  db[PERSONAS_KEY] = list;
   clearTimeout(_personaSaveT);
-  const post = () => rlmApi('/api/rlm/store/set', { key: PERSONAS_KEY, value: list }).catch(() => {});
+  // Библиотека персон — единственное место, которое писало на сервер СВОИМ запросом: без очереди,
+  // без повторов при обрыве и без номера клиента. Любой сбой сети терял правку молча. Теперь как всё
+  // остальное — через общую очередь (гарантированная доставка + проверка права записи).
+  const post = () => { if (typeof lsSet === 'function') lsSet(PERSONAS_KEY, list); else db[PERSONAS_KEY] = list; };
   if (immediate) post(); else _personaSaveT = setTimeout(post, 400);
 }
 // Заполнить поля ноды выбранной персоной (id) + запомнить её активной.
@@ -7649,7 +7702,7 @@ async function criticJudge(node, critic, opts) {
     // «Переписываю…» показывает лента (перекат = генерация); верхняя плашка не нужна
     renderChatLogs(node);
     // Перекат с вердиктом впереди; noCritic — потолок 1 попытка (перекат заново не судим).
-    await generateReply(node, { directive: reason, noCritic: true, rejectedText: replyText });
+    await generateReply(node, { directive: reason, noCritic: true, rejectedText: replyText, fromCritic: true });   // вердикт критика, а не ручная правка — настройки как у обычного хода
     // На НОВОЙ реплике — видимая метка «переписано критиком: причина».
     for (let i = node._msgs.length - 1; i >= 0; i--) {
       if (node._msgs[i].role === 'char') {
@@ -7833,9 +7886,12 @@ async function tgCriticLearn(el, feedback, oldReply, newReply) {
     if (v.lesson) tgCriticRecordLesson(critic, v.lesson);
   } catch (e) { /* обучение опционально */ }
 }
-// Ручной фидбек из панели ноды Telegram: переписать ПОСЛЕДНИЙ ответ бота по замечанию и (если можно) править
-// сообщение на месте. Мотор — тот же telegramReply с opts.directive/editLast (перекат вердиктом впереди).
-async function tgFeedbackRewrite(el, note) {
+// Ручной фидбек из панели ноды Telegram: переписать ПОСЛЕДНИЙ ответ бота по замечанию.
+// Мотор — тот же telegramReply с opts.directive/editLast (перекат вердиктом впереди).
+// opts.soft — мягкая точечная правка («✎ Точечно»): менять только названное, остальное не трогать.
+// Галочка «✎ править на месте» решает доставку: editMessageText вместо «удалить + новое сообщение».
+async function tgFeedbackRewrite(el, note, opts) {
+  opts = opts || {};
   note = String(note || '').trim();
   if (!note) { el._setStatus('впиши замечание для правки', 'err'); return; }
   const token = ((el.querySelector('.tg-token') || {}).value || el._token || '').trim();
@@ -7846,9 +7902,10 @@ async function tgFeedbackRewrite(el, note) {
   let last = '';   // последний ответ бота
   for (let i = (convo.msgs || []).length - 1; i >= 0; i--) { if (convo.msgs[i].role === 'char') { last = convo.msgs[i].text || ''; break; } if (convo.msgs[i].role === 'user') break; }
   if (!last) { el._setStatus('нет ответа бота для правки', 'err'); return; }
-  if (!convo.lastSent || convo.lastSent.messageId == null || convo.lastSent.voice) el._setStatus('на месте править нельзя (голос/нет id) — правка уйдёт новым сообщением', '');
-  const thread = (el._topicFilter != null) ? el._topicFilter : (el._lastThreadId != null ? el._lastThreadId : null);
-  await telegramReply(el, token, chatId, null, thread, { directive: note, editLast: true, rejectedText: last });
+  const inPlace = !!(el.querySelector('.tg-fb-inplace') || {}).checked;   // галочка рядом с кнопками фидбека
+  if (inPlace && (!convo.lastSent || convo.lastSent.messageId == null || convo.lastSent.voice)) el._setStatus('на месте править нельзя (голос/нет id) — правка уйдёт новым сообщением', '');
+  const thread = tgOutThread(el);   // заперта тема → строго она
+  await telegramReply(el, token, chatId, null, thread, { directive: note, editLast: true, rejectedText: last, softEdit: !!opts.soft, editInPlace: inPlace });
   // Критик учится на фидбеке (обобщённый урок → блокнот). newReply = новый последний ответ бота.
   let neu = ''; for (let i = (convo.msgs || []).length - 1; i >= 0; i--) { if (convo.msgs[i].role === 'char') { neu = convo.msgs[i].text || ''; break; } if (convo.msgs[i].role === 'user') break; }
   tgCriticLearn(el, note, last, neu).catch(() => {});
@@ -8377,6 +8434,7 @@ async function chronicleWrite(chrEl, opts) {
     const hideMode = (chrEl.querySelector('.chr-hide') || {}).value || 'all';
     const hideLeave = Math.max(0, parseInt((chrEl.querySelector('.chr-hideleave') || {}).value, 10) || 0);
     chrMarkScene(msgs, from, to, { num, name: finalTitle }, hideMode, hideLeave);
+    chrMarkSceneSave(chatNode);   // пометки лежат В ИСТОРИИ — сохраняем сразу, иначе после перезахода сцены снова видны
     renderChatLogs(chatNode);   // показать призраков/подписи сразу (и сохранить лог с флагами)
     const trigNote = semantic ? 'по смыслу (фраза-эталон)' : `ключей: ${finalKeys.length}`;
     note(`✓ Записано в «${(lore.querySelector('.node-head .label') || {}).textContent || 'лорбук'}»: «${finalTitle}» (${trigNote}).`);
@@ -8403,6 +8461,18 @@ function chrPrevContext(lore, n) {
 //   chrScene — подпись сцены (ставим на сообщения [from,to)); chrHidden — «призрак», вон из контекста модели.
 // Режимы «после записи скрывать»: none — не прячем; all — прячем всё до (to−leave) от начала истории (видны последние
 // leave сообщений); last — прячем только внутри этой сцены до (to−leave). Совпадает с autoHideMode в MemoryBooks.
+// Пометки сцены (chrScene / chrHidden) лежат В ИСТОРИИ — значит после них историю надо сохранить.
+// Раньше этого не делалось: свёрнутые сцены после перезахода снова становились видимыми и снова
+// уходили в контекст модели.
+function chrMarkSceneSave(node) {
+  try {
+    if (node && node.classList && (node.classList.contains('node-netgame') || node.classList.contains('node-telegram'))) {
+      if (typeof tgTouchHistory === 'function') { tgTouchHistory(node); return; }
+    }
+    if (typeof persistChatLog === 'function' && node && node._msgs) persistChatLog(node);
+    if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
+  } catch (_) { /* сохранение пометок не должно ронять свёртку */ }
+}
 function chrMarkScene(msgs, from, to, scene, hideMode, leave) {
   leave = Math.max(0, leave || 0);
   const cut = to - leave;   // индекс < cut → призрак; последние leave остаются видимыми
@@ -9916,6 +9986,8 @@ function tgSyncSceneUI(el) {
 }
 // «Собрать сцену»: движок Хроники тот же, что в сингле, только историю ему подставляем из активной беседы
 // (у телеграм-ноды `_msgs` наполняется лишь на время хода). Индексы ►◄ = индексы в этом же списке.
+// Пометки Хроники (chrScene/chrHidden) меняют историю беседы — значит их надо сохранять, иначе
+// после перезахода свёрнутые сцены снова видны и снова уходят в контекст модели.
 async function tgSceneBuild(el) {
   const chrs = [...document.querySelectorAll('.node-chronicle:not(.nvis)')].filter((chr) => chronicleChat(chr) === el);
   if (!chrs.length) { el._setStatus('нет ноды «Хроника», подключённой к этой ноде', 'err'); return; }
@@ -9930,6 +10002,36 @@ async function tgSceneBuild(el) {
   tgSyncSceneUI(el);
 }
 // Перерисовать ленту ноды из СОХРАНЁННОЙ истории беседы (при заходе в сессию — иначе лента пуста, хотя _convos есть).
+// Счётчик сообщений ноды: сколько реально лежит в истории активной беседы. По нему сразу видно,
+// сохранилась ли сессия после перезахода и что осталось после «Очистить».
+// История беседы изменилась — сразу обновить счётчик и сохранить снимок. Вызывается ПОСЛЕ каждого
+// добавления/удаления реплики, чтобы ничего не жило только в памяти окна.
+// ЕДИНСТВЕННАЯ дверь для дописывания истории партии: положить реплику и тут же сохранить.
+// Раньше её дописывали в пяти разных местах, и в каждом можно было забыть сохранение — забывали.
+function tgAddMsg(el, convo, msg) {
+  if (!convo || !Array.isArray(convo.msgs)) return null;
+  convo.msgs.push(msg);
+  tgTouchHistory(el);   // счётчик + снимок на сервер, без вариантов
+  return msg;
+}
+function tgTouchHistory(el) {
+  try { tgSyncMsgCount(el); } catch (_) {}
+  try { if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); } catch (_) {}
+}
+function tgSyncMsgCount(el) {
+  const box = el && el.querySelector('.tg-msgcount'); if (!box) return;
+  const convos = el._convos || {};
+  const cid = (el._lastChatId != null) ? String(el._lastChatId) : null;
+  const convo = (cid && convos[cid]) || null;
+  const msgs = (convo && Array.isArray(convo.msgs)) ? convo.msgs : [];
+  const chars = msgs.filter((m) => m.role === 'char').length;
+  const total = Object.keys(convos).reduce((a, k) => a + ((convos[k].msgs || []).length), 0);
+  box.textContent = msgs.length + ' сбщ';
+  box.classList.toggle('empty', msgs.length === 0);
+  box.title = 'В истории активной беседы: ' + msgs.length + ' сообщ. (ответов ведущего — ' + chars + ').'
+    + String.fromCharCode(10) + 'Всего по всем беседам ноды: ' + total + '.'
+    + String.fromCharCode(10) + 'Это то, что уходит в модель и сохраняется в сессию — 0 после перезахода значит, что история не сохранилась.';
+}
 function tgRenderFeedFromConvo(el, convo) {
   const feed = el && el.querySelector('.tg-feed'); if (!feed || !convo || !Array.isArray(convo.msgs)) return;
   feed.innerHTML = '';
@@ -9942,6 +10044,7 @@ function tgRenderFeedFromConvo(el, convo) {
     tgFeed(el, show, isChar ? 'out' : 'in', isChar ? charName : '', isChar ? { ctx: m.ctx } : {});
     if (isChar && keep && m.ru) { const row = el.querySelector('.tg-feed .tg-line.out:last-child'); if (row) { row._ruSrc = m.out || m.text || ''; row._ruShown = m.ru; } }
   });
+  tgSyncMsgCount(el);   // счётчик — по восстановленной истории
   if (typeof tgSyncSceneUI === 'function') tgSyncSceneUI(el);   // каретки ►◄, подписи сцен и призраки — по восстановленной истории
 }
 // «🌐 RU предпросмотр» над лентой: показывать ответы бота по-русски. Это ТОЛЬКО вид ленты —
@@ -10283,10 +10386,10 @@ async function tgActClick(el, row, act) {
   const token = ((el.querySelector('.tg-token') || {}).value || el._token || '').trim();
   const chatId = tgTargetChat(el);
   const convo = (el._convos || {})[chatId];
-  const thread = (el._topicFilter != null) ? el._topicFilter : (el._lastThreadId != null ? el._lastThreadId : null);
+  const thread = tgOutThread(el);   // заперта тема → строго она
   if (act === 'fb') {                                   // ⚖ — курсор в поле замечания под лентой
     const note = el.querySelector('.tg-fb-note'); if (note) { note.focus(); note.scrollIntoView({ block: 'nearest' }); }
-    el._setStatus('впиши замечание и жми «⚖ Править»', '');
+    el._setStatus('впиши замечание: «✎ Точечно» — подправить, «⚖ Править» — переписать заново', '');
     return;
   }
   if (act === 'ru') {                                   // 🌐 — предпросмотр по-русски, повторный клик возвращает оригинал
@@ -10571,7 +10674,7 @@ function tgFeed(el, text, dir, name, opts) {
         + '<button class="tg-act" data-act="regen" type="button" title="Перегенерить ответ (заменит его на месте)">🔄</button>'
         + '<button class="tg-act" data-act="branch" type="button" title="Ветка: новый чат-копия ОТ этого сообщения — история до него, вся сборка и память копируются">⑃</button>'
         + '<button class="tg-act" data-act="edit" type="button" title="Редактировать текст ответа">✏</button>'
-        + '<button class="tg-act" data-act="fb" type="button" title="Фидбек: переписать по замечанию">⚖</button>'
+        + '<button class="tg-act" data-act="fb" type="button" title="Фидбек: правка по замечанию — точечно или заново (кнопки под лентой)">⚖</button>'
         + '<button class="tg-act" data-act="ru" type="button" title="Показать по-русски (предпросмотр, обратимо)">🌐</button>'
       + '</span>' : '')
     + '</span>'
@@ -10594,7 +10697,7 @@ function tgFeed(el, text, dir, name, opts) {
       e.stopPropagation();
       if (b.dataset.cb !== 'ng:turn') return;
       const tk = ((el.querySelector('.tg-token') || {}).value || el._token || '').trim();
-      tgNgSendTurn(el, tk, tgTargetChat(el), (el._topicFilter != null ? el._topicFilter : el._lastThreadId));
+      tgNgSendTurn(el, tk, tgTargetChat(el), tgOutThread(el));
     });
   });
   if (opts.ctx && opts.ctx.length) {   // теги контекста: клик разворачивает текст блока прямо в ленте (в Telegram это НЕ уходит)
@@ -10620,7 +10723,29 @@ function tgFeed(el, text, dir, name, opts) {
     sp.addEventListener('pointerdown', (e) => e.stopPropagation());
     sp.addEventListener('click', (e) => { e.stopPropagation(); sp.classList.toggle('open'); });
   });
-  const xb = row.querySelector('.tg-line-x');   // ✕ — удалить строку совсем (и из хода)
+  // Удалить реплику ИЗ ИСТОРИИ беседы, а не только со экрана. Ищем по id сообщения, а если его нет
+  // (у части строк id не проставлен) — по позиции этой строки среди строк того же направления.
+  const dropFromConvo = () => {
+    try {
+      const cid = (el._lastChatId != null) ? String(el._lastChatId) : null;
+      const convo = cid && el._convos ? el._convos[cid] : null;
+      if (!convo || !Array.isArray(convo.msgs)) return false;
+      const role = (dir === 'out') ? 'char' : 'user';
+      const mid = row.dataset.msgId != null ? Number(row.dataset.msgId) : null;
+      let idx = (mid != null) ? convo.msgs.findIndex((m) => m.msgId === mid) : -1;
+      if (idx < 0) {
+        const rows = [...feed.querySelectorAll('.tg-line.' + (dir === 'out' ? 'out' : 'in') + ':not(.tg-cand)')];
+        const nth = rows.indexOf(row);                                  // какая это по счёту строка такого рода
+        if (nth < 0) return false;
+        const positions = convo.msgs.map((m, i) => (m.role === role ? i : -1)).filter((i) => i >= 0);
+        idx = positions[nth] != null ? positions[nth] : -1;
+      }
+      if (idx < 0) return false;
+      convo.msgs.splice(idx, 1);
+      return true;
+    } catch (_) { return false; }
+  };
+  const xb = row.querySelector('.tg-line-x');   // ✕ — удалить строку совсем (из ленты, из хода И из истории)
   xb.addEventListener('pointerdown', (e) => e.stopPropagation());
   xb.addEventListener('click', async (e) => { e.stopPropagation();
     // строка бота с известным id — снести и в Telegram (иначе в чате остаётся, а в ленте пропало)
@@ -10630,7 +10755,13 @@ function tgFeed(el, text, dir, name, opts) {
       const cid = (typeof tgTargetChat === 'function') ? tgTargetChat(el) : null;
       if (tk && cid != null && cid !== 'local') { try { await tgCall(tk, 'deleteMessage', { chat_id: cid, message_id: tgid }); } catch (_) {} }
     }
-    dropTurn(); if (typeof tgNgRenderPending === 'function') tgNgRenderPending(el); row.remove(); });
+    const gone = dropFromConvo();                       // из истории беседы — иначе вернётся при перезаходе
+    dropTurn(); if (typeof tgNgRenderPending === 'function') tgNgRenderPending(el);
+    row.remove();
+    if (typeof tgSyncMsgCount === 'function') tgSyncMsgCount(el);
+    if (gone) { try { allowShrink(chatgraphKeyOf(current.chatId)); } catch (_) {} }
+    if (gone && typeof persistCurrentGraph === 'function') persistCurrentGraph();   // удаление сохраняется как обычная запись: сервер знает, что оно намеренное (allowShrink)
+  });
   if (dir === 'out') feed.querySelectorAll('.tg-line.out .tg-act').forEach((b) => { if (b.dataset.act !== 'ru') b.remove(); });   // 🔄/✏/⚖ работают только по ПОСЛЕДНЕМУ ответу (Telegram правит на месте только его); 🌐 оставляем всем
   feed.appendChild(row);
   if (dir === 'out' && el._ruPreview) tgRuTranslateRow(el, row);   // включён RU-предпросмотр — переводим и новые ответы
@@ -10639,6 +10770,7 @@ function tgFeed(el, text, dir, name, opts) {
   if (typeof tgSyncSceneUI === 'function') tgSyncSceneUI(el);   // каретки ►◄ / подпись сцены / призрак — и на новой строке
   if (typeof tgRenderEvents === 'function') tgRenderEvents(el);   // очередь событий Режиссёра — счётчик ходов сдвинулся
   feed.scrollTop = feed.scrollHeight;
+  if (typeof tgSyncMsgCount === 'function') tgSyncMsgCount(el);   // каждая новая строка ленты — сразу в счётчик
 }
 // Запуск: проверить токен (getMe), пропустить накопленное за время простоя, крутить polling.
 // Перехват опроса: занять бота под ЭТУ ноду перед стартом. «Последний getUpdates выигрывает»,
@@ -10707,7 +10839,20 @@ async function tgHandleUpdate(el, token, u) {
   tgSeeChat(el, chatId, chatTitle);   // выпадашка «Чат» знает ВСЕ чаты (даже те, что зафиксированы мимо — чтобы можно было переключиться)
   if (el._chatFilter != null && String(chatId) !== String(el._chatFilter)) return;   // бот зафиксирован на ДРУГОМ чате — игнорируем это сообщение
   // Форум-темы: запомнить тему (имя — из служебного сообщения о создании/правке) + номер последней темы (для «🔒 текущая»).
-  if (threadId != null) { tgSeeTopic(el, threadId, (msg.forum_topic_created && msg.forum_topic_created.name) || (msg.forum_topic_edited && msg.forum_topic_edited.name)); el._lastThreadId = threadId; }
+  if (threadId != null) {
+    // Имя темы Telegram присылает не в каждом сообщении: при создании и правке — прямо в сообщении,
+    // а в обычной реплике — внутри reply_to_message (сервисное сообщение о создании темы).
+    const rt = msg.reply_to_message || {};
+    const tname = (msg.forum_topic_created && msg.forum_topic_created.name)
+      || (msg.forum_topic_edited && msg.forum_topic_edited.name)
+      || (rt.forum_topic_created && rt.forum_topic_created.name)
+      || (rt.forum_topic_edited && rt.forum_topic_edited.name)
+      || null;
+    tgSeeTopic(el, threadId, tname);
+    // «Последняя тема» запоминается ТОЛЬКО из своей темы: иначе болтовня в соседней теме
+    // переписывала _lastThreadId, и следующий ход бота уходил туда (утечка в чужую тему).
+    if (el._topicFilter == null || threadId === el._topicFilter) el._lastThreadId = threadId;
+  }
   if (!msg.text) return;                          // дальше — только текстовые сообщения
   if (msg.from && msg.from.is_bot) return;        // не реагируем на других ботов (анти-петля)
   if (tgMode === 'group' && el._topicFilter != null && threadId !== el._topicFilter) return;   // читаем ТОЛЬКО выбранную тему форума
@@ -10746,7 +10891,7 @@ async function tgHandleUpdate(el, token, u) {
       if (active && tgIsAddressed(el, msg)) await tgNgSendTurn(el, token, chatId, threadId);
       return;
     }
-    if (!muted) convo.msgs.push({ role: 'user', text: from + ': ' + forModel, authorId });   // заглушённого в ИСТОРИЮ не пишем (в логе он виден серым)
+    if (!muted) tgAddMsg(el, convo, { role: 'user', text: from + ': ' + forModel, authorId });   // заглушённого в ИСТОРИЮ не пишем (в логе он виден серым)
     if (!muted && tgIsAddressed(el, msg)) await telegramReply(el, token, chatId, null, threadId);   // заглушённый НЕ будит бота (даже @упоминанием/reply)
     return;
   }
@@ -10843,9 +10988,10 @@ function tgNgAccum(el, authorId, from, text, msgId) {
   tgNgRenderPending(el);
 }
 // Правка сообщения в Telegram → обновить его текст в буфере хода (по id сообщения), перерисовать сборку.
+function tgNgEditPendingSave(el) { try { if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); } catch (_) {} }
 function tgNgEditPending(el, msgId, newText) {
   const entry = (el._ngTurn || []).find((t) => t.msgId != null && t.msgId === msgId);
-  if (entry) { entry.text = newText; tgNgRenderPending(el); }
+  if (entry) { entry.text = newText; tgNgRenderPending(el); tgNgEditPendingSave(el); }   // текст заявки правился только в памяти — после перезахода откатывался
 }
 // Показать «ход в сборке»: реплики буфера до «Собрать ход», у каждой крестик (удалить из хода).
 function tgNgRenderPending(el) {
@@ -10953,14 +11099,14 @@ async function tgNgStartGame(el, token, chatId, threadId) {
   let text = port ? sourceText(port, []) : '';
   if (!text || !text.trim()) { el._setStatus('нет первого сообщения у карточки-движка', 'err'); return; }
   // Запереть тему форума, где стартуем (нода помнит номер — дальше читает/отвечает только в ней).
-  const startThread = (threadId != null) ? threadId : (el._lastThreadId != null ? el._lastThreadId : el._topicFilter);
-  if (startThread != null) { el._topicFilter = startThread; if (typeof tgRenderTopics === 'function') tgRenderTopics(el); }
+  const startThread = (el._topicFilter != null) ? el._topicFilter : ((threadId != null) ? threadId : el._lastThreadId);
+  if (startThread != null && el._topicFilter == null) { el._topicFilter = startThread; if (typeof tgRenderTopics === 'function') tgRenderTopics(el); }   // замок уже стоит — не срываем его командой из другой темы
   const mctx = chatNames(el);
   text = substituteMacros(text, mctx);
   // Начать историю беседы: первое сообщение = приветствие {{char}} (стартовая сцена).
   el._convos = el._convos || {};
   const convo = el._convos[cid] || (el._convos[cid] = { chatId: (typeof chatIdBase === 'function' && el._chatId ? chatIdBase(el._chatId) : genChatId()), msgs: [] });
-  convo.msgs.push({ role: 'char', text, greeting: true });
+  tgAddMsg(el, convo, { role: 'char', text, greeting: true });   // старт партии: приветствие ложится на диск сразу
   el._chatId = convo.chatId; el._msgs = convo.msgs; el._lastChatId = cid;
   // Пустые документы игроков (Inventory/Standing) — засеять из их «Персоны», пока сцены ещё нет.
   // Галочка «не обновлять Души на старте» (тесты): документы уже заполнены — не тратим запросы заново.
@@ -11987,11 +12133,11 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
   opts = opts || {};   // opts.directive — перекат по фидбеку (вердикт впереди); opts.editLast — править прошлое сообщение бота; opts.rejectedText — что переписываем
   // Беседа этого chat_id: своя история и своя папка памяти (заводится при первом сообщении).
   const convo = el._convos[chatId] || (el._convos[chatId] = { chatId: (typeof chatIdBase === 'function' && el._chatId ? chatIdBase(el._chatId) : genChatId()), msgs: [] });
-  if (incomingText != null) convo.msgs.push({ role: 'user', text: incomingText });   // в группе реплику уже добавили с именем автора
+  if (incomingText != null) tgAddMsg(el, convo, { role: 'user', text: incomingText });   // дальше есть выходы (нет API/модели, пустой ответ) — реплика уже сохранена
   // Нода Telegram играет роль чат-ноды для общих функций: подставляем активную беседу в _msgs/_chatId.
   el._msgs = tgApplyMute(el, convo.msgs);   // группа: реплики замьюченных участников не идут в контекст модели
   el._chatId = convo.chatId;
-  const thread = (threadId != null) ? threadId : (el._topicFilter != null ? el._topicFilter : null);   // ответ/«печатает…» уходят в ту же тему форума
+  const thread = tgOutThread(el, threadId);   // ответ/«печатает…» уходят в ту же тему форума; замок сильнее входящего
   // Найти API, подключённый ко входу ноды (как generateReply у Чата: API.выход → вход ноды).
   const chatIn = el.querySelector(':scope > .port.in');
   const apiConn = connections.find((c) => c.to === chatIn && c.from.closest('.node-api'));
@@ -12045,10 +12191,20 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
     const msgs = messages.slice();
     if (directive) {
       const prev = prevReply ? ('The reply to rewrite was:\n"' + substituteMacros(String(prevReply).trim(), mctx) + '"\n\n') : '';
-      msgs.push({ role: 'system', _src: 'Редактура', content: '[EDITOR NOTE — out of character, NOT part of the story. Do NOT answer, quote or mention this note; just obey it.]\n' + prev + 'The rejected reply fails on this: ' + substituteMacros(String(directive).trim(), mctx) + '\n\nRewrite ' + (mctx.char || 'the character') + "'s reply so that flaw is fully gone. The new reply MUST be substantially different from the rejected one — actually change what " + (mctx.char || 'the character') + " does, decides or feels as the note demands; do NOT merely reword it, soften it, or land on the same outcome or beats. Stay in character and true to the character sheet, and continue the scene from the last user message. Output only the rewritten in-character reply." });   // промт-директива — 1:1 как в generateReply Чата
+      const who = mctx.char || 'the character';
+      const head = '[EDITOR NOTE — out of character, NOT part of the story. Do NOT answer, quote or mention this note; just obey it.]\n' + prev;
+      // Два режима ручного фидбека: мягкая точечная правка («✎ Точечно») и перекат заново («⚖ Править»).
+      const body = opts.softEdit
+        ? ('Fix ONLY this in the reply: ' + substituteMacros(String(directive).trim(), mctx) + '\n\nThis is a SURGICAL edit, not a rewrite. Return the SAME reply with the minimum change needed to satisfy the note: keep every other sentence word for word, keep the same events, the same outcome, the same order of beats, the same tone, style and length. Do NOT re-style, expand, shorten or "improve" anything the note does not touch. Stay in character and true to the character sheet. Output only the corrected in-character reply.')
+        : ('The rejected reply fails on this: ' + substituteMacros(String(directive).trim(), mctx) + '\n\nRewrite ' + who + "'s reply so that flaw is fully gone. The new reply MUST be substantially different from the rejected one — actually change what " + who + ' does, decides or feels as the note demands; do NOT merely reword it, soften it, or land on the same outcome or beats. Stay in character and true to the character sheet, and continue the scene from the last user message. Output only the rewritten in-character reply.');
+      msgs.push({ role: 'system', _src: 'Редактура', content: head + body });   // жёсткий вариант — 1:1 как в generateReply Чата
     }
     if (prefill) msgs.push({ role: 'assistant', content: substituteMacros(prefill, mctx), _src: 'Префилл' });
-    const rr = await rlmApi('/api/rlm/generate', { _ctxKey: 'chat.reply', base, key, model, messages: msgs, params });
+    // Перекат по фидбеку (⚖ Править / ✎ Точечно) — своя строка настроек chat.rewrite: ответ, контекст,
+    // температура. Промт тот же, что у хода. Пусто в таблице — работает как обычный ответ чата.
+    const kk = (directive && !opts.fromCritic) ? 'chat.rewrite' : 'chat.reply';   // критик — обычный ход
+    const pp = (directive && tokHas('chat.rewrite')) ? Object.assign({}, params, { max_tokens: tokVal('chat.rewrite', 512) }) : params;   // не вписано своё — лимит как у обычного хода
+    const rr = await rlmApi('/api/rlm/generate', { _ctxKey: kk, base, key, model, messages: msgs, params: pp });
     let t = (rr && rr.ok) ? (rr.text || '(пустой ответ)') : ('⚠ ' + ((rr && rr.error) || 'ошибка'));
     if (rr && rr.ok && prefill) { const pf = String(prefill).trim(); const ot = t.replace(/^\s+/, ''); if (pf && ot.startsWith(pf)) t = ot.slice(pf.length).replace(/^\s+/, ''); }   // префилл — только запуск, вырезаем из ответа
     return { rr, t };
@@ -12091,7 +12247,10 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
   }
   if (opts.editLast) { for (let i = convo.msgs.length - 1; i >= 0; i--) { if (convo.msgs[i].role === 'char') { convo.msgs.splice(i, 1); break; } if (convo.msgs[i].role === 'user') break; } }
   if (opts.editLast) { const feedRows = [...el.querySelectorAll('.tg-feed .tg-line.out')]; if (feedRows.length) feedRows[feedRows.length - 1].remove(); }   // и в ленте прошлый ответ убираем — иначе двоится   // перекат по фидбеку: убрать прежний ответ бота (заменяем)
-  convo.msgs.push({ role: 'char', text });                    // история модели — ОРИГИНАЛ (на языке модели, обычно EN)
+  // Диагностика «что собралось в промт» (ctx) весит десятки килобайт на реплику. Держим её только
+  // у последней: снимок партии переставал влезать в быструю запись и срывался на больших играх.
+  (convo.msgs || []).forEach((m) => { if (m.ctx) delete m.ctx; });
+  tgAddMsg(el, convo, { role: 'char', text });                // история модели — ОРИГИНАЛ (язык модели); на диск сразу, до отправки и озвучки
   const cn = chatNames(el).char;
   // Авто-перевод ОТВЕТА EN→RU: в Telegram (текст/голос) и в консоль уходит русский; история остаётся английской.
   // Секция «preview» = EN→RU (как кнопка RU). Перевод не удался → шлём оригинал.
@@ -12147,9 +12306,22 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
   // Правка на месте выглядит для игроков незаметно — непонятно, что и где поменялось.
   else if (opts.editLast && convo.lastSent && convo.lastSent.messageId != null) {
     const what = opts.directive ? 'ответ переписан' : 'ход перегенерирован';
-    await tgCall(token, 'deleteMessage', { chat_id: chatId, message_id: convo.lastSent.messageId });
     const ngMd = el.classList.contains('node-netgame');
     const kbR = ngMd ? tgNgKeyboard(el) : null;
+    // Галочка «✎ править на месте»: правим ТО ЖЕ сообщение (editMessageText) — в чате ничего нового не
+    // всплывает. Без галочки (как было всегда) — прежнее сносим и шлём новым, чтобы игроки увидели правку.
+    if (opts.editInPlace) {
+      const edR = await tgEditPretty(el, token, chatId, convo.lastSent.messageId, outText, !!convo.lastSent.rich, kbR ? { reply_markup: kbR } : undefined);
+      if (edR && edR.ok) {
+        convo.lastSent = Object.assign({}, convo.lastSent, { thread, voice: false, kb: !!kbR });
+        tgFeed(el, outText, 'out', cn, { kb: kbR, ctx: tgLastCtx(convo) });
+        el._setStatus('✎ ' + what + ' на месте', 'ok');
+      } else el._setStatus('✗ правка на месте: ' + ((edR && edR.description) || 'ошибка'), 'err');
+      if (r && r.ok) { noteTick(); if (!ngMd) maybeUpdateMemory(el); maybeUpdateChronicle(el); }
+      if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
+      return;
+    }
+    await tgCall(token, 'deleteMessage', { chat_id: chatId, message_id: convo.lastSent.messageId });
     const sentR = ngMd ? await tgSendPretty(el, token, chatId, outText, thread, kbR ? { reply_markup: kbR } : undefined)
                        : await tgSendMessage(token, chatId, outText, thread);
     if (sentR && sentR.ok) {
@@ -12230,16 +12402,40 @@ function tgSeeTopic(el, id, name) {
   if (id == null) return;
   if (!el._topics) el._topics = {};
   const key = String(id);
+  const had = el._topics[key];
   if (name || el._topics[key] == null) el._topics[key] = name || el._topics[key] || ('Тема #' + id);
   tgRenderTopics(el);
+  if (had !== el._topics[key] && typeof persistCurrentGraph === 'function') persistCurrentGraph();   // имя темы пришло поллингом — его никто не сохранял
+}
+// Куда УХОДИТ сообщение бота. Замок сильнее всего: тема заперта → пишем только в неё, даже если
+// в этот момент люди говорили в другой теме общего чата (раньше ответ утекал туда, где была
+// активность — «последняя тема» перебивала замок). Не заперто — тема входящего, иначе последняя.
+function tgOutThread(el, incoming) {
+  if (el && el._topicFilter != null) return el._topicFilter;
+  if (incoming != null) return incoming;
+  return (el && el._lastThreadId != null) ? el._lastThreadId : null;
+}
+// Кнопка-замок показывает СОСТОЯНИЕ: заперта (и на какой теме) или нет. Повторный клик — снять.
+function tgSyncTopicLock(el) {
+  const b = el.querySelector('.tg-topic-lock'); if (!b) return;
+  const on = el._topicFilter != null;
+  const known = on ? (el._topics && el._topics[String(el._topicFilter)]) : '';
+  // Пока Telegram не прислал имя (бот вошёл в тему позже её создания) — пишем словами, а не номер.
+  const name = on ? (known && !/^Тема #/.test(known) ? known : 'без имени') : '';
+  b.textContent = on ? '🔒 заперта' : '🔓 запереть';   // имя темы видно в выпадашке рядом
+  b.classList.toggle('on', on);
+  b.title = on
+    ? ('Бот читает и пишет ТОЛЬКО в тему «' + name + '». Клик — снять замок (тогда отвечает в теме, где написали).')
+    : 'Запереть на тему, где написали последней: бот будет читать и отвечать только там (нужен форум с темами)';
 }
 function tgRenderTopics(el) {
   const sel = el.querySelector('.tg-topic'); if (!sel) return;
-  const cur = (el._topicFilter != null) ? String(el._topicFilter) : '';
+  const cur = (el._topicFilter != null) ? String(el._topicFilter) : (el._topicPick != null ? String(el._topicPick) : '');
   const ids = Object.keys(el._topics || {});
   sel.innerHTML = '<option value="">Все темы</option>' +
     ids.map((id) => '<option value="' + id + '">' + esc(el._topics[id]) + '</option>').join('');
   sel.value = cur;
+  tgSyncTopicLock(el);   // подпись замка идёт вместе со списком тем
 }
 // Чаты Telegram: список виденных чатов (id→имя) + перерисовка выпадашки «Чат». Аналог тем, но для ЧАТА
 // (личка/группа), а не раздела форума. Зафиксированный чат → бот работает только в нём (в любом режиме).
@@ -12247,8 +12443,10 @@ function tgSeeChat(el, id, name) {
   if (id == null) return;
   if (!el._chats) el._chats = {};
   const key = String(id);
+  const hadC = el._chats[key];
   if (name || el._chats[key] == null) el._chats[key] = name || el._chats[key] || ('чат ' + id);
   tgRenderChats(el);
+  if (hadC !== el._chats[key] && typeof persistCurrentGraph === 'function') persistCurrentGraph();   // то же для имён чатов
 }
 function tgRenderChats(el) {
   const sel = el.querySelector('.tg-chat'); if (!sel) return;
@@ -12272,7 +12470,7 @@ function tgEnsureParticipant(el, id, name) {
   if (!el._cast) { el._cast = []; el._castById = {}; }
   const isNg = !!(el.classList && el.classList.contains('node-netgame'));
   let p = el._castById[id];
-  if (p) { if (name && p.name !== name) { p.name = name; tgSyncPartRow(el, p); } return p; }
+  if (p) { if (name && p.name !== name) { p.name = name; if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); tgSyncPartRow(el, p); } return p; }
   p = { id, name: name || id, color: TG_PART_COLORS[el._cast.length % TG_PART_COLORS.length], muted: isNg };   // сетевая игра: новый участник ЗАГЛУШЁН — станет игроком через «Это персонаж»
   el._cast.push(p); el._castById[id] = p;
   tgAddCastLeg(el, p); tgSyncCastCount(el);
@@ -12414,7 +12612,7 @@ async function tgSayAsBot(el, text) {
   const token = ((el.querySelector('.tg-token') || {}).value || el._token || '').trim();
   const chatId = tgTargetChat(el);
   if (!token || chatId == null || chatId === 'local') { el._setStatus('нет запущенного бота или чата', 'err'); return; }
-  const thread = (el._topicFilter != null) ? el._topicFilter : (el._lastThreadId != null ? el._lastThreadId : null);
+  const thread = tgOutThread(el);   // заперта тема → строго она
   const kb = tgNgKeyboard(el);
   // ОДНИМ сообщением: картинка и звук вкладываются В ТУ ЖЕ реплику (rich-разметка это умеет),
   // а не летят отдельными сообщениями «музыка · картинка · текст». Документ Telegram в rich не
@@ -12478,7 +12676,7 @@ async function tgWhisperToPlayer(el, p, text) {
   const uid = Number(String(p.id || '').replace(/^tg:/, ''));
   if (!token || chatId == null || chatId === 'local') { el._setStatus('шёпот: нет запущенного бота или чата', 'err'); return; }
   if (!Number.isFinite(uid)) { el._setStatus('шёпот: этот участник добавлен вручную — у него нет Telegram-профиля', 'err'); return; }
-  const thread = (el._topicFilter != null) ? el._topicFilter : (el._lastThreadId != null ? el._lastThreadId : null);
+  const thread = tgOutThread(el);   // заперта тема → строго она
   const r = await tgSendWhisper(el, token, chatId, uid, md, thread);
   if (r && r.ok) { tgFeed(el, md, 'out', '🤫 шёпот → ' + p.name, {}); el._setStatus('шёпот отправлен — видит только ' + p.name, 'ok'); }
   else el._setStatus('✗ шёпот: ' + ((r && r.description) || 'ошибка') + ((r && r.leaked) ? '' : ' (бот должен быть админом группы)'), 'err');
@@ -12500,7 +12698,7 @@ function tgTestAsPlayer(el, p, text) {
     const chatId = (typeof tgTargetChat === 'function') ? tgTargetChat(el) : el._lastChatId;
     if (chatId == null) { el._setStatus('нет чата — сначала напиши боту или зафиксируй чат', 'err'); return; }
     const convo = el._convos[chatId] || (el._convos[chatId] = { chatId: (typeof chatIdBase === 'function' && el._chatId ? chatIdBase(el._chatId) : genChatId()), msgs: [] });
-    convo.msgs.push({ role: 'user', text: p.name + ': ' + text, authorId: p.id });
+    tgAddMsg(el, convo, { role: 'user', text: p.name + ': ' + text, authorId: p.id });
     tgFeed(el, text, 'in', p.name, { authorId: p.id, msgId });
     el._setStatus('реплика добавлена в контекст (тест)', 'ok');
     if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
@@ -12743,7 +12941,7 @@ function buildNetgameNode() {
       pb.disabled = true;
       try {
         const token = ((el.querySelector('.tg-token') || {}).value || el._token || '').trim();
-        await tgNgStartGame(el, token, tgTargetChat(el), (el._lastThreadId != null ? el._lastThreadId : el._topicFilter));
+        await tgNgStartGame(el, token, tgTargetChat(el), tgOutThread(el));   // старт партии — в запертую тему, а не в ту, где болтали последней
       } finally { pb.disabled = false; }
     });
     const topActs = el.querySelector('.tg-top-acts');   // «Играть» — в верхней строке ноды, рядом с «Запустить бота» и «Очистить» (частые действия партии на виду)
@@ -12758,7 +12956,7 @@ function buildNetgameNode() {
       b.disabled = true;
       try {
         const token = ((el.querySelector('.tg-token') || {}).value || el._token || '').trim();
-        const thread = (el._lastThreadId != null) ? el._lastThreadId : (el._topicFilter != null ? el._topicFilter : null);
+        const thread = tgOutThread(el);   // замок сильнее «последней темы»
         await tgNgSendTurn(el, token, tgTargetChat(el), thread);
       } finally { b.disabled = false; }
     });
@@ -12873,6 +13071,7 @@ function buildTelegramNode() {
           </button>
           <span class="tg-test-name"></span>
           <textarea class="field tg-test-input" rows="1" spellcheck="false" placeholder="сообщение…  (Enter — отправить, Shift+Enter — новая строка)"></textarea>
+          <button class="btn ghost tg-test-again" type="button" title="Ответить по уже собранной истории — ничего писать не нужно. Полезно, когда ход игроков ушёл, а ответа ведущего не случилось (оборвался запрос, пустой ответ)">↻</button>
           <button class="btn ghost tg-test-send" type="button" title="Отправить">▶</button>
         </div>
         <div class="tg-say-docs" hidden></div>
@@ -13003,7 +13202,11 @@ function buildTelegramNode() {
         </div>
         <div class="tg-set-row tg-fb-row">
           <input class="field tg-fb-note" type="text" spellcheck="false" placeholder="замечание к последнему ответу бота…">
-          <button class="btn ghost tg-fb-go" type="button" title="Критик переписывает ПОСЛЕДНИЙ ответ бота по твоему замечанию и (если можно) правит сообщение на месте">⚖ Править</button>
+          <button class="btn ghost tg-fb-tr" type="button" data-dir="en" title="Перевести своё замечание на английский (замена текста в поле) — модель понимает его точнее">EN</button>
+          <button class="btn ghost tg-fb-tr" type="button" data-dir="ru" title="Перевести своё замечание на русский (замена текста в поле)">RU</button>
+          <button class="btn ghost tg-fb-soft" type="button" title="Мягкая точечная правка: модель исправляет ТОЛЬКО то, что ты назвал, остальной текст оставляет слово в слово (те же события, тот же объём). Когда надо чуть-чуть подрихтовать">✎ Точечно</button>
+          <button class="btn ghost tg-fb-go" type="button" title="Переписать заново: ответ должен заметно измениться — другое решение, действие или чувство персонажа, а не переформулировка того же">⚖ Править</button>
+          <label class="tg-aud-opt tg-fb-place" title="Снято — прежнее сообщение бота удаляется, правка приходит НОВЫМ сообщением (игроки видят, что ход изменился). Поставлено — сообщение правится НА МЕСТЕ, в чате ничего нового не всплывает (голосовое на месте править нельзя)"><input type="checkbox" class="tg-fb-inplace"> ✎ править на месте (не удалять)</label>
         </div>
       </div>
     </div>
@@ -13053,7 +13256,9 @@ function buildTelegramNode() {
   }
   const localChk = el.querySelector('.tg-local');     // 🔌 локальный режим (без Telegram)
   const fbNote = el.querySelector('.tg-fb-note');      // ручной фидбек: замечание
-  const fbGo = el.querySelector('.tg-fb-go');          // ручной фидбек: править последний ответ
+  const fbGo = el.querySelector('.tg-fb-go');          // ручной фидбек: переписать последний ответ заново
+  const fbSoft = el.querySelector('.tg-fb-soft');      // ручной фидбек: мягкая точечная правка (менять только названное)
+  const fbInPlace = el.querySelector('.tg-fb-inplace');// доставка правки: на месте (editMessageText) вместо «удалить + новое»
   const audProbRow = el.querySelector('.tg-aud-prob-row');   // «доля голосовых» — только для режима «комбинировать»
   const clearBtn = el.querySelector('.tg-clear');
   const modelRunBtn = el.querySelector('.tg-model-run');
@@ -13074,13 +13279,24 @@ function buildTelegramNode() {
   const topicLock = el.querySelector('.tg-topic-lock');
   const saveGraph = () => { if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); };
   topicSel.addEventListener('pointerdown', (e) => e.stopPropagation());
-  topicSel.addEventListener('change', () => { el._topicFilter = topicSel.value ? Number(topicSel.value) : null; saveGraph(); });
+  topicSel.addEventListener('change', () => {
+    el._topicPick = topicSel.value ? Number(topicSel.value) : null;   // ВЫБОР темы (что запрём по кнопке)
+    if (el._topicFilter != null) { el._topicFilter = el._topicPick; }  // уже заперто — переносим замок на новую тему
+    tgSyncTopicLock(el); saveGraph();
+  });
   topicLock.addEventListener('pointerdown', (e) => e.stopPropagation());
   topicLock.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (el._lastThreadId == null) { setStatus('нет темы — сначала напиши боту в нужной теме форума', 'err'); return; }
-    el._topicFilter = el._lastThreadId; tgSeeTopic(el, el._lastThreadId, null); tgRenderTopics(el); saveGraph();
-    setStatus('тема заперта: ' + (el._topics[String(el._lastThreadId)] || ('#' + el._lastThreadId)), 'ok');
+    if (el._topicFilter != null) {   // уже заперто — второй клик снимает замок
+      const was = (el._topics[String(el._topicFilter)] || ('#' + el._topicFilter));
+      el._topicFilter = null; tgRenderTopics(el); saveGraph();
+      setStatus('замок снят (была тема «' + was + '») — бот отвечает там, где написали', 'ok');
+      return;
+    }
+    const pick = (el._topicPick != null) ? el._topicPick : el._lastThreadId;   // выбранная в списке, иначе — где написали последними
+    if (pick == null) { setStatus('нет темы — выбери её в списке или напиши боту в нужной теме форума', 'err'); return; }
+    el._topicFilter = pick; el._topicPick = pick; tgSeeTopic(el, pick, null); tgRenderTopics(el); saveGraph();
+    setStatus('тема заперта: ' + (el._topics[String(pick)] || ('#' + pick)) + ' — бот читает и пишет только там', 'ok');
   });
   tgRenderTopics(el);
   // Фиксация ЧАТА: бот работает только в выбранном (или последнем писавшем) чате — в любом режиме. Аналог темы, но для чата.
@@ -13089,10 +13305,26 @@ function buildTelegramNode() {
   const chatSel = el.querySelector('.tg-chat');
   const chatFix = el.querySelector('.tg-chat-fix');
   chatSel.addEventListener('pointerdown', (e) => e.stopPropagation());
-  chatSel.addEventListener('change', () => { el._chatFilter = chatSel.value ? (/^-?\d+$/.test(chatSel.value) ? Number(chatSel.value) : chatSel.value) : null; saveGraph(); });
+  chatSel.addEventListener('change', () => {
+    el._chatFilter = chatSel.value ? (/^-?\d+$/.test(chatSel.value) ? Number(chatSel.value) : chatSel.value) : null;
+    // Лента и счётчик смотрели на _lastChatId, а писалось в выбранный чат — выглядело как «сообщения подменились».
+    if (el._chatFilter != null) {
+      el._lastChatId = el._chatFilter;
+      const convo = (el._convos || {})[String(el._chatFilter)];
+      if (convo && typeof tgRenderFeedFromConvo === 'function') tgRenderFeedFromConvo(el, convo);
+      else { const feed = el.querySelector('.tg-feed'); if (feed) feed.innerHTML = ''; if (typeof tgSyncMsgCount === 'function') tgSyncMsgCount(el); }
+    }
+    saveGraph();
+  });
   chatFix.addEventListener('pointerdown', (e) => e.stopPropagation());
   chatFix.addEventListener('click', (e) => {
     e.stopPropagation();
+    if (el._chatFilter != null) {   // уже зафиксирован — второй клик снимает
+      const was = (el._chats[String(el._chatFilter)] || el._chatFilter);
+      el._chatFilter = null; tgRenderChats(el); saveGraph();
+      setStatus('фиксация снята (был «' + was + '») — бот снова слышит все чаты', 'ok');
+      return;
+    }
     if (chatSel.value) { el._chatFilter = /^-?\d+$/.test(chatSel.value) ? Number(chatSel.value) : chatSel.value; }   // выбран чат в выпадашке — фиксируем его
     else if (el._lastChatId != null) { el._chatFilter = el._lastChatId; tgSeeChat(el, el._lastChatId, null); }        // иначе — последний писавший
     else { setStatus('нет чата — выбери в списке или сначала напиши боту', 'err'); return; }
@@ -13154,6 +13386,22 @@ function buildTelegramNode() {
   }
   const testBox = el.querySelector('.tg-test-box');
   if (testBox) {
+    const againBtn = testBox.querySelector('.tg-test-again');
+    if (againBtn) {
+      againBtn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+      againBtn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        if (againBtn.disabled) return;
+        const tk = ((el.querySelector('.tg-token') || {}).value || el._token || '').trim();
+        const cid = (typeof tgTargetChat === 'function') ? tgTargetChat(el) : null;
+        if (!el._localMode && !tk) { el._setStatus('впиши токен бота', 'err'); return; }
+        if (cid == null) { el._setStatus('нет активной беседы — сначала напиши боту', 'err'); return; }
+        const thread = (typeof tgOutThread === 'function') ? tgOutThread(el) : null;
+        againBtn.disabled = true;
+        try { await telegramReply(el, tk, cid, null, thread); }   // null = без нового входящего: отвечаем по тому, что уже в истории
+        finally { againBtn.disabled = false; }
+      });
+    }
     const tInput = testBox.querySelector('.tg-test-input');
     const tSend = testBox.querySelector('.tg-test-send');
     const tWho = testBox.querySelector('.tg-say-who');
@@ -13203,15 +13451,42 @@ function buildTelegramNode() {
   criticChk.addEventListener('change', persist);
   localChk.closest('label').addEventListener('pointerdown', (e) => e.stopPropagation());
   localChk.addEventListener('change', () => { el._localMode = localChk.checked; persist(); });
-  // Ручной фидбек: перекатить ПОСЛЕДНИЙ ответ бота по замечанию и (если можно) править сообщение на месте.
+  // Ручной фидбек: перекатить ПОСЛЕДНИЙ ответ бота по замечанию. Два режима — «✎ Точечно» (мягкая
+  // правка: меняем только названное, остальное слово в слово) и «⚖ Править» (перекат заново, ответ
+  // должен заметно отличаться). Галочка рядом решает ДОСТАВКУ: на месте или удалить + новое.
   fbNote.addEventListener('pointerdown', (e) => e.stopPropagation());
-  fbGo.addEventListener('pointerdown', (e) => e.stopPropagation());
-  fbGo.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    if (fbGo.disabled) return;   // защита от повторного клика, пока идёт перекат
-    fbGo.disabled = true;
-    try { await tgFeedbackRewrite(el, fbNote.value); fbNote.value = ''; } finally { fbGo.disabled = false; }
+  if (fbInPlace) {
+    fbInPlace.closest('label').addEventListener('pointerdown', (e) => e.stopPropagation());
+    fbInPlace.addEventListener('change', persist);
+  }
+  const fbRun = async (btn, soft) => {
+    if (btn.disabled) return;   // защита от повторного клика, пока идёт перекат
+    const both = [fbGo, fbSoft].filter(Boolean);
+    both.forEach((b) => { b.disabled = true; });
+    try { await tgFeedbackRewrite(el, fbNote.value, { soft }); fbNote.value = ''; } finally { both.forEach((b) => { b.disabled = false; }); }
+  };
+  // Перевод замечания прямо в поле (как RU/EN в окне фидбека сингла): текст заменяется, никуда не уходит.
+  el.querySelectorAll('.tg-fb-tr').forEach((b) => {
+    b.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+    b.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const txt = (fbNote.value || '').trim();
+      if (!txt) { el._setStatus('впиши замечание, потом переводи', 'err'); return; }
+      if (b.disabled) return;
+      b.disabled = true; b.classList.add('busy');
+      try {
+        const t = await tgTranslateRetry(txt, b.dataset.dir === 'ru' ? 'ru' : 'en', 'replace');
+        if (t != null) fbNote.value = t;
+        else el._setStatus('⚠ перевод замечания не удался', 'err');
+      } finally { b.disabled = false; b.classList.remove('busy'); }
+    });
   });
+  fbGo.addEventListener('pointerdown', (e) => e.stopPropagation());
+  fbGo.addEventListener('click', (e) => { e.stopPropagation(); fbRun(fbGo, false); });
+  if (fbSoft) {
+    fbSoft.addEventListener('pointerdown', (e) => e.stopPropagation());
+    fbSoft.addEventListener('click', (e) => { e.stopPropagation(); fbRun(fbSoft, true); });
+  }
   // 🗑 Очистить историю — стереть лог и контекст всех бесед (память Души НЕ трогаем — это отдельная система).
   clearBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
   clearBtn.addEventListener('click', async (e) => {
@@ -13235,10 +13510,12 @@ function buildTelegramNode() {
     el._ngTurnCount = 0;
     if (typeof tgNgRenderPending === 'function') tgNgRenderPending(el);   // счётчик на «Собрать ход» → 0
     const feed = el.querySelector('.tg-feed'); if (feed) feed.innerHTML = '';
+    tgSyncMsgCount(el);           // после очистки счётчик обязан показать 0 — старых историй тут быть не должно
     setStatus('очищаю память Души…', '');
     try { await Promise.all(purges); } catch (err) { /* очистка best-effort */ }
     document.querySelectorAll('.node-soul').forEach((s) => { if (typeof soulFillDocRecords === 'function') soulFillDocRecords(s); });   // вьюер записей Души — обновить
-    if (typeof persistCurrentGraph === 'function') persistCurrentGraph();   // сохранить пустую историю/состояния (иначе вернутся при перезаходе)
+    try { allowShrink(chatgraphKeyOf(current.chatId)); } catch (_) {}   // очистка — намеренная, серверу можно укоротить
+    if (typeof persistCurrentGraph === 'function') persistCurrentGraph();   // сохранить ПУСТУЮ историю (иначе вернётся при перезаходе)
     setStatus('всё очищено: история, ход, состояния, Душа', 'ok');
     clearBtn.disabled = false;
   });
@@ -13276,7 +13553,7 @@ function buildTelegramNode() {
     if (!el._localMode && !token.value.trim()) return setStatus('впиши токен бота', 'err');
     if (tgTargetChat(el) == null) return setStatus('нет чата — зафиксируй чат или сначала напиши боту', 'err');
     sayBtn.disabled = true;
-    await telegramReply(el, token.value.trim(), tgTargetChat(el), null, el._topicFilter != null ? el._topicFilter : (el._lastThreadId != null ? el._lastThreadId : null));   // null = без нового входящего, ответ по контексту (в зафиксированный/последний чат, запертую/последнюю тему)
+    await telegramReply(el, token.value.trim(), tgTargetChat(el), null, tgOutThread(el));   // null = без нового входящего, ответ по контексту (в зафиксированный/последний чат, запертую/последнюю тему)
     sayBtn.disabled = false;
   });
   token.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -13674,7 +13951,6 @@ function renderTokPanel(ov) {
         + g.rows.map(rowHtml).join('')).join('')).join('');
   box._groups = groups;
   setTimeout(() => { try { tokPaintLinks(box); } catch (_) {} }, 0);   // полосы — после раскладки (rAF тут не годится: в фоновой вкладке он заморожен)
-  tokFillPresets(ov);
 }
 // Снимок всех чисел панели: ключ реестра → значение (полевые пишутся как «поле@нода»).
 // Ключ строки в СОХРАНЁННОМ СПИСКЕ. У полевых строк добавляем имя ноды: иначе две ноды одного типа
@@ -13716,15 +13992,17 @@ function tokApplySnapshot(snap) {
   }));
   if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
 }
-function tokPresets() { return (typeof lsGet === 'function' ? (lsGet(TOK_PRESETS_KEY, null) || {}) : {}); }
-function tokFillPresets(ov) {
-  const sel = ov.querySelector('.con-tok-preset'); if (!sel) return;
-  const cur = sel.value; const names = Object.keys(tokPresets());
-  sel.innerHTML = '<option value="">— сохранённые списки —</option>' + names.map((n) => '<option value="' + escapeConsole(n) + '">' + escapeConsole(n) + '</option>').join('');
-  if (names.indexOf(cur) >= 0) sel.value = cur;
-}
 function tokPanelWire(ov) {
   const list = ov.querySelector('.con-tok-list');
+  // На телефоне 'change' у числового поля приходит только при потере фокуса: вписал значение,
+  // закрыл консоль — и оно не уехало. Поэтому слушаем ещё и 'input', с небольшой паузой.
+  let _tokInputT = null;
+  list.addEventListener('input', (e) => {
+    if (!e.target.closest('.con-tok-i, .con-tok-ctx, .con-tok-tmp')) return;
+    clearTimeout(_tokInputT);
+    const t = e.target;
+    _tokInputT = setTimeout(() => { try { t.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {} }, 600);
+  });
   // Правка числа — сразу в дело (в поле ноды или в базу лимитов).
   list.addEventListener('change', (e) => {
     const cx = e.target.closest('.con-tok-ctx');
@@ -13756,25 +14034,12 @@ function tokPanelWire(ov) {
     else tokRowSet(row, String(row.r.d));
     renderTokPanel(ov);   // перерисовать: строка вернулась к наследуемому числу
   });
-  ov.querySelector('.con-tok-save').addEventListener('click', () => {
-    const name = (window.prompt('Название списка лимитов:', '') || '').trim(); if (!name) return;
-    const all = tokPresets(); all[name] = tokSnapshot();
-    if (typeof lsSet === 'function') lsSet(TOK_PRESETS_KEY, all);
-    tokFillPresets(ov); ov.querySelector('.con-tok-preset').value = name;
-  });
-  ov.querySelector('.con-tok-apply').addEventListener('click', () => {
-    const name = ov.querySelector('.con-tok-preset').value; if (!name) return;
-    tokApplySnapshot(tokPresets()[name]); renderTokPanel(ov);
-  });
-  ov.querySelector('.con-tok-del').addEventListener('click', () => {
-    const sel = ov.querySelector('.con-tok-preset'); const name = sel.value; if (!name) return;
-    const all = tokPresets(); delete all[name];
-    if (typeof lsSet === 'function') lsSet(TOK_PRESETS_KEY, all);
-    tokFillPresets(ov);
-  });
+  // «Применить» = записать числа в сборку. Открыт чат → снимок чата (сохранено). Открыт пресет →
+  // persistCurrentGraph там ничего не пишет, поэтому честно предупреждаем про 💾 на холсте.
+
   ov.querySelector('.con-tok-reset').addEventListener('click', () => {
     if (!window.confirm('Вернуть зашитые лимиты, контексты и температуры к дефолтам? Поля самих нод (Душа, Хроника, Критик, Режиссёр, «Опции») не тронутся.')) return;
-    if (typeof lsSet === 'function') { lsSet(TOK_KEY, {}); lsSet(TEMP_KEY, {}); }   // сбрасываем ОБЕ карты, иначе «дефолты» вернут половину
+    tokensSave({ tok: {}, temp: {} });   // чистим настройки ЭТОГО чата (общие старые ключи не трогаем)
     renderTokPanel(ov);
   });
 }
@@ -13800,10 +14065,7 @@ function consoleOverlay() {
     <div class="con-tok" hidden>
       <div class="con-tok-bar">
         <span class="con-tok-hint">лимиты нод, что есть в сборке — правишь тут, меняется в самой ноде</span>
-        <select class="con-tok-preset"><option value="">— сохранённые списки —</option></select>
-        <button class="con-tok-apply" type="button" title="Применить выбранный список">применить</button>
-        <button class="con-tok-save" type="button" title="Сохранить текущие числа списком">💾 сохранить</button>
-        <button class="con-tok-del" type="button" title="Удалить выбранный список">✕</button>
+        <span class="con-tok-hint2">значения сохраняются сами — в этот чат</span>
         <button class="con-tok-reset" type="button" title="Вернуть все зашитые лимиты к дефолтам">↺ дефолты</button>
       </div>
       <div class="con-tok-list"></div>
@@ -13814,6 +14076,69 @@ function consoleOverlay() {
   ov.querySelector('.con-back').addEventListener('click', close);   // «← назад» (виден только в вижне чата) — то же, что закрыть
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && ov.classList.contains('show')) close(); });
   ov.querySelector('.con-clear').addEventListener('click', () => { CONSOLE_LOG.length = 0; renderConsole(ov); });
+  // Развернуть / свернуть рассуждение модели.
+  ov.addEventListener('click', (e) => {
+    const b = e.target.closest && e.target.closest('.con-think-toggle'); if (!b) return;
+    const entry = b.closest('.con-entry'); if (!entry) return;
+    const box = entry.querySelector('.con-think'); if (!box) return;
+    box.hidden = !box.hidden;
+    b.textContent = box.hidden ? '▾' : '▴';
+  });
+  // Перевод ответа или рассуждения — ПРЯМО НА МЕСТЕ, без второй простыни ниже. Повторный клик возвращает оригинал.
+  ov.addEventListener('click', async (e) => {
+    const b = e.target.closest && e.target.closest('.con-tr-one'); if (!b) return;
+    const entry = b.closest('.con-entry'); if (!entry) return;
+    const part = b.dataset.part;
+    const box = entry.querySelector((part === 'think' ? '.con-think' : '.con-resp') + '[data-part="' + part + '"]');
+    if (!box) return;
+    if (box.dataset.trShown === '1') {                       // уже по-русски — вернуть оригинал
+      box.textContent = box.dataset.trOrig || box.textContent;
+      box.dataset.trShown = '0'; b.classList.remove('on'); return;
+    }
+    if (box.dataset.trText) {                                // уже переводили — просто показать
+      box.dataset.trOrig = box.textContent; box.textContent = box.dataset.trText;
+      box.dataset.trShown = '1'; b.classList.add('on'); return;
+    }
+    const src = box.textContent || '';
+    if (!src.trim()) return;
+    b.classList.add('busy'); b.disabled = true;
+    try {
+      const r = await rlmApi('/api/rlm/translate', { provider: 'yandex', text: src, to: 'ru' });
+      if (r && r.ok && r.text) {
+        box.dataset.trOrig = src; box.dataset.trText = r.text;
+        box.textContent = r.text; box.dataset.trShown = '1'; b.classList.add('on');
+      } else {
+        b.title = 'перевод не удался: ' + ((r && r.error) || 'нет ответа');
+        b.classList.add('err');
+      }
+    } catch (_) { b.classList.add('err'); }
+    b.classList.remove('busy'); b.disabled = false;
+  });
+  // Клик по шапке — развернуть/свернуть запись. Кнопки внутри шапки (перевод) работают как раньше.
+  ov.addEventListener('click', (e) => {
+    const head = e.target.closest && e.target.closest('.con-head'); if (!head) return;
+    if (e.target.closest('button')) return;                  // это кнопка в шапке — не наше дело
+    const row = head.closest('.con-entry'); if (!row) return;
+    row.classList.toggle('collapsed');
+    const open = !row.classList.contains('collapsed');
+    const caret = head.querySelector('.con-caret'); if (caret) caret.textContent = open ? '▾' : '▸';
+    const idx = Number(row.dataset.i);
+    if (CONSOLE_LOG[idx]) CONSOLE_LOG[idx]._open = open;      // запомнить, чтобы перерисовка не схлопнула
+  });
+  // Клик по тегу под шапкой — подсветить куски промта, которые пришли из этого источника, и прокрутить к первому.
+  ov.addEventListener('click', (e) => {
+    const tag = e.target.closest && e.target.closest('.con-tag'); if (!tag) return;
+    const entry = tag.closest('.con-entry'); if (!entry) return;
+    const src = tag.dataset.src;
+    const on = tag.classList.contains('on');
+    entry.querySelectorAll('.con-tag').forEach((t) => t.classList.remove('on'));
+    entry.querySelectorAll('.con-msg').forEach((m) => m.classList.remove('hi'));
+    if (on) return;   // повторный клик — снять подсветку
+    tag.classList.add('on');
+    const found = [...entry.querySelectorAll('.con-msg')].filter((m) => m.dataset.src === src);
+    found.forEach((m) => m.classList.add('hi'));
+    if (found[0]) found[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
+  });
   // «🎚 токены» — переключение журнала на панель лимитов (и обратно).
   const tokBtn = ov.querySelector('.con-tokbtn');
   tokBtn.addEventListener('click', () => {
@@ -13856,10 +14181,42 @@ async function consoleTranslateEntry(i) {
 function openConsole() { const ov = consoleOverlay(); ov.classList.toggle('im-mode', !!immersiveNode); ov.classList.add('show'); renderConsole(ov); const tk = ov.querySelector('.con-tok'); if (tk && !tk.hidden) renderTokPanel(ov); }
 function escapeConsole(s) { return String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 // Детали одной записи: промт (messages по ролям), параметры, модель, ответ. Ключ/URL НЕ показываем.
+// Что за запрос и кто его затеял. Ключ (_ctxKey) — тот же, по которому лимиты в таблице «токены»,
+// поэтому подпись берём прямо из её реестра: «Душа · Запись в док», «Критик · Апрув / отказ» и т.д.
+function consoleWhat(e) {
+  const req = e && e.req; if (!req) return '';
+  const key = req._ctxKey;
+  if (!key) return '';
+  try {
+    const reg = (typeof TOK_REG !== 'undefined' ? TOK_REG : []).find((r) => (r.k || (r.input + '@' + r.node)) === key);
+    if (reg) return reg.g + ' · ' + reg.t;
+  } catch (_) {}
+  return String(key);
+}
+// Имя ноды-заказчика: у запроса есть ссылка на неё, иначе — первая нода подходящего типа.
+function consoleWho(e) {
+  const req = e && e.req; if (!req) return '';
+  try {
+    let n = (req._ctxNode && req._ctxNode.nodeType === 1) ? req._ctxNode : null;
+    if (!n && req._ctxKey && typeof TOK_REG !== 'undefined') {
+      const reg = TOK_REG.find((r) => (r.k || (r.input + '@' + r.node)) === req._ctxKey);
+      if (reg) n = document.querySelector('#world ' + reg.node.split(',')[0].trim());
+    }
+    if (!n) return '';
+    const lbl = ((n.querySelector('.node-head .label') || {}).textContent || '').trim();
+    return lbl || '';
+  } catch (_) { return ''; }
+}
 function consoleDetailHtml(e) {
   const req = e.req || {};
   let h = '';
   if (Array.isArray(req.messages)) {
+    // Теги того, что реально улетело — как под сообщением в чате. Клик по тегу подсвечивает свой кусок.
+    const srcs = [];
+    req.messages.forEach((m) => { const t = m._src || m.role; if (t && srcs.indexOf(t) < 0) srcs.push(t); });
+    if (srcs.length) {
+      h += '<div class="con-tags">' + srcs.map((t) => '<button class="con-tag" type="button" data-src="' + escapeConsole(t) + '" title="Показать этот кусок промта">' + escapeConsole(t) + '</button>').join('') + '</div>';
+    }
     h += '<div class="con-sec">Промт (messages)' + (e._showTr ? ' · перевод (Яндекс)' : '') + '</div>';
     // Перевод запроса на русский (кнопка «🌐 RU» в шапке): показываем русский текст вместо оригинала (тумблер).
     h += req.messages.map((m, mi) => {
@@ -13868,18 +14225,45 @@ function consoleDetailHtml(e) {
       const label = m._src
         ? `<span class="con-src">${escapeConsole(m._src)}</span><span class="con-rrole">${escapeConsole(m.role)}</span>`
         : `<span class="con-src">${escapeConsole(m.role)}</span>`;
-      return `<div class="con-msg${m._src ? ' has-src' : ''}" data-role="${escapeConsole(m.role)}"><span class="con-role">${label}</span><span class="con-mtext">${escapeConsole(txt)}</span></div>`;
+      return `<div class="con-msg${m._src ? ' has-src' : ''}" data-role="${escapeConsole(m.role)}" data-src="${escapeConsole(m._src || m.role)}"><span class="con-role">${label}</span><span class="con-mtext">${escapeConsole(txt)}</span></div>`;
     }).join('');
   }
   if (req.model) h += `<div class="con-sec">Модель</div><div class="con-kv">${escapeConsole(req.model)}</div>`;
   if (req.params && Object.keys(req.params).length) h += `<div class="con-sec">Параметры</div><div class="con-kv">${escapeConsole(JSON.stringify(req.params))}</div>`;
-  h += '<div class="con-sec">Ответ</div>';
+  // Мысли и ответ разделяем ВСЕГДА: часть моделей отдаёт рассуждение отдельным полем, часть пишет его
+  // прямо в текст тегами <think>…</think>. В обоих случаях в «Ответе» должен остаться чистый ответ,
+  // а мысли — отдельным вложенным блоком, который можно свернуть и перевести сам по себе.
+  const rawAnswer = (e.resp && e.resp.ok) ? String(e.resp.text || '') : '';
+  const inlineThink = (rawAnswer.match(/<think(?:ing)?>([\s\S]*?)(?:<\/think(?:ing)?>|$)/i) || [])[1] || '';
+  const cleanAnswer = inlineThink ? (typeof guestStripThink === 'function' ? guestStripThink(rawAnswer) : rawAnswer) : rawAnswer;
+  h += '<div class="con-sec">Ответ<button class="con-tr-one" type="button" data-part="answer" title="Перевести ответ на русский (повторно — оригинал)">🌐 RU</button></div>';
   if (e.status === 'pending') h += '<div class="con-resp">…ждём ответ модели…</div>';
-  else if (e.resp && e.resp.ok) h += `<div class="con-resp ok">${escapeConsole(e.resp.text || '(пустой ответ)')}</div>`;
+  else if (e.resp && e.resp.ok) h += `<div class="con-resp ok" data-part="answer">${escapeConsole(cleanAnswer || '(пустой ответ)')}</div>`;
   else h += `<div class="con-resp err">✗ ${escapeConsole((e.resp && e.resp.error) || 'ошибка')}</div>`;
+  // Рассуждение модели — отдельным СВЁРНУТЫМ блоком (у думающих моделей оно длиннее самого ответа).
+  const think = ((e.resp && e.resp.reasoning) ? String(e.resp.reasoning) : '') || inlineThink;
+  if (think.trim()) {
+    h += '<div class="con-sec">Рассуждение модели · ' + think.length + ' симв.'
+      + '<button class="con-think-toggle" type="button" title="Развернуть / свернуть">▾</button>'
+      + '<button class="con-tr-one" type="button" data-part="think" title="Перевести рассуждение на русский (повторно — оригинал)">🌐 RU</button></div>';
+    h += `<div class="con-think" data-part="think" hidden>${escapeConsole(e._trThink != null ? e._trThink : think)}</div>`;
+  }
   if (e.resp && e.resp.finish_reason) h += `<div class="con-sec">Причина завершения</div><div class="con-kv">${escapeConsole(e.resp.finish_reason)}</div>`;
+  // Понятный дубль настроек, действовавших на ЭТОТ запрос: в «Параметрах» выше то же самое сырым
+  // JSON, а тут словами — лимит ответа, лимит контекста, температура, рассуждение.
+  {
+    const p = req.params || {};
+    const lim = (typeof ctxLimitForRequest === 'function' && req._ctxKey) ? ctxLimitForRequest(req._ctxKey, req._ctxNode) : 0;
+    const rz = p.reasoning ? (p.reasoning.enabled === false ? 'выкл' : (p.reasoning.effort || 'вкл')) : 'по умолчанию модели';
+    const bits = [];
+    if (p.max_tokens != null) bits.push('лимит ответа ' + p.max_tokens);
+    if (lim) bits.push('лимит контекста ' + lim);
+    if (p.temperature != null) bits.push('температура ' + p.temperature);
+    bits.push('рассуждение ' + rz);
+    h += '<div class="con-sec">Что действовало</div><div class="con-kv">' + escapeConsole(bits.join(' · ')) + '</div>';
+  }
   const u = e.resp && e.resp.usage;
-  if (u) h += `<div class="con-sec">Токены</div><div class="con-kv">${escapeConsole(`промт ${u.prompt_tokens ?? '?'} · ответ ${u.completion_tokens ?? '?'} · всего ${u.total_tokens ?? '?'}`)}</div>`;
+  if (u) h += `<div class="con-sec">Токены</div><div class="con-kv">${escapeConsole(`промт ${u.prompt_tokens ?? '?'} · выдано ${u.completion_tokens ?? '?'} · всего ${u.total_tokens ?? '?'}`)}</div>`;
   return h;
 }
 // Шапка Консоли: «ушло последним ходом» + «сейчас в сборке» (приблизительно, как счётчик ST).
@@ -13905,16 +14289,20 @@ function renderConsole(el) {
   if (!CONSOLE_LOG.length) { log.innerHTML = '<div class="con-empty">— пусто. Отправь сообщение в чат или нажми «Проверить связь» —</div>'; return; }
   log.innerHTML = '';
   CONSOLE_LOG.forEach((e, i) => {
-    const kind = /generate/.test(e.path) ? 'генерация' : (/models/.test(e.path) ? 'список моделей' : e.path);
+    const what = consoleWhat(e);
+    const who = consoleWho(e);
+    const kind = what || (/generate/.test(e.path) ? 'генерация' : (/models/.test(e.path) ? 'список моделей' : e.path));
     const icon = e.status === 'pending' ? '⏳' : (e.status === 'ok' ? '✓' : '✗');
     const model = e.req && e.req.model ? ` · ${e.req.model}` : '';
     const canTr = Array.isArray(e.req && e.req.messages) && e.req.messages.length;   // есть промт → есть что переводить
     const trBtn = canTr ? `<button class="con-tr${e._showTr ? ' on' : ''}" type="button" data-i="${i}" title="Перевести запрос на русский (Яндекс)">${e._showTr ? '✓ ориг.' : '🌐 RU'}</button>` : '';
     const row = document.createElement('div');
-    row.className = 'con-entry ' + e.status;
-    // Детали видны СРАЗУ (не сворачиваются) — весь журнал раскрыт.
+    // Свёрнута по умолчанию: в журнале видно шапки — что за процесс, чья нода, какая модель.
+    // Разворачивает пользователь сам; уже открытые записи остаются открытыми при перерисовке.
+    row.className = 'con-entry ' + e.status + (e._open ? '' : ' collapsed');
+    row.dataset.i = String(i);
     row.innerHTML = `
-      <div class="con-head"><span class="con-ic">${icon}</span><span class="con-time">${e.time}</span><span class="con-kind">${escapeConsole(kind + model)}</span>${trBtn}</div>
+      <div class="con-head" title="Клик — развернуть или свернуть"><span class="con-caret">${e._open ? '▾' : '▸'}</span><span class="con-ic">${icon}</span><span class="con-time">${e.time}</span><span class="con-kind">${escapeConsole(kind + model)}</span>${who ? '<span class="con-who" title="Нода, которая затеяла этот запрос">' + escapeConsole(who) + '</span>' : ''}${trBtn}</div>
       <div class="con-detail">${consoleDetailHtml(e)}</div>`;
     log.appendChild(row);
   });
@@ -14285,13 +14673,13 @@ window.addEventListener('message', async (e) => {
     const fb = String(m.text || '').trim(); if (!fb) return;
     const last = node._msgs.length - 1;
     if (m.idx < last && !confirm('Переписать этот ответ по фидбеку? Всё, что идёт ПОСЛЕ него в чате, будет стёрто.')) return;
-    feedbackRegen(node, m.idx, fb, { noLesson: true, reason: m.reason });   // рассуждение при переписи (селектор в окне фидбека; node = как в «Опциях»)
+    feedbackRegen(node, m.idx, fb, { noLesson: true, reason: m.reason, soft: m.mode === 'soft' });   // рассуждение при переписи (селектор в окне фидбека; node = как в «Опциях»)
   }
   else if (m.type === 'feedback-learn') {                                        // 💬 «Записать в блокнот» → И перекат по замечанию, И урок критику в блокнот
     const fb = String(m.text || '').trim(); if (!fb) return;
     const last = node._msgs.length - 1;
     if (m.idx < last && !confirm('Переписать этот ответ по замечанию? Всё, что идёт ПОСЛЕ него в чате, будет стёрто.')) return;
-    feedbackRegen(node, m.idx, fb, { reason: m.reason });   // noLesson НЕ задан → feedbackRegen и перепишет ответ, и запишет урок (criticLearnFromFeedback)
+    feedbackRegen(node, m.idx, fb, { reason: m.reason, soft: m.mode === 'soft' });   // noLesson НЕ задан → feedbackRegen и перепишет ответ, и запишет урок (criticLearnFromFeedback)
   }
   else if (m.type === 'critic-run') criticJudge(node, null, { manual: true });   // 🔍 «Критик» под чатом → судья проверяет последний ответ ИИ
   else if (m.type === 'critic-approve-feedback') {                                // фидбек на ЗЕЛЁНОЕ одобрение → критик формулирует урок в блокнот
@@ -15472,18 +15860,21 @@ async function feedbackRegen(node, idx, feedback, opts) {
   node._msgs.length = i;                 // убрать ответ ИИ #i и всё, что шло после
   while (node._msgs.length && node._msgs[node._msgs.length - 1].role === 'sys') node._msgs.pop();
   renderChatLogs(node);
-  await generateReply(node, { directive: feedback, rejectedText, reason: opts.reason, noCritic: true });   // reason — переопределение рассуждения из окна фидбека (node/off/low/medium/high). noCritic — ручной фидбек = приказ пользователя: авто-критик НЕ пересуживает и не затирает его своей причиной (как и свой перекат критик не судит заново)
+  await generateReply(node, { directive: feedback, rejectedText, reason: opts.reason, softEdit: !!opts.soft, noCritic: true });   // reason — переопределение рассуждения из окна фидбека (node/off/low/medium/high). noCritic — ручной фидбек = приказ пользователя: авто-критик НЕ пересуживает и не затирает его своей причиной (как и свой перекат критик не судит заново)
   // Итерация 2: критик учится на ТВОЁМ фидбеке — формулирует урок и решает, писать ли в блокнот (фоном).
   // «Не записывать · переписать» (opts.noLesson) — правка мелкой разовой ошибки: урок в блокнот НЕ пишем.
   if (!opts.noLesson) criticLearnFromFeedback(node, feedback, rejectedText, lastCharText(node)).catch(() => {});
 }
 // Правка реплики по индексу в _msgs (из inline-редактора в интерфейсе чата).
 function editMessage(node, idx, text) {
+  // Правка меняет историю — снимок сборки должен уехать следом (раньше уезжал только лог).
+  setTimeout(() => { try { if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); } catch (_) {} }, 0);
   const i = Number(idx);
   if (node._msgs[i]) { const { _tr, _showTr, ...rest } = node._msgs[i]; node._msgs[i] = { ...rest, text }; renderChatLogs(node); }  // текст сменился → старый перевод-предпросмотр снять
 }
 // ✕ у сообщения → удалить ЭТУ реплику (без стирания всего после — точечно). Сцена ►◄ сбрасывается, т.к. индексы сдвинулись.
 function deleteMessage(node, idx) {
+  try { allowShrink(chatlogKeyOf(node._chatId)); allowShrink(chatgraphKeyOf(current.chatId)); } catch (_) {}   // это НАМЕРЕННОЕ удаление — серверу можно укоротить историю
   const i = Number(idx);
   if (!node._msgs || !node._msgs[i]) return;
   node._msgs.splice(i, 1);
@@ -15492,6 +15883,7 @@ function deleteMessage(node, idx) {
 }
 // Режим удаления (🗑 из чата): обрезать историю — снести сообщение idx и ВСЁ ниже (до конца).
 function deleteFrom(node, idx) {
+  try { allowShrink(chatlogKeyOf(node._chatId)); allowShrink(chatgraphKeyOf(current.chatId)); } catch (_) {}
   if (!node || !Array.isArray(node._msgs)) return;
   const i = Number(idx);
   if (!Number.isInteger(i) || i < 0 || i >= node._msgs.length) return;
@@ -15557,8 +15949,11 @@ async function generateReply(node, opts) {
   // доступны (Chat — только базовые, Text — все кроме неподдерживаемых); погашенные не шлём.
   const localEl = localForApi(apiEl);
   if (localEl) { applyLocalCaps(apiEl); Object.assign(params, readLocalParams(localEl)); }
-  if (tokHas('chat.reply')) params.max_tokens = tokVal('chat.reply', 512);        // в таблице задано руками — оно главнее «Опций»
-  else if (params.max_tokens == null) params.max_tokens = tokVal('chat.reply', 512);
+  // Своя строка настроек — ТОЛЬКО у ручной правки («Переписать» / «Точечно»). Перекат по вердикту
+  // критика — обычный ход движка: он и настройки берёт обычные, как было до появления этой строки.
+  const tokKey = (opts.directive && !opts.fromCritic) ? 'chat.rewrite' : 'chat.reply';
+  if (tokHas(tokKey)) params.max_tokens = tokVal(tokKey, 512);                   // в таблице задано руками — оно главнее «Опций»
+  else if (params.max_tokens == null) params.max_tokens = tokVal(tokKey, 512);
   if (optsEl) { const rv = (optsEl.querySelector('.opt-reason') || {}).value; const RM = { off: { enabled: false }, low: { effort: 'low' }, medium: { effort: 'medium' }, high: { effort: 'high' } }; if (rv && RM[rv]) params.reasoning = RM[rv]; }   // размышления по ноде «Опции»
   if (params.reasoning == null) params.reasoning = { enabled: false };   // думающие модели (GLM/Qwen): не отдавать «мысли» вместо ответа + не жрать лимит (как у переводчика)
   // Разовое переопределение рассуждения из окна фидбека «Переписать» (node = не трогаем «Опции»; иначе — этот уровень + запас токенов, т.к. «мысли» едят лимит).
@@ -15636,7 +16031,13 @@ async function generateReply(node, opts) {
   if (opts.directive && String(opts.directive).trim()) {
     const d = substituteMacros(String(opts.directive).trim(), mctx);
     const prev = opts.rejectedText ? ('The reply to rewrite was:\n"' + substituteMacros(String(opts.rejectedText).trim(), mctx) + '"\n\n') : '';
-    messages.push({ role: 'system', content: '[EDITOR NOTE — out of character, NOT part of the story. Do NOT answer, quote or mention this note; just obey it.]\n' + prev + 'The rejected reply fails on this: ' + d + '\n\nRewrite ' + (mctx.char || 'the character') + "'s reply so that flaw is fully gone. The new reply MUST be substantially different from the rejected one — actually change what " + (mctx.char || 'the character') + " does, decides or feels as the note demands; do NOT merely reword it, soften it, or land on the same outcome or beats. Stay in character and true to the character sheet, and continue the scene from the last user message. Output only the rewritten in-character reply.", _src: 'Редактура' });
+    const who = mctx.char || 'the character';
+    // Два режима правки (селектор в окне 💬 «Фидбек»): точечно — менять только названное, ничего
+    // больше; перепись — написать заново, заметно иначе. Мягкий текст 1:1 как в сетевой игре.
+    const rwBody = opts.softEdit
+      ? ('Fix ONLY this in the reply: ' + d + '\n\nThis is a SURGICAL edit, not a rewrite. Return the SAME reply with the minimum change needed to satisfy the note: keep every other sentence word for word, keep the same events, the same outcome, the same order of beats, the same tone, style and length. Do NOT re-style, expand, shorten or \"improve\" anything the note does not touch. Stay in character and true to the character sheet. Output only the corrected in-character reply.')
+      : ('The rejected reply fails on this: ' + d + '\n\nRewrite ' + who + "'s reply so that flaw is fully gone. The new reply MUST be substantially different from the rejected one — actually change what " + who + ' does, decides or feels as the note demands; do NOT merely reword it, soften it, or land on the same outcome or beats. Stay in character and true to the character sheet, and continue the scene from the last user message. Output only the rewritten in-character reply.');
+    messages.push({ role: 'system', content: '[EDITOR NOTE — out of character, NOT part of the story. Do NOT answer, quote or mention this note; just obey it.]\n' + prev + rwBody, _src: 'Редактура' });
   }
   const prefill = prefillOf(compEl, sysEl);
   if (prefill) messages.push({ role: 'assistant', content: substituteMacros(prefill, mctx), _src: 'Префилл' });
@@ -15649,7 +16050,10 @@ async function generateReply(node, opts) {
   node._msgs.push({ role: 'char', text: '…' });
   const idx = node._msgs.length - 1;
   renderChatLogs(node);
-  const r = await rlmApi('/api/rlm/generate', { _ctxKey: 'chat.reply', _ctxNode: node, base, key, model, messages, params });
+  // _saveTo: сервер САМ положит ответ в лог этого чата, как только модель ответит. Нужно для телефона:
+  // вкладка засыпает, запрос обрывается — раньше ответ пропадал, и в истории оставался плейсхолдер «…».
+  const saveTo = (node && node._chatId) ? { key: chatlogKeyOf(node._chatId) } : null;
+  const r = await rlmApi('/api/rlm/generate', { _ctxKey: tokKey, _ctxNode: node, _saveTo: saveTo, base, key, model, messages, params });   // перекат по фидбеку идёт под своим ключом chat.rewrite
   if (node._procAbort) { node._procCancel = null; node._msgs.splice(idx, 1); renderChatLogs(node); return; }   // ✕ нажали: выкинуть плейсхолдер и результат
   const grp = (typeof isGroupChat === 'function' && isGroupChat(node));
   // Группа: пустой ответ модели (частый огрех окончания массива) — НЕ засоряем историю «(пустой ответ)»:
@@ -16446,8 +16850,17 @@ async function waitServerBack() {
   return false;                                            // не дождались — всё равно перезагрузим, boot() подождёт сам
 }
 async function appRestart() {
-  if (window.rlm && window.rlm.restart) { window.rlm.restart(); return; }   // ПК — как было (мгновенный relaunch)
+  if (window.rlm && window.rlm.restart) {
+    // Снимок сессии кладём в очередь и ждём подтверждения ТОЛЬКО если есть что дожимать.
+    // Нечего — перезапуск мгновенный, как и был; экран-заглушку в этом случае не показываем.
+    try { if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); } catch (_) {}
+    try { if (typeof flushDirtyChat === 'function') flushDirtyChat(); } catch (_) {}
+    if (!Object.keys(_setPending).length && !Object.keys(_chatlogPending).length) { window.rlm.restart(); return; }
+    await flushBeforeExit(1200);
+    window.rlm.restart(); return;
+  }
   const ov = showReconnectScreen('⟳ Перезапуск сервера…', 'Приложение перезапускается на ПК. Дождись — переподключусь сам.');
+  await flushBeforeExit(6000);   // сначала дожать своё, потом просить ПК перезапуститься
   let r = null;
   try { r = await rlmApi('/api/rlm/app/restart', {}); } catch (_) { /* связь могла оборваться — просто ждём ниже */ }
   if (r && r.unavailable) {                                // сервер запущен НЕ приложением RLM — перезапустить нечем
@@ -16464,8 +16877,31 @@ async function appRestart() {
 }
 
 // ---- Кнопки приложения (через preload) ----
-document.getElementById('btn-close').addEventListener('click', () => window.rlm?.close());
+// Закрытие окна: сперва дожать всё несохранённое, потом закрывать. Раньше окно закрывалось мгновенно,
+// а хвост правок (снимок, лог, правка карточки) не успевал доехать — и терялся молча.
+document.getElementById('btn-close').addEventListener('click', async () => {
+  await flushBeforeExit(3000);
+  window.rlm?.close();
+});
+// Главный процесс перед выходом (крестик, Alt+F4, «Закрыть», перезапуск) просит дописать состояние
+// и ждёт ответа — поэтому окно больше не закрывается посреди записи.
+try {
+  if (window.rlm && window.rlm.onFlush) window.rlm.onFlush(async () => {
+    try { await flushBeforeExit(3000); } catch (_) {}
+    try { window.rlm.flushDone(); } catch (_) {}
+  });
+} catch (_) {}
 document.getElementById('btn-restart').addEventListener('click', appRestart);
+// Внезапное закрытие: успеть отправить живой снимок (keepalive-запросы уходят даже при выгрузке).
+window.addEventListener('pagehide', () => {
+  // Порядок важен: сперва снять живое состояние и отправить, и только В КОНЦЕ отпустить право записи —
+  // раньше замок снимался первым, и в это окно чужой клиент мог влезть со своей старой версией.
+  try { if (typeof charEditFlush === 'function') charEditFlush(); } catch (_) {}
+  try { if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); } catch (_) {}
+  try { if (typeof flushDirtyChat === 'function') flushDirtyChat(); } catch (_) {}
+  try { Object.keys(_setPending).forEach((k) => storeSetFlush(k, true)); } catch (_) {}   // true = keepalive: браузер обязан доставить запрос даже при выгрузке
+  try { if (!RLM_VIEW_ONLY) rlmApi('/api/rlm/store/release', { clientId: RLM_CLIENT_ID }); } catch (_) {}
+});
 { const imr = document.getElementById('im-restart'); if (imr) imr.addEventListener('click', appRestart); }   // та же кнопка в шапке вижна чата (нужна на телефоне)
 const smRestartBtn = document.getElementById('sm-restart');   // та же «Перезапуск» — в шапке окна выбора персонажа
 if (smRestartBtn) smRestartBtn.addEventListener('click', appRestart);   // работает и на ПК (Electron), и на телефоне (через сервер)
@@ -16761,7 +17197,10 @@ function nodeValues(el, type) {
     prefillOn: !!(el.querySelector('.sys-prefill-on') || {}).checked,
   };
   if (type === 'narrator') return { sections: Object.fromEntries([...el.querySelectorAll('.narr-f')].map((t) => [t.dataset.sec, trSafeVal(t) || ''])) };
-  if (type === 'chat' || type === 'groupchat') return { msgs: el._msgs || [], chatId: el._chatId || '', groupStarted: !!el._groupStarted, ranker: el._ranker || null, phantoms: el._phantoms || null, groupScene: el._groupScene || '' };
+  // ИСТОРИЯ В СНИМОК НЕ ИДЁТ. Она лежит в отдельном файле лога (rlm.chatlog.<id>) — это её единственный
+  // хозяин. Пока копия жила ещё и здесь, снимок пресета, сохранённый из чата, при загрузке затирал
+  // лог ДРУГОГО чата своей копией, а «удалил сообщения» откатывалось из второй копии.
+  if (type === 'chat' || type === 'groupchat') return { chatId: el._chatId || '', scene: el._scene || null, groupStarted: !!el._groupStarted, ranker: el._ranker || null, phantoms: el._phantoms || null, groupScene: el._groupScene || '' };
   if (type === 'character') return {
     name: el.querySelector('.ch-name-input').value,
     avatar: el.querySelector('.ch-ava').style.backgroundImage || '',
@@ -16791,7 +17230,7 @@ function nodeValues(el, type) {
     tally: !!(el.querySelector('.crit-tally') || {}).checked,   // Счетовод: значения считает отдельный проход
     lessons: Array.isArray(el._lessons) ? el._lessons.slice() : [],
   };
-  if (type === 'chronicle') return {
+  if (type === 'chronicle') return { highest: el._highest || 0,
     auto: !!(el.querySelector('.chr-auto') || {}).checked,
     every: (el.querySelector('.chr-every') || {}).value || '50',
     buffer: (el.querySelector('.chr-buffer') || {}).value || '2',
@@ -16842,7 +17281,12 @@ function nodeValues(el, type) {
     bools: Object.fromEntries([...el.querySelectorAll('.tts-b')].map((c) => [c.dataset.key, c.checked])),
     autoSpeak: !!(el.querySelector('.tts-autospeak') || {}).checked,   // авто-озвучивание каждой реплики ИИ (перевод → голос)
   };
-  if (type === 'telegram' || type === 'netgame') return { mode: (el.querySelector('.tg-mode') || {}).value || 'dm', cast: (el._cast || []).map((p) => ({ id: p.id, name: p.name, color: p.color, muted: !!p.muted })), topicFilter: (el._topicFilter != null ? el._topicFilter : null), topics: el._topics || {}, chatFilter: (el._chatFilter != null ? el._chatFilter : null), chats: el._chats || {}, hideMuted: !!((el.querySelector('.tg-hide-muted') || {}).checked), ngBatch: (el.querySelector('.tg-ng-batch') || {}).value || '', ngTally: !!((el.querySelector('.tg-ng-tally') || {}).checked), noSeed: !!((el.querySelector('.tg-noseed') || {}).checked), ngStates: el._ngStates || {}, ngTurn: (el._ngTurn || []).map((t) => ({ authorId: t.authorId, persona: t.persona, text: t.text, msgId: t.msgId })), convos: el._convos || {} };   // ngTurn — ход в сборке: без него написанное до старта пропадало   // convos — история переписки (chat_id→msgs), переживает перезапуск. Токен НЕ в граф (секрет) — он в store; связи участник↔персонаж сериализуются сами через portKey; ngBatch — «каждые N ходов» для Душ сетевой игры
+  if (type === 'telegram' || type === 'netgame') return { mode: (el.querySelector('.tg-mode') || {}).value || 'dm',
+    chatId: el._chatId || '',                                    // папка памяти партии — иначе Души заводятся заново
+    lastChatId: (el._lastChatId != null ? el._lastChatId : null), // активная беседа (раньше угадывалась «по длине»)
+    lastThreadId: (el._lastThreadId != null ? el._lastThreadId : null),
+    ngTurnCount: el._ngTurnCount || 0,
+    scene: el._scene || null, cast: (el._cast || []).map((p) => ({ id: p.id, name: p.name, color: p.color, muted: !!p.muted })), topicFilter: (el._topicFilter != null ? el._topicFilter : null), topicPick: (el._topicPick != null ? el._topicPick : null), topics: el._topics || {}, chatFilter: (el._chatFilter != null ? el._chatFilter : null), chats: el._chats || {}, hideMuted: !!((el.querySelector('.tg-hide-muted') || {}).checked), ngBatch: (el.querySelector('.tg-ng-batch') || {}).value || '', ngTally: !!((el.querySelector('.tg-ng-tally') || {}).checked), noSeed: !!((el.querySelector('.tg-noseed') || {}).checked), fbInPlace: !!((el.querySelector('.tg-fb-inplace') || {}).checked), ngStates: el._ngStates || {}, ngTurn: (el._ngTurn || []).map((t) => ({ authorId: t.authorId, persona: t.persona, text: t.text, msgId: t.msgId })), convos: el._convos || {} };   // ngTurn — ход в сборке: без него написанное до старта пропадало   // convos — история переписки (chat_id→msgs), переживает перезапуск. Токен НЕ в граф (секрет) — он в store; связи участник↔персонаж сериализуются сами через portKey; ngBatch — «каждые N ходов» для Душ сетевой игры
   if (type === 'state') return {
     preset: (el.querySelector('.st-preset') || {}).value || 'none',
     prompt: (el.querySelector('.st-prompt') || {}).value || '',
@@ -16868,7 +17312,7 @@ function nodeValues(el, type) {
     turns: (el.querySelector('.note-turns') || {}).value || '0',
     left: (el._noteLeft == null ? null : el._noteLeft),
   };
-  if (type === 'objective') return {
+  if (type === 'objective') return { checkCtr: el._objCheckCtr || 0, genCtr: el._objGenCtr || 0,
     goal: trSafeVal(el.querySelector('.obj-goal')) || '',                                   // trSafeVal: RU-предпросмотр не утекает в снимок
     tasks: (Array.isArray(el._objTasks) ? el._objTasks : []).map((t) => ({ id: t.id, text: t.text || '', done: !!t.done })),   // из модели _objTasks (RU-предпросмотр не влияет: он не шлёт input)
     checkFreq: (el.querySelector('.obj-check-freq') || {}).value || '3',
@@ -16894,7 +17338,7 @@ function nodeValues(el, type) {
     cliches: (el.querySelector('.dry-cliches') || {}).value || '',
     freshPrompt: (el.querySelector('.dry-fresh-prompt') || {}).value || '',
   };
-  if (type === 'soul') return {
+  if (type === 'soul') return { sinceMem: el._sinceMem || 0,
     docs: (el._docs || []).map((d) => ({ id: d.id, name: d.name, kind: d.kind, desc: d.desc, prompt: d.prompt || '', lead: d.lead || '', into: d.into || 'memory', stock: d.stock !== false, enabled: d.enabled, custom: d.custom })),
     batch: (el.querySelector('.soul-batch') || {}).value || '4',
     delta: (el.querySelector('.soul-delta') || {}).value || '14',
@@ -16956,6 +17400,7 @@ function applyValues(el, type, d) {
     const ct = el.querySelector('.crit-tally'); if (ct && d.tally != null) ct.checked = !!d.tally;   // Счетовод
     if (Array.isArray(d.lessons)) { el._lessons = d.lessons.slice(); criticRenderLessons(el); }
   } else if (type === 'chronicle') {
+    if (d.highest != null) el._highest = d.highest;   // докуда уже свёрнуто — иначе авто-сводка пишет дубль-главу на всю историю
     const setV = (sel, v) => { if (v == null) return; const e = el.querySelector(sel); if (e) e.value = v; };
     const cb = el.querySelector('.chr-auto'); if (cb) cb.checked = !!d.auto;
     setV('.chr-every', d.every); setV('.chr-buffer', d.buffer); setV('.chr-style', d.style); setV('.chr-mode', d.mode);
@@ -16999,6 +17444,7 @@ function applyValues(el, type, d) {
     }
     el._topics = (d.topics && typeof d.topics === 'object') ? d.topics : {};
     el._topicFilter = (d.topicFilter != null) ? d.topicFilter : null;
+    el._topicPick = (d.topicPick != null) ? d.topicPick : el._topicFilter;
     tgRenderTopics(el);
     el._chats = (d.chats && typeof d.chats === 'object') ? d.chats : {};
     el._chatFilter = (d.chatFilter != null) ? d.chatFilter : null;
@@ -17007,6 +17453,12 @@ function applyValues(el, type, d) {
     const nb = el.querySelector('.tg-ng-batch'); if (nb && d.ngBatch) nb.value = d.ngBatch;   // «каждые N ходов» (нода «Сетевая игра»)
     const tl = el.querySelector('.tg-ng-tally'); if (tl && d.ngTally != null) tl.checked = !!d.ngTally;   // Счетовод (значения отдельным проходом)
     const ns = el.querySelector('.tg-noseed'); if (ns) ns.checked = !!d.noSeed;   // «не обновлять Души на старте»
+    const fbip = el.querySelector('.tg-fb-inplace'); if (fbip) fbip.checked = !!d.fbInPlace;   // «✎ править на месте» у кнопок фидбека
+    if (d.chatId) el._chatId = d.chatId;                                               // папка памяти партии
+    if (d.lastChatId != null) el._lastChatId = d.lastChatId;                           // активная беседа — из снимка, а не «самая длинная»
+    if (d.lastThreadId != null) el._lastThreadId = d.lastThreadId;                     // тема форума без замка
+    if (d.ngTurnCount != null) el._ngTurnCount = d.ngTurnCount;                        // счётчик ходов для батча Душ
+    if (d.scene) el._scene = d.scene;                                                  // разметка сцены ►◄
     el._ngStates = (d.ngStates && typeof d.ngStates === 'object') ? d.ngStates : {};   // накопленные состояния мультиперсоны
     el._ngTurn = Array.isArray(d.ngTurn) ? d.ngTurn.map((t) => ({ ...t })) : [];        // ход в сборке — переживает перезаход
     if (el._ngTurn.length) setTimeout(() => {                                            // строки-кандидаты обратно в ленту (с ☑ и ✕)
@@ -17026,6 +17478,7 @@ function applyValues(el, type, d) {
     }
     const cb = el.querySelector('.tg-cast'); if (cb) cb.style.display = ((m && m.value) === 'group') ? '' : 'none';
   } else if (type === 'soul') {
+    if (d.sinceMem != null) el._sinceMem = d.sinceMem;   // счётчик «каждые N ходов» переживает перезаход
     if (Array.isArray(d.docs)) {
       el._docs = [];
       el.querySelector('.soul-docs').innerHTML = '';
@@ -17040,12 +17493,17 @@ function applyValues(el, type, d) {
     el._promptMode = d.promptMode || 'single'; setV('.soul-prompt-preset', el._promptMode);   // режим набора промтов (селектор в шапке «Доки памяти»)
     if (d.h) { el._docH = d.h; el.style.setProperty('--soul-doc-h', d.h + 'px'); }
   } else if (type === 'chat' || type === 'groupchat') {
-    el._msgs = Array.isArray(d.msgs) ? d.msgs : [];
+    // d.msgs есть только у СТАРЫХ снимков (сейчас история в снимок не пишется). Берём её лишь тогда,
+    // когда своего файла лога у чата ещё нет — то есть один раз, при переезде на новую схему.
+    const oldLog = (d.chatId && typeof lsGet === 'function') ? lsGet(chatlogKeyOf(d.chatId), null) : null;
+    const hasOwnLog = !!(oldLog && Array.isArray(oldLog.msgs) && oldLog.msgs.length);
+    el._msgs = (!hasOwnLog && Array.isArray(d.msgs)) ? d.msgs : (hasOwnLog ? oldLog.msgs : []);
     if (d.chatId) el._chatId = d.chatId;   // папка памяти этого чата переживает сохранение
     el._groupStarted = !!d.groupStarted;                                   // групповой чат: игра уже начата?
     if (d.ranker && typeof d.ranker === 'object') el._ranker = d.ranker;    // настройки ранжиратора
     if (d.phantoms && typeof d.phantoms === 'object') el._phantoms = d.phantoms;   // сгенерированные фантомы (по слотам)
     if (d.groupScene) el._groupScene = d.groupScene;
+    if (d.scene) el._scene = d.scene;                      // отметка ►◄ переживает перезаход
     renderChatLogs(el);
   } else if (type === 'character') {
     const nameInput = el.querySelector('.ch-name-input'), label = el.querySelector('.node-head .label');
@@ -17119,6 +17577,8 @@ function applyValues(el, type, d) {
     el._noteLeft = (d.left == null ? null : d.left);
     if (typeof el._notePaint === 'function') el._notePaint();
   } else if (type === 'objective') {
+    if (d.checkCtr != null) el._objCheckCtr = d.checkCtr;
+    if (d.genCtr != null) el._objGenCtr = d.genCtr;
     const g = el.querySelector('.obj-goal'); if (g && d.goal != null) g.value = d.goal;
     el._objTasks = (d.tasks || []).map(objNormTask); objRenderTasks(el);
     const cf = el.querySelector('.obj-check-freq'); if (cf && d.checkFreq != null) cf.value = d.checkFreq;
@@ -17189,6 +17649,8 @@ function separateNodes(nodes) {
 // записывал ОБРУБОК поверх целой сборки. Флаг держится до конца дособирания связей; всё, что
 // попросилось сохраниться в это время, откладывается и уходит одним снимком после.
 let graphLoading = false;
+let _graphLoadingAt = 0;   // когда флаг подняли: если он висит дольше 20 с — восстановление не дошло до конца,
+                           // и держать запись заблокированной нельзя (так телефон переставал сохранять ВООБЩЕ)
 let graphPersistWanted = false;
 function graphLoadDone() {
   graphLoading = false;
@@ -17200,7 +17662,7 @@ function graphLoadDone() {
   if (graphPersistWanted) { graphPersistWanted = false; try { persistCurrentGraph(); } catch (_) {} }
 }
 function restoreGraph(graph) {
-  graphLoading = true; graphPersistWanted = false;
+  graphLoading = true; _graphLoadingAt = Date.now(); graphPersistWanted = false;
   clearGraph();
   const created = (graph.nodes || []).map((nd) => {
     const el = createNode(nd.type, nd.x, nd.y);
@@ -17912,7 +18374,95 @@ const _lsSig = {};
 // ГАРАНТИРОВАННАЯ запись любого ключа: не долетело — повторяем, пока сервер не подтвердит.
 // Раньше было `.catch(() => {})` — сбой сети терял граф чата, лорбук, пресет молча.
 const _setPending = {};   // key -> { val, timer, delay, busy }
-function storeSetFlush(k) {
+const _shrinkOk = {};     // ключи, которые пользователь УКОРОТИЛ сам (удаление реплики, очистка) — серверу это разрешено
+function allowShrink(key) { _shrinkOk[key] = true; setTimeout(() => { delete _shrinkOk[key]; }, 15000); }
+// ── Одна активная сессия: пишет ПОСЛЕДНИЙ подключившийся клиент ─────────────────────────────
+// Раньше каждый клиент (окно ПК, вкладка, телефон по сети) слал чат на сервер ЦЕЛИКОМ, и тот, у
+// кого в памяти состояние постарше, молча клал его поверх свежего — так пропадали целые чаты.
+// Теперь при запуске клиент берёт себе номер и объявляет серверу «пишу теперь я». Прежний на
+// первой же записи получает отказ not-owner: уходит в ПРОСМОТР (ничего не пишет) и показывает
+// плашку с кнопкой «Играть здесь» — та забирает право назад и ПЕРЕЧИТЫВАЕТ базу (перезагрузка),
+// иначе он положил бы поверх своё старое. Чтение сервер не ограничивает — поэтому новый клиент
+// подхватывает ровно то, что успел наиграть прежний.
+const RLM_CLIENT_ID = Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36);
+let RLM_VIEW_ONLY = false;
+// Наблюдатель: открыть холст с ?ro=1 — читать можно, право записи НЕ забирается. Нужно, чтобы
+// вторая вкладка (проверка, показ с телефона «посмотреть») не глушила того, кто реально играет.
+const RLM_READONLY_VIEW = (() => { try { return /[?&]ro=1/.test(location.search); } catch (_) { return false; } })();
+async function storeClaim() {
+  if (RLM_READONLY_VIEW) return false;   // наблюдатель не претендует на запись
+  try { const r = await rlmApi('/api/rlm/store/claim', { clientId: RLM_CLIENT_ID }); return !!(r && r.ok); } catch (_) { return false; }
+}
+// Право берётся ПРИ ПОДКЛЮЧЕНИИ. Возврат к окну — тоже подключение: человек снова здесь, значит
+// сессия его. Ждать очереди или таймаута он не должен.
+function armTakeoverOnActivity() {
+  if (window._rlmTakeoverArmed) return;
+  window._rlmTakeoverArmed = true;
+  const back = async () => {
+    if (!RLM_VIEW_ONLY || document.hidden) return;
+    if (!(await storeClaim())) return;
+    RLM_VIEW_ONLY = false;
+    const bar = document.getElementById('rlm-viewonly'); if (bar) bar.remove();
+    try { if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); } catch (_) {}
+  };
+  window.addEventListener('focus', back);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) back(); });
+}
+function storeLostOwnership() {
+  if (RLM_VIEW_ONLY) return;
+  RLM_VIEW_ONLY = true;
+  Object.keys(_setPending).forEach((k) => { clearTimeout(_setPending[k].timer); delete _setPending[k]; });   // очередь записи больше не нужна — писать нам нельзя
+  try { Object.keys(_chatlogPending).forEach((k) => { clearTimeout(_chatlogPending[k].timer); delete _chatlogPending[k]; }); } catch (_) {}   // и очередь лога чата — иначе она продолжала писать в обход
+  document.querySelectorAll('.node-telegram').forEach((n) => { n._running = false; });   // и почтальоны молчат: их ходы всё равно некуда сохранить
+  showViewOnlyBar();
+  armTakeoverOnActivity();   // человек что-то нажал — право сразу вернётся сюда
+}
+// Раньше просмотр был приговором: флаг ставился и никогда не снимался — окно молчало до перезапуска
+// (а после рестарта сервера владельца вообще нет, и молчало оно зря). Спрашиваем раз в 15 секунд.
+let _ownerPoll = null;
+function startOwnerPoll() {
+  if (_ownerPoll) return;
+  _ownerPoll = setInterval(async () => {
+    if (!RLM_VIEW_ONLY) { clearInterval(_ownerPoll); _ownerPoll = null; return; }
+    let r = null; try { r = await rlmApi('/api/rlm/store/owner', {}); } catch (_) { return; }
+    if (!(r && r.ok)) return;
+    const silent = r.since ? (Date.now() - r.since > 45000) : true;   // хозяин молчит 45 секунд — считаем, что он ушёл
+    if (r.id && r.id !== RLM_CLIENT_ID && !silent) return;             // хозяин жив — ждём дальше
+    if (!(await storeClaim())) return;                          // хозяина нет — забираем право себе
+    RLM_VIEW_ONLY = false;
+    const bar = document.getElementById('rlm-viewonly'); if (bar) bar.remove();
+    clearInterval(_ownerPoll); _ownerPoll = null;
+    try { if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); } catch (_) {}
+  }, 7000);
+}
+function showViewOnlyBar() {
+  startOwnerPoll();
+  if (document.getElementById('rlm-viewonly')) return;
+  const bar = document.createElement('div');
+  bar.id = 'rlm-viewonly';
+  bar.innerHTML = '<span>👀 Игра продолжена на другом устройстве — здесь только просмотр, ничего не сохраняется.</span>';
+  const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Играть здесь';
+  b.title = 'Забрать право записи себе: другое устройство уйдёт в просмотр, а это окно перечитает свежую игру';
+  b.addEventListener('click', async () => { b.disabled = true; b.textContent = 'забираю…'; if (await storeClaim()) location.reload(); else { b.disabled = false; b.textContent = 'Играть здесь'; } });
+  bar.appendChild(b);
+  document.body.appendChild(bar);
+}
+function storeSetFlush(k, keepalive) {
+  // keepalive=true (уход вкладки): шлём напрямую, минуя мост — только так браузер обязуется доставить
+  // запрос после выгрузки страницы. Тело крупнее ~60 КБ браузер не примет, поэтому не для всех ключей.
+  if (keepalive) {
+    const p0 = _setPending[k];
+    if (p0) {
+      try {
+        const body = JSON.stringify({ key: k, value: p0.val, clientId: RLM_CLIENT_ID });
+        if (body.length < 60000) {
+          const base = location.protocol.startsWith('http') ? '' : 'http://127.0.0.1:8100';
+          fetch(base + '/api/rlm/store/set', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {});
+          return;
+        }
+      } catch (_) { /* не вышло — уходим обычным путём ниже */ }
+    }
+  }
   const p = _setPending[k]; if (!p) return;
   // Страховка от «вечного busy»: если прошлая отправка не ответила (обрыв, зависший fetch), ключ навсегда
   // переставал сохраняться — правки жили только в памяти вкладки. Через 20 с считаем её мёртвой и шлём снова.
@@ -17921,9 +18471,10 @@ function storeSetFlush(k) {
     p.busy = false;
   }
   p.busy = true; p.busyAt = Date.now();
-  rlmApi('/api/rlm/store/set', { key: k, value: p.val })
+  rlmApi('/api/rlm/store/set', { key: k, value: p.val, clientId: RLM_CLIENT_ID, shrinkOk: _shrinkOk[k] })
     .then((r) => {
       p.busy = false;
+
       // Успех: если в очереди всё ещё ЭТОТ объект — новее ничего не появлялось (любой lsSet кладёт НОВЫЙ объект),
       // значит доставлено. Сравнивать с `db[k]` по ссылке нельзя: фоновое обновление зеркала подменяет объект,
       // и запись зацикливалась — старое значение бесконечно затирало свежее на сервере.
@@ -17948,7 +18499,27 @@ function lsSet(k, v) {
   if (!_setPending[k].busy) storeSetFlush(k);
 }
 setInterval(() => { Object.keys(_setPending).forEach((k) => storeSetFlush(k)); }, 15000);   // добор после обрыва связи
-function lsDel(k) { delete db[k]; delete _lsSig[k]; rlmApi('/api/rlm/store/del', { key: k }).catch(() => {}); }   // после удаления сигнатуру сбрасываем — иначе повторный lsSet тем же значением не дойдёт до сервера
+// ── Дожать всё несохранённое (перед перезапуском / закрытием) ─────────────────────────────────
+// Снимок сессии (граф чата, история ноды Telegram, лог) уходит на сервер очередью с паузами.
+// Перезапуск в этот момент рвал отправку: приложение поднималось со старым снимком — «история
+// не сохранилась», а очищенная лента возвращалась из прошлой версии. Теперь перед выходом
+// сначала снимаем ЖИВОЕ состояние в очередь, потом ждём подтверждения сервера.
+async function flushBeforeExit(maxMs) {
+  maxMs = maxMs || 1200;   // локальный сервер отвечает за миллисекунды; долгое ожидание убивало мгновенный перезапуск
+  try { if (typeof charEditFlush === 'function') charEditFlush(); } catch (_) {}          // правка карточки висела на дебаунсе 2 с и при выходе пропадала
+  try { if (typeof flushVisionsBeforeSnapshot === 'function') flushVisionsBeforeSnapshot(true); } catch (_) {}   // и открытый вижн комплитера — его правки синкались только на закрытии
+  try { if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); } catch (_) {}   // живой снимок сессии
+  try { if (typeof flushDirtyChat === 'function') flushDirtyChat(); } catch (_) {}             // хвост лога чата
+  const left = () => Object.keys(_setPending).length + Object.keys(_chatlogPending).length;
+  const t0 = Date.now();
+  while (left() && (Date.now() - t0) < maxMs) {
+    Object.keys(_setPending).forEach((k) => storeSetFlush(k));
+    Object.keys(_chatlogPending).forEach((k) => chatlogFlush(k));   // очередь лога дожимаем наравне — в ней живёт история
+    await new Promise((r) => setTimeout(r, 120));
+  }
+  return left() === 0;   // false = что-то не доехало (сеть/сервер)
+}
+function lsDel(k) { delete db[k]; delete _lsSig[k]; if (!RLM_VIEW_ONLY) rlmApi('/api/rlm/store/del', { key: k, clientId: RLM_CLIENT_ID }).catch(() => {}); }   // после удаления сигнатуру сбрасываем — иначе повторный lsSet тем же значением не дойдёт до сервера
 // Загрузить базу с сервера в `db`. По КЛЮЧАМ (не монолитом на ~16 МБ, иначе телефон давится fetch/parse).
 // ТЯЖЁЛЫЕ снимки графов чатов (rlm.chatgraph.*) НЕ грузим оптом — подтягиваем при открытии чата (ensureChatGraph).
 // Возвращает true, если база доступна; false → сервер недоступен (boot покажет «нет связи», без старых данных).
@@ -17964,7 +18535,8 @@ async function loadServerStore(onProgress) {   // onProgress(0..1) — доля 
   }
 
   db = {};
-  const light = keys.filter((k) => k.indexOf('rlm.chatgraph.') !== 0 && k !== TG_BG_KEY);   // всё, кроме тяжёлых снимков графов чатов и файла фона ленты
+  // Резервные копии логов (.bak) — данные «на всякий случай», в память их тянуть незачем.
+  const light = keys.filter((k) => k.indexOf('rlm.chatgraph.') !== 0 && k !== TG_BG_KEY && !/\.bak$/.test(k));   // всё, кроме тяжёлых снимков графов чатов и файла фона ленты
   await fetchKeysInto(db, light, 6, onProgress);
   dbReady = true;
   return true;
@@ -18431,7 +19003,7 @@ function saveCurrent(btn) {
       if (p && (p.unnamed || !p.name)) {               // безымянный пресет — спросим имя своим диалогом
         rlmPrompt('Имя нового пресета:', '', (name) => {
           if (!name) { doFlash(false); return; }        // отменили именование — не сохраняем
-          p.name = name; delete p.unnamed;
+          p.name = name; if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); delete p.unnamed;
           setPresets(getPresets().map((x) => (x.id === p.id ? p : x)));
           savePresetGraph(current.presetId); doFlash(true);
         });
@@ -18465,13 +19037,15 @@ function savePresetAsNew(btn) {
 // переменные/поля пропадают при следующем восстановлении. 'prompt' пропускаем — его синк тяжёлый
 // (пересборка плашек + проводов), он безопасно синкается только на закрытии.
 let _flushingVision = false;
-function flushOpenVision() {
+function flushOpenVision(force) {
   const st = (typeof chatVisionState !== 'undefined') ? chatVisionState : null;
   if (_flushingVision || !st || st.mode !== 'nodeclone' || !Array.isArray(st.pairs)) return;
   _flushingVision = true;
   try {
     st.pairs.forEach(({ master, view, type }) => {
-      if (master && view && type !== 'prompt') { try { applyValues(master, type, nodeValues(view, type)); } catch (_) {} }
+      // Комплитер на автосейве не трогаем — у него тяжёлая пересборка плашек. Но при ВЫХОДЕ (force)
+      // синкать обязаны: иначе правки плашек и рядов игроков пропадали вместе с закрытым окном.
+      if (master && view && (type !== 'prompt' || force)) { try { applyValues(master, type, nodeValues(view, type)); } catch (_) {} }
     });
   } finally { _flushingVision = false; }
 }
@@ -18479,13 +19053,13 @@ function flushOpenVision() {
 // Его правки уходят в мастер только на закрытии (closeLoreFs→sync). Перед ЛЮБЫМ снимком (особенно 💾
 // пресета) сливаем открытый разворот в мастер — иначе настройка (напр. голос/транскрипт Озвучки),
 // заданная в развороте и НЕ закрытая, теряется при сохранении. Клон-фолбэк (moved) — данные общие, пропускаем.
-function flushOpenGlazokVision() {
+function flushOpenGlazokVision(force) {
   const st = (typeof loreFsState !== 'undefined') ? loreFsState : null;
   if (!st || st.moved || typeof st.sync !== 'function') return;
-  try { if (st.el && typeof nodeType === 'function' && (nodeType(st.el) === 'prompt' || nodeType(st.el) === 'mprompt')) return; } catch (_) {}   // «Промт комплитер» синкается ТОЛЬКО на закрытии (тяжёлая пересборка плашек/проводов) — как в flushOpenVision; на автосейве не дёргаем
+  try { if (!force && st.el && typeof nodeType === 'function' && (nodeType(st.el) === 'prompt' || nodeType(st.el) === 'mprompt')) return; } catch (_) {}   // «Промт комплитер» синкается ТОЛЬКО на закрытии (тяжёлая пересборка плашек/проводов) — как в flushOpenVision; на автосейве не дёргаем
   try { st.sync(); } catch (_) {}
 }
-function flushVisionsBeforeSnapshot() { flushOpenVision(); flushOpenGlazokVision(); }   // и чат-вижн, и разворот-по-глазку
+function flushVisionsBeforeSnapshot(force) { flushOpenVision(force); flushOpenGlazokVision(force); }   // и чат-вижн, и разворот-по-глазку
 // СТРАХОВКА ОТ ПОТЕРИ ПРАВОК. Полей в нодах ~120, и у части из них своего обработчика «сохранить»
 // исторически не было — такая правка попадала в снимок только если её случайно застанет чужое
 // сохранение. Один делегированный слушатель на весь холст закрывает это разом: любое изменение
@@ -18508,33 +19082,30 @@ function flushVisionsBeforeSnapshot() { flushOpenVision(); flushOpenGlazokVision
   document.addEventListener('input', (e) => { const n = e.target && e.target.closest && e.target.closest('.lore-fs-node, #lore-fs, .chat-vision'); if (n) save(700); }, true);
 })();
 function persistCurrentGraph() {
+  // Между «переключились на чат B» и «нода получила chatId B» есть окно: автосейв в это время
+  // записывал граф чата A под ключом чата B. Пока они не сошлись — не сохраняем.
+  try {
+    // Между «переключились на чат B» и «нода получила chatId B» снимок чата A мог уехать под ключ B.
+    // Проверяем ЛЮБОГО хозяина истории: и ноду «Чат», и ноду партии — иначе сетевая сборка оставалась без защиты.
+    const holder = document.querySelector('#world .node-chat, #world .node-groupchat, #world .node-netgame, #world .node-telegram');
+    if (holder && holder._chatId && current && current.mode === 'chat' && current.chatId && holder._chatId !== current.chatId) return;
+  } catch (_) {}
   if (typeof schedulePromptTokens === 'function') schedulePromptTokens();   // счётчики токенов на плашках — вслед за правкой
-  if (graphLoading) { graphPersistWanted = true; return; }                   // сборка ещё достраивается — снимок отложен
+  if (graphLoading && (Date.now() - _graphLoadingAt) < 20000) { graphPersistWanted = true; return; }   // сборка достраивается — снимок отложен
+  if (graphLoading) graphLoading = false;   // висит слишком долго → восстановление оборвалось; дальше блокировать запись нельзя
   try {
     if (current.mode !== 'chat' || !current.chatId) return;
     flushVisionsBeforeSnapshot();                              // правки открытого вижна/разворота → в мастер, чтобы снимок их не потерял
     const key = chatgraphKeyOf(current.chatId);
     const g = serializeGraph();
-    // Страховка от катастрофы: НЕ затирать связный снимок графом БЕЗ проводов. Симптом бага-гонки —
-    // 25 нод и 0 связей: если сейчас связей 0, а нод >1 И в сохранённом снимке связи БЫЛИ — не сохраняем
-    // (иначе автосейв по клику навсегда стирал всю развязку). Реальное «убрал все провода» вручную —
-    // крайне редкое; вернуть сохранение легко (добавить любой провод).
-    if ((g.connections || []).length === 0 && (g.nodes || []).length > 1) {
-      const prev = lsGet(key, null);
-      if (prev && (prev.connections || []).length > 0) return;
-    }
-    // ИСТОРИЯ СЕТЕВОЙ ИГРЫ живёт внутри ноды (`convos`), а не отдельным логом. Если в новом снимке
-    // переписки НЕТ, а в сохранённом она была — значит нода ещё не подхватила беседы: сохранять нельзя,
-    // иначе партия теряет всю историю.
-    const msgsIn = (graph) => (graph && Array.isArray(graph.nodes) ? graph.nodes : []).reduce((sum, nd) => {
-      if (!nd || (nd.type !== 'netgame' && nd.type !== 'telegram')) return sum;
-      const cv = (nd.data && nd.data.convos) || {};
-      return sum + Object.keys(cv).reduce((a, k) => a + (((cv[k] || {}).msgs || []).length), 0);
-    }, 0);
-    const prevSnap = lsGet(key, null);
-    if (prevSnap && msgsIn(prevSnap) > 0 && msgsIn(g) === 0) return;
+    // Клиентских «а вдруг это гонка» здесь больше нет: сервер не принимает запись, которая короче
+    // уже лежащей истории, и делает копию перед каждой перезаписью. Клиент просто отправляет то,
+    // что есть на экране — как ты и просил: изменилось → ушло.
+    // Мьютекса здесь нет: очередь записи сама держит один запрос на ключ и переотправляет свежее
+    // значение. Мой прежний флаг «идёт запись» залипал — и снимок переставал сохраняться совсем.
     lsSet(key, g);
-  } catch (e) { /* игнор */ }
+    noteChatMsgCount();   // число сообщений в списке чатов — его показывает карточка чата
+  } catch (e) { console.error('[RLM] снимок не сохранён:', e); }   // молчать нельзя: раньше сбой записи глотался
 }
 // Сохранить граф (в т.ч. ПОЗИЦИИ нод) в АКТИВНЫЙ контекст — и чат, и пресет. Для явных
 // «раскладочных» действий (перенос ноды, узловая точка провода), чтобы расстановка держалась ВСЕГДА.
@@ -18574,14 +19145,21 @@ const _chatDirty = {};   // chatId → есть НЕподтверждённое
 // пока сервер не ответит ok; в очереди всегда САМАЯ СВЕЖАЯ версия лога этого чата.
 const _chatlogPending = {};   // chatId -> { key, val, sig, timer, delay }
 function chatlogFlush(chatId) {
-  const p = _chatlogPending[chatId]; if (!p || p.busy) return;
-  p.busy = true;
-  rlmApi('/api/rlm/store/set', { key: p.key, value: p.val })
+  const p = _chatlogPending[chatId]; if (!p) return;
+  // Если прошлая отправка не ответила (обрыв Wi-Fi, убитый сервер), busy оставался навсегда — и лог
+  // переставал писаться до конца сессии, молча. Через 20 секунд считаем ту попытку мёртвой.
+  if (p.busy) { if (!p.busyAt || (Date.now() - p.busyAt) < 20000) return; }
+  p.busy = true; p.busyAt = Date.now();
+  rlmApi('/api/rlm/store/set', { key: p.key, value: p.val, clientId: RLM_CLIENT_ID, shrinkOk: !!_shrinkOk[p.key] })
     .then((r) => {
       p.busy = false;
       if (r && r.ok) {
-        if (_chatlogPending[chatId] === p && p.sig === _chatlogSig[chatId]) { delete _chatlogPending[chatId]; _chatDirty[chatId] = false; }
-        else chatlogFlush(chatId);                       // за время отправки лог успел измениться — шлём свежий
+        if (_chatlogPending[chatId] === p && p.sig === _chatlogSig[chatId]) { delete _chatlogPending[chatId]; _chatDirty[chatId] = false; return; }
+        // Лог изменился, пока шла отправка. Раньше тут повторялся ТОТ ЖЕ p — старое значение
+        // уходило по кругу и затирало свежее. Пересобираем из актуального зеркала.
+        const fresh = db[p.key];
+        if (fresh) { p.val = fresh; p.sig = JSON.stringify((fresh.msgs) || []); }
+        chatlogFlush(chatId);
         return;
       }
       chatlogRetry(chatId);
@@ -18595,6 +19173,9 @@ function chatlogRetry(chatId) {
   p.timer = setTimeout(() => chatlogFlush(chatId), p.delay);
 }
 function persistChatLog(node) {
+  // Гард «не писать во время загрузки» убран: он мог залипнуть (флаг остаётся true, если восстановление
+  // связей не дошло до конца) и тогда история не писалась ВООБЩЕ. Смысла в нём больше нет — историю
+  // из снимка сборки мы убрали, затирать логу теперь нечем.
   if (!node || !node._chatId) return;
   const chatId = node._chatId;
   const sig = JSON.stringify(node._msgs || []);
@@ -18631,6 +19212,10 @@ async function pullChatlogFresh(node) {
   const localMsgs = Array.isArray(node._msgs) ? node._msgs : [];
   const serverSig = JSON.stringify(serverMsgs);
   if (serverSig === JSON.stringify(localMsgs)) return;           // одинаково — нечего синхронить
+  // Своё НЕподтверждённое изменение важнее всего, что лежит на сервере. Иначе выходило так:
+  // удалил сообщения (или очистил чат) → своя короткая версия ещё в очереди → фоновая сверка видит
+  // «сервер длиннее» → принимает серверную → удалённое возвращается, и это выглядит штатно.
+  if (_chatDirty[chatId]) { persistChatLog(node); return; }
   // ЖЕЛЕЗНОЕ ПРАВИЛО: синхронизация НИКОГДА не укорачивает историю на экране. Сервер короче —
   // значит он отстал (там ещё не доехали наши сообщения): держим своё и дожимаем его наверх.
   if (serverMsgs.length < localMsgs.length) { _chatDirty[chatId] = true; persistChatLog(node); return; }
@@ -18655,13 +19240,20 @@ async function resyncOpenChat() {   // возврат к окну: обнови�
 // даже когда страница уходит в фон (обычный fetch там убивают → на телефоне терялись последние реплики).
 // Шлём ТОЛЬКО при _chatDirty — иначе висящее без дела окно ПК со СТАРЫМ логом дослало бы свою короткую версию
 // и затёрло дописанное на другом устройстве.
+// Вкладка ушла в фон: система может выгрузить её в любой момент, поэтому снимаем состояние здесь же.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden || RLM_VIEW_ONLY) return;
+  try { if (typeof charEditFlush === 'function') charEditFlush(); } catch (_) {}
+  try { if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); } catch (_) {}
+  try { Object.keys(_setPending).forEach((k) => storeSetFlush(k, true)); } catch (_) {}
+});
 function flushDirtyChat() {
   try {
     const n = openChatNode(); if (!n || !n._chatId || !_chatDirty[n._chatId]) return;
     const key = chatlogKeyOf(n._chatId); const val = { msgs: n._msgs || [] };
-    if (window.rlm && window.rlm.api) { window.rlm.api('/api/rlm/store/set', { key, value: val }); return; }
+    if (window.rlm && window.rlm.api) { window.rlm.api('/api/rlm/store/set', { key, value: val, clientId: RLM_CLIENT_ID }); return; }
     const base = location.protocol.startsWith('http') ? '' : 'http://127.0.0.1:8100';
-    fetch(base + '/api/rlm/store/set', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, value: val }), keepalive: true }).catch(() => {});
+    fetch(base + '/api/rlm/store/set', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, value: val, clientId: RLM_CLIENT_ID }), keepalive: true }).catch(() => {});
   } catch (_) { /* фон — молча */ }
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') resyncOpenChat(); else flushDirtyChat(); });
@@ -18670,7 +19262,40 @@ window.addEventListener('focus', resyncOpenChat);
 // срабатывало только на возврат фокуса и перед правкой) — так и «пропали» дописанные сообщения.
 setInterval(() => { if (document.visibilityState === 'visible' && openChatNode()) resyncOpenChat(); }, 20000);
 window.addEventListener('pagehide', flushDirtyChat);
-function chatMsgCount(chatId) { const log = lsGet(chatlogKeyOf(chatId), null); const m = (log && Array.isArray(log.msgs)) ? log.msgs : []; return m.length; }
+function chatMsgCount(chatId, charId) {
+  const log = lsGet(chatlogKeyOf(chatId), null);
+  const m = (log && Array.isArray(log.msgs)) ? log.msgs : [];
+  if (m.length) return m.length;
+  // Сетевая игра: истории в файле лога нет — она в снимке партии (convos ноды Telegram). Снимки
+  // графов при старте не грузятся (тяжёлые), поэтому партия сама кладёт число в список чатов.
+  if (charId) {
+    const rec = (lsGet(chatsKeyOf(charId), []) || []).find((c) => c.id === chatId);
+    if (rec && rec.n > 0) return rec.n;
+  }
+  return 0;
+}
+// Сколько сообщений сейчас в открытой сборке: у ноды чата — её история, у сетевой игры — сумма бесед.
+function openChatMsgCount() {
+  const chat = document.querySelector('#world .node-chat, #world .node-groupchat');
+  if (chat) return (chat._msgs || []).length;
+  const tg = document.querySelector('#world .node-netgame, #world .node-telegram');
+  if (!tg) return -1;   // считать нечего
+  const convos = tg._convos || {};
+  return Object.keys(convos).reduce((a, k) => a + ((convos[k].msgs || []).length), 0);
+}
+// Запомнить число сообщений в списке чатов персонажа — карточка чата показывает именно его.
+function noteChatMsgCount() {
+  try {
+    if (!current || current.mode !== 'chat' || !current.charId || !current.chatId) return;
+    const n = openChatMsgCount();
+    if (n < 0) return;
+    const list = lsGet(chatsKeyOf(current.charId), []) || [];
+    const rec = list.find((c) => c.id === current.chatId);
+    if (!rec || rec.n === n) return;
+    rec.n = n;
+    lsSet(chatsKeyOf(current.charId), list);
+  } catch (_) { /* счётчик не критичен */ }
+}
 
 // Лорбук по области (world/char/chat), кроме Режиссёра.
 function loreNodeByScope(scope) {
@@ -18820,7 +19445,7 @@ function clearCharNodes() {
 function deleteCharacter(charId) {
   const lib = lsGet(CHAR_LIB_KEY, []); const ch = lib.find((c) => c.id === charId); if (!ch) return;
   if (!confirm('Удалить персонажа «' + (ch.name || '') + '»? Сотрутся его карточка и все его чаты.')) return;
-  lsGet(chatsKeyOf(charId), []).forEach((c) => { lsDel(chatlogKeyOf(c.id)); lsDel(chatgraphKeyOf(c.id)); rlmApi('/api/rlm/soul/purge', { chat: c.id }).catch(() => {}); });
+  lsGet(chatsKeyOf(charId), []).forEach((c) => { lsDel(chatlogKeyOf(c.id)); lsDel(chatlogKeyOf(c.id) + '.bak'); lsDel(chatgraphKeyOf(c.id)); lsDel('rlm.tokens.' + c.id); rlmApi('/api/rlm/soul/purge', { chat: c.id }).catch(() => {}); });
   lsDel(chatsKeyOf(charId));
   lsSet(CHAR_LIB_KEY, lib.filter((c) => c.id !== charId));
   if (current.charId === charId) { setCurrent({ mode: 'preset', presetId: current.presetId || defaultPresetId() }); clearCharNodes(); }
@@ -19138,7 +19763,7 @@ function renderCharMenu(charId) {
     ? `<div class="sm-cv-ava has-img" style="background-image:url('${ch.avatar}')">${SILHOUETTE}</div>`
     : `<div class="sm-cv-ava">${SILHOUETTE}</div>`;
   const rows = lsGet(chatsKeyOf(ch.id), []).map((c) => {
-    const meta = (c.preset ? esc(c.preset) : '—') + ' · ' + chatMsgCount(c.id) + ' сбщ';
+    const meta = (c.preset ? esc(c.preset) : '—') + ' · ' + chatMsgCount(c.id, ch.id) + ' сбщ';
     const active = current.mode === 'chat' && current.chatId === c.id;
     return `<div class="sm-chat${active ? ' active' : ''}" data-char="${ch.id}" data-chat="${c.id}">
         <span class="sm-chat-name">${esc(c.name)}</span>
@@ -19887,6 +20512,96 @@ const Splash = (() => {
   };
 })();
 
+// ── Обновление сборки с GitHub («Обновить?» на экране загрузки) ───────────────────
+// У людей приложение — это папка сборки, скачанная с github.com/Leosmaru/rlm. Сверяет файлы и
+// докачивает изменившиеся СЕРВЕР (server/src/endpoints/rlm-update.js) — он же есть и в Termux, где
+// никакого Electron нет. Здесь только показ: номер сборки под полоской и вопрос перед входом в холст.
+// В рабочей папке (BUILD.txt отсутствует) под полоской пишется «dev» и вопрос не задаётся вовсе.
+let _updInfo = null;                 // ответ /check: { build, remote, hasUpdate } — приходит, пока грузится база
+function updateCheckStart() {        // пускаем проверку заранее, чтобы номер сборки появился сразу, а не в конце
+  _updInfo = rlmApi('/api/rlm/update/check', {}).catch(() => null).then((r) => {
+    const el = document.getElementById('rlm-splash-ver');
+    if (el) el.textContent = r && r.build ? 'сборка ' + r.build : 'dev';
+    return r;
+  });
+}
+
+// Вопрос «Обновить?»: показывает, с какой сборки на какую. true — человек согласился.
+function updateAsk(from, to) {
+  return new Promise((resolve) => {
+    const el = document.getElementById('rlm-upd');
+    if (!el) return resolve(false);
+    document.getElementById('rlm-upd-from').textContent = from;
+    document.getElementById('rlm-upd-to').textContent = to;
+    el.classList.remove('hidden');
+    const yes = document.getElementById('rlm-upd-yes');
+    const no = document.getElementById('rlm-upd-no');
+    yes.onclick = () => { yes.onclick = null; no.onclick = null; resolve(true); };
+    no.onclick = () => { yes.onclick = null; no.onclick = null; el.classList.add('hidden'); resolve(false); };
+  });
+}
+
+// Сама закачка: кнопки прячем, на их месте — полоска. Прогресс спрашиваем у сервера,
+// он же считает, сколько файлов реально изменилось.
+const UPD_PHASE = { list: 'Смотрю, что изменилось…', check: 'Сверяю файлы…', files: 'Обновляю файлы',
+  deps: 'Доустанавливаю зависимости…', done: 'Готово', error: 'Не получилось' };
+async function updateRun() {
+  const note = document.getElementById('rlm-upd-note');
+  const bar = document.getElementById('rlm-upd-bar');
+  const fill = document.getElementById('rlm-upd-fill');
+  const btns = document.getElementById('rlm-upd-btns');
+  btns.classList.add('hidden'); bar.classList.remove('hidden');
+  note.textContent = UPD_PHASE.list;
+  let started = null;
+  try { started = await rlmApi('/api/rlm/update/apply', {}); } catch (_) { /* ниже честно скажем */ }
+  if (!started || started.ok === false) {
+    note.textContent = (started && started.error) || 'Не удалось начать обновление.';
+    return { ok: false };
+  }
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 400));
+    let p = null;
+    try { p = await rlmApi('/api/rlm/update/progress', {}); } catch (_) { continue; }   // сервер занят закачкой — просто спросим ещё раз
+    if (!p) continue;
+    const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
+    if (fill) fill.style.width = pct + '%';
+    note.textContent = p.phase === 'files' ? (UPD_PHASE.files + ' — ' + p.done + ' из ' + p.total) : (UPD_PHASE[p.phase] || '…');
+    if (p.finished) return { ok: !p.error, error: p.error, failed: p.failed || [], changed: p.changed || 0 };
+  }
+}
+
+// Точка, где всё это встречается: полоска доведена до 100%, холст уже готов под сплэшем.
+// Согласился — обновляемся и уходим в перезапуск (новый код подхватится сам). Отказался — работаем как есть.
+async function updateGate() {
+  Splash.set(100);
+  let info = null;
+  // Не даём проверке задержать старт: не ответила за 9 секунд — просто входим в приложение.
+  try { info = await Promise.race([_updInfo, new Promise((r) => setTimeout(() => r(null), 9000))]); } catch (_) {}
+  if (!info || !info.hasUpdate) return;
+  if (!(await updateAsk(info.build, info.remote))) return;
+  const r = await updateRun();
+  const note = document.getElementById('rlm-upd-note');
+  const btns = document.getElementById('rlm-upd-btns');
+  if (!r.ok) {                                            // не начали или сорвалось — даём войти в приложение как есть
+    if (note && r.error) note.textContent = 'Не получилось: ' + r.error;
+    if (btns) {
+      btns.classList.remove('hidden');
+      document.getElementById('rlm-upd-yes').style.display = 'none';
+      const no = document.getElementById('rlm-upd-no');
+      no.textContent = 'Продолжить';
+      await new Promise((res) => { no.onclick = () => { no.onclick = null; document.getElementById('rlm-upd').classList.add('hidden'); res(); }; });
+    }
+    return;
+  }
+  if (note) {
+    note.textContent = r.failed.length
+      ? ('Обновлено, но ' + r.failed.length + ' файл(ов) не доехали. Перезапускаю…')
+      : ('Обновлено файлов: ' + r.changed + '. Перезапускаю…');
+  }
+  await new Promise((r2) => setTimeout(r2, 900));
+  await appRestart();                                     // мост Electron на ПК, сигнал серверу — с телефона
+}
+
 // ── Старт приложения ────────────────────────────────────────────────────────────
 // Сервер — единственный источник данных. Пока грузим базу — держим экран загрузки (сплэш) с полоской.
 // Ждём сервер ДОЛГО (движок SillyTavern поднимается секунды, холодный старт — десятки) и переподключаемся
@@ -19908,6 +20623,8 @@ async function boot() {
   }
   if (!ok) { Splash.hide(); showServerDownScreen(); return; }   // за минуту не поднялся — экран с кнопкой «Повторить сейчас»
   hideServerDownScreen();
+  updateCheckStart();   // сервер жив — можно спросить про обновление; номер сборки появится под полоской
+  await storeClaim();   // база прочитана — только теперь объявляем себя пишущим клиентом
   Splash.set(95);
   initUiFromDb();                 // оформление (тема/цвет/провода/затенение) из серверной базы — одна сессия
   current = loadCurrentLocal() || lsGet(CUR_KEY, CUR_DEFAULT);   // своё, иначе (первый запуск) — серверное
@@ -19924,6 +20641,7 @@ async function boot() {
   render();
   updateCrumb();
   openStartMenu();
+  await updateGate();   // 100% + вопрос «Обновить?», если на GitHub сборка новее (см. блок выше)
   Splash.finish();                // 100% + плавное исчезновение (холст уже готов под ним)
   } finally { _booting = false; }
 }

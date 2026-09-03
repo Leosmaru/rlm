@@ -15,6 +15,8 @@
 //   POST /api/rlm/generate  { base, key, model, messages, params } -> { ok, text }
 // ============================================================================
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
+import path from 'node:path';
 import express from 'express';
 
 const require = createRequire(import.meta.url);
@@ -137,6 +139,8 @@ router.post('/generate', async (request, response) => {
         const content = msg0?.content || '';
         const reasoning = msg0?.reasoning_content || msg0?.reasoning || '';
         const text = content || reasoning || '';
+        // Пишем ответ в лог чата САМИ, не полагаясь на вкладку (она могла уснуть или закрыться).
+        try { if (request.body && request.body._saveTo && request.body._saveTo.key) saveReplyToChatlog(request.body._saveTo.key, text); } catch (e) { console.error('[rlm] _saveTo:', e); }
         return response.json({
             ok: true,
             text,
@@ -183,11 +187,79 @@ router.post('/complete', async (request, response) => {
     }
 });
 
+// ── Запись ответа в лог чата НА СЕРВЕРЕ ───────────────────────────────────────────────────────
+// Клиент присылает вместе с запросом `_saveTo: { key }` — ключ лога чата. Как только модель ответила,
+// сервер сам кладёт реплику в файл: заменяет плейсхолдер «…», если он последний, иначе дописывает.
+// Это делает историю независимой от того, дожила ли вкладка до конца генерации.
+function chatlogPath(key) {
+    const root = globalThis.DATA_ROOT
+        || (globalThis.COMMAND_LINE_ARGS && globalThis.COMMAND_LINE_ARGS.dataRoot)
+        || './data';
+    return path.join(root, 'rlm-store', encodeURIComponent(key) + '.json');
+}
+function saveReplyToChatlog(key, text) {
+    if (!key || typeof key !== 'string' || !/^rlm\.chatlog\./.test(key)) return;
+    if (!String(text || '').trim()) return;
+    const file = chatlogPath(key);
+    let box;
+    try { box = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return; }   // лога ещё нет — клиент создаст сам
+    if (!box || !Array.isArray(box.msgs)) return;
+    const last = box.msgs[box.msgs.length - 1];
+    if (last && last.role === 'char' && String(last.text || '').trim() === '…') last.text = text;   // плейсхолдер → ответ
+    else if (last && last.role === 'char' && String(last.text || '') === text) return;             // уже записан — не двоим
+    else box.msgs.push({ role: 'char', text });
+    try {
+        const tmp = file + '.tmp' + process.pid;
+        const fd = fs.openSync(tmp, 'w');
+        try { fs.writeFileSync(fd, JSON.stringify(box)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        fs.renameSync(tmp, file);
+        console.log('[rlm] ответ записан в ' + key + ' (' + box.msgs.length + ' сообщ.) — вкладка могла и не дожить');
+    } catch (e) { console.error('[rlm] не записал ответ в ' + key + ':', e); }
+}
+
 // ---- Перевод текста (нода «Транслитер» + кнопки перевода в полях/чате) ----------
 // Провайдеры БЕЗ ключей — как в ST: google (google-translate-api-browser), yandex (free), bing.
 // «Нейро»-перевод идёт НЕ сюда, а через /generate с подключённым к ноде «Транслитер» API.
 //   POST /api/rlm/translate { provider, text, to } -> { ok, text }
 function ucid32() { let s = ''; for (let i = 0; i < 32; i++) s += Math.floor(Math.random() * 16).toString(16); return s; }
+// Разрезать текст на куски не длиннее limit, стараясь рвать по естественным границам:
+// пустая строка → перевод строки → конец предложения → пробел. Так перевод не теряет смысл на стыках.
+function splitForTranslate(text, limit) {
+    const out = [];
+    const pushChunk = (t) => { if (t) out.push(t); };
+    const cut = (str, seps) => {
+        if (str.length <= limit) { pushChunk(str); return; }
+        const sep = seps[0];
+        if (sep === undefined) {                       // границ не осталось — режем жёстко по символам
+            for (let i = 0; i < str.length; i += limit) pushChunk(str.slice(i, i + limit));
+            return;
+        }
+        const parts = str.split(sep);
+        let buf = '';
+        for (const part of parts) {
+            const piece = buf ? buf + sep + part : part;
+            if (piece.length <= limit) { buf = piece; continue; }
+            if (buf) { pushChunk(buf); buf = ''; }
+            if (part.length <= limit) buf = part; else cut(part, seps.slice(1));   // кусок сам великоват — дробим мельче
+        }
+        pushChunk(buf);
+    };
+    cut(String(text || ''), ['\n\n', '\n', '. ', ' ']);
+    return out;
+}
+// Перевести длинный текст по кускам и склеить. splitter получает кусок и возвращает его перевод.
+async function translateInChunks(text, limit, translateOne) {
+    const src = String(text || '');
+    if (src.length <= limit) return await translateOne(src);
+    const chunks = splitForTranslate(src, limit);
+    const done = [];
+    for (const c of chunks) {
+        const t = await translateOne(c);
+        if (t == null) throw new Error('переводчик не осилил кусок (' + c.length + ' симв.)');
+        done.push(t);
+    }
+    return done.join('\n\n');
+}
 router.post('/translate', async (request, response) => {
     const { provider, text, to } = request.body || {};
     const target = String(to || 'ru');
@@ -196,28 +268,39 @@ router.post('/translate', async (request, response) => {
 
     try {
         if (provider === 'yandex') {
-            const params = new URLSearchParams();
-            params.append('text', src);
-            params.append('lang', target);
-            const url = `https://translate.yandex.net/api/v1/tr.json/translate?ucid=${ucid32()}&srv=android&format=text`;
-            const resp = await callProvider(url, { method: 'POST', body: params, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }, 20000);
-            if (!resp.ok) return response.json({ ok: false, error: await readError(resp) });
-            const json = await resp.json();
-            return response.json({ ok: true, text: (json.text || []).join('') });
+            // Большое полотно уходит по кускам: у бесплатного эндпоинта потолок около 10 000 символов,
+            // берём 9000 с запасом. Куски режутся по абзацам и предложениям, потом склеиваются.
+            const one = async (part) => {
+                const params = new URLSearchParams();
+                params.append('text', part);
+                params.append('lang', target);
+                const url = `https://translate.yandex.net/api/v1/tr.json/translate?ucid=${ucid32()}&srv=android&format=text`;
+                const resp = await callProvider(url, { method: 'POST', body: params, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }, 20000);
+                if (!resp.ok) throw new Error(await readError(resp));
+                const json = await resp.json();
+                return (json.text || []).join('');
+            };
+            const text = await translateInChunks(src, 9000, one);
+            return response.json({ ok: true, text });
         }
         if (provider === 'bing') {
             const { translate: bingTranslate } = await import('bing-translate-api');
-            const res = await bingTranslate(src, null, target);
-            return response.json({ ok: true, text: (res && res.translation) || '' });
+            const oneB = async (part) => { const res = await bingTranslate(part, null, target); return (res && res.translation) || ''; };
+            const text = await translateInChunks(src, 900, oneB);   // у бинга самый низкий потолок
+            return response.json({ ok: true, text });
         }
-        // google (по умолчанию) — без ключа
+        // google (по умолчанию) — без ключа; у него потолок ещё ниже яндексового, режем по 4500
         const g = require('google-translate-api-browser');
-        const url = g.generateRequestUrl(src, { to: target });
-        const resp = await callProvider(url, { method: 'GET' }, 20000);
-        if (!resp.ok) return response.json({ ok: false, error: resp.statusText });
-        const buf = await resp.arrayBuffer();
-        const norm = g.normaliseResponse(JSON.parse(Buffer.from(buf).toString('utf-8')));
-        return response.json({ ok: true, text: norm.text });
+        const oneG = async (part) => {
+            const url = g.generateRequestUrl(part, { to: target });
+            const resp = await callProvider(url, { method: 'GET' }, 20000);
+            if (!resp.ok) throw new Error(resp.statusText);
+            const buf = await resp.arrayBuffer();
+            const norm = g.normaliseResponse(JSON.parse(Buffer.from(buf).toString('utf-8')));
+            return norm.text;
+        };
+        const gText = await translateInChunks(src, 4500, oneG);
+        return response.json({ ok: true, text: gText });
     } catch (e) {
         const msg = e?.name === 'AbortError' ? 'Таймаут: переводчик не ответил' : String(e?.message || e);
         return response.json({ ok: false, error: msg });

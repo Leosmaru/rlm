@@ -24,6 +24,14 @@ router.post('/restart', (req, res) => {
     // process.send есть только когда процесс запущен с IPC-каналом — т.е. поднят Electron'ом
     // (app/main.js). Запущен вручную в терминале (dev) → перезапускать некому, честно скажем.
     // Флаг unavailable отличает этот отказ от простого обрыва связи на стороне клиента.
+
+    // Termux: Electron'а там нет вообще — сервер запущен из start-termux.sh, который крутит его
+    // в цикле. Значит перезапуск = выйти с кодом 42, скрипт поднимет заново уже с новым кодом.
+    if (typeof process.send !== 'function' && process.env.RLM_RELOOP === '1') {
+        res.json({ ok: true });
+        setTimeout(() => process.exit(42), 350);
+        return;
+    }
     if (typeof process.send !== 'function') {
         return res.json({ ok: false, unavailable: true, error: 'Перезапуск доступен только когда сервер запущен приложением RLM.' });
     }

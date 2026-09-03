@@ -281,7 +281,9 @@ html, body { height: 100%; overflow: hidden; background: var(--canvas-grad); col
 .node-telegram .btn { width: 100%; text-align: center; }
 .tg-set-row.tg-btns .btn { width: auto; flex: 1; }
 .tg-fb-row .tg-fb-note { flex: 1; min-width: 120px; }
-.node-telegram .tg-fb-row .tg-fb-go { width: auto; flex: none; white-space: nowrap; }
+.node-telegram .tg-fb-row .tg-fb-go, .node-telegram .tg-fb-row .tg-fb-soft { width: auto; flex: none; white-space: nowrap; }
+/* Галочка доставки правки («править на месте») — своей строкой под полем и кнопками фидбека. */
+.tg-fb-row .tg-fb-place { flex: 1 0 100%; }
 /* Кнопки-действия под лентой (Собрать ход / Написать самому / Собрать сцену) и кнопки бота в админ-панели — со значком-SVG */
 .tg-act-btns, .tg-bot-acts { display: flex; gap: 8px; align-items: stretch; }
 .node-telegram .tg-act-btns .btn, .node-telegram .tg-bot-acts .btn {
@@ -2095,6 +2097,42 @@ html.browser-build #btn-phone, html.browser-build #mobile-exit { display: none !
   .rlm-splash-pct { font-size: 14px; }
 }
 
+/* Номер сборки под полоской загрузки — мелко и ненавязчиво, чтобы не спорил с процентами */
+.rlm-splash-ver { font-family: var(--mono, 'Ubuntu Mono', monospace); font-size: 11px; letter-spacing: .14em;
+  color: rgba(210,232,245,.55); text-shadow: 0 1px 5px rgba(0,0,0,.7); margin-top: -4px; }
+
+/* Табличка «Обновить?» — поверх экрана загрузки, когда на GitHub лежит сборка новее.
+   Живёт внутри #rlm-splash, поэтому исчезает вместе с ним и не мешает холсту. */
+.rlm-upd { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center;
+  background: rgba(3,6,10,.62); backdrop-filter: blur(3px); }
+.rlm-upd.hidden { display: none; }
+.rlm-upd-box { width: 340px; max-width: 86vw; text-align: center; padding: 24px 24px 20px;
+  border: 1px solid var(--corner, rgba(159,182,200,0.45)); border-radius: 8px; background: var(--node-body, #171a21);
+  box-shadow: 0 18px 50px rgba(0,0,0,.55); }
+.rlm-upd-title { font-size: 18px; color: var(--accent, #9fb6c8); margin-bottom: 12px; }
+.rlm-upd-vers { font-family: var(--mono, 'Ubuntu Mono', monospace); font-size: 13px; color: var(--txt, #d7dee6);
+  display: flex; align-items: center; justify-content: center; gap: 9px; flex-wrap: wrap; }
+.rlm-upd-arrow { color: var(--accent, #9fb6c8); }
+#rlm-upd-to { color: #7fdcff; }
+.rlm-upd-note { margin-top: 12px; font-size: 12px; line-height: 1.5; color: var(--muted, #79828d); }
+/* Полоска самого обновления: показывается на месте кнопок, пока идёт закачка файлов */
+.rlm-upd-bar { margin-top: 16px; height: 4px; border-radius: 4px; overflow: hidden; background: rgba(255,255,255,.16); }
+.rlm-upd-bar.hidden { display: none; }
+.rlm-upd-fill { width: 0%; height: 100%; border-radius: 4px; transition: width .28s ease-out;
+  background: linear-gradient(90deg, #2aa7ff, #7fdcff, #eafaff); box-shadow: 0 0 10px 1px rgba(120,210,255,.7); }
+.rlm-upd-btns { margin-top: 18px; display: flex; gap: 10px; justify-content: center; }
+.rlm-upd-btns.hidden { display: none; }
+.rlm-upd-btn { font-family: inherit; font-size: 13px; padding: 8px 26px; cursor: pointer; border-radius: 5px;
+  border: 1px solid transparent; color: #fff; }
+.rlm-upd-btn.go { background: var(--btn-grad, #5a86b0); }
+.rlm-upd-btn.ghost { background: transparent; border-color: var(--corner, rgba(159,182,200,0.45)); color: var(--muted, #79828d); }
+.rlm-upd-btn:hover { filter: brightness(1.12); }
+.rlm-upd-btn:disabled { opacity: .5; cursor: default; filter: none; }
+@media (max-width: 760px) {
+  .rlm-upd-box { padding: 20px 18px 16px; }
+  .rlm-splash-ver { font-size: 10px; }
+}
+
 /* Мобильная вёрстка (заготовка): шапка компактнее и прокручивается, чтобы всё оставалось доступным.
    Полная адаптация холста/нод/панелей под телефон — отдельным шагом. */
 html.mobile-mode #toolbar { overflow-x: auto; overflow-y: hidden; gap: 2px; }
@@ -3014,3 +3052,78 @@ html.mobile-mode #start-menu #sm-char-view .sm-cv-chats { overflow: visible; fle
 .help-doc td, .help-doc th { border: 1px solid var(--line); padding: 5px 8px; }
 .help-doc mark { background: var(--accent); color: #14100f; }
 .help-doc .help-hit { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* Плашка «только просмотр»: это окно потеряло право записи — игру продолжили на другом устройстве.
+   Висит поверх всего, но узкой полосой внизу, чтобы не закрывать чат: читать-то можно. */
+#rlm-viewonly {
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 100000;
+  display: flex; align-items: center; gap: 12px; max-width: min(680px, 92vw);
+  padding: 10px 14px; border: 1px solid var(--accent, #d65a46); border-radius: 4px;
+  background: var(--panel, #17120f); color: var(--fg, #e8ded8);
+  font: 12px/1.45 'Ubuntu Mono', monospace; box-shadow: 0 10px 30px rgba(0, 0, 0, .55);
+}
+#rlm-viewonly button {
+  flex: none; padding: 6px 12px; cursor: pointer; white-space: nowrap;
+  border: 1px solid var(--accent, #d65a46); border-radius: 3px;
+  background: transparent; color: var(--accent, #d65a46); font: inherit;
+}
+#rlm-viewonly button:hover { background: var(--accent, #d65a46); color: var(--bg, #14100f); }
+#rlm-viewonly button:disabled { opacity: .6; cursor: default; }
+
+/* ── Консоль на телефоне ──────────────────────────────────────────────────────────────────────
+   Шапка стояла в одну строку (nowrap + overflow:hidden), и на узком экране кнопка «🎚 токены»
+   уезжала за правый край — панель настроек (ответ/контекст/температура) была недоступна с
+   телефона вовсе. Разрешаем перенос строки, прячем подпись «запросы к модели», ужимаем счётчик.
+   Таблица токенов (пять колонок) на узком экране ужимается и скроллится вбок. */
+html.mobile-mode .con-bar { flex-wrap: wrap; height: auto; min-height: 40px; padding: 6px 8px; row-gap: 6px; }
+html.mobile-mode .con-bar .con-hint { display: none; }
+html.mobile-mode .con-tokcount { font-size: 10px; padding: 4px 6px; }
+html.mobile-mode .con-tok { overflow-x: auto; }
+html.mobile-mode .con-tok-row { grid-template-columns: minmax(120px, 1fr) 66px 40px 62px 52px; gap: 6px; font-size: 11px; }
+@media (max-width: 760px) {
+  .con-bar { flex-wrap: wrap; height: auto; min-height: 40px; padding: 6px 8px; row-gap: 6px; }
+  .con-bar .con-hint { display: none; }
+  .con-tokcount { font-size: 10px; padding: 4px 6px; }
+  .con-tok { overflow-x: auto; }
+  .con-tok-row { grid-template-columns: minmax(120px, 1fr) 66px 40px 62px 52px; gap: 6px; font-size: 11px; }
+}
+
+/* Замок темы: состояние должно читаться с одного взгляда — заперта (акцент, видно имя темы)
+   или нет (тусклая «🔓 запереть тему»). Раньше подпись не менялась, и было не понять, стоит замок или нет. */
+.tg-topic-row .tg-topic-lock.on { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+
+/* Консоль: кто затеял запрос, теги ушедших блоков и подсветка выбранного куска промта. */
+.con-head .con-who { font-family: var(--mono); font-size: 10px; color: var(--accent); border: 1px solid var(--line);
+  border-radius: 3px; padding: 2px 6px; margin-left: 6px; white-space: nowrap; }
+.con-tags { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0 2px; }
+.con-tags .con-tag { font-family: var(--mono); font-size: 10px; line-height: 1; padding: 4px 7px; cursor: pointer;
+  color: var(--muted); background: var(--inset); border: 1px solid var(--line); border-radius: 3px; }
+.con-tags .con-tag:hover { color: var(--accent); border-color: var(--accent); }
+.con-tags .con-tag.on { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+.con-msg.hi { outline: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+
+/* Консоль: рассуждение модели (свёрнуто по умолчанию) и кнопки перевода на месте. */
+.con-sec .con-think-toggle, .con-sec .con-tr-one { font-family: var(--mono); font-size: 10px; line-height: 1;
+  margin-left: 8px; padding: 3px 6px; cursor: pointer; color: var(--muted);
+  background: var(--inset); border: 1px solid var(--line); border-radius: 3px; }
+.con-sec .con-tr-one:hover, .con-sec .con-think-toggle:hover { color: var(--accent); border-color: var(--accent); }
+.con-sec .con-tr-one.on { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+.con-sec .con-tr-one.busy { opacity: .6; }
+.con-sec .con-tr-one.err { color: #e0776d; border-color: #e0776d; }
+.con-think { white-space: pre-wrap; font-family: var(--mono); font-size: 11px; line-height: 1.5;
+  color: var(--muted); background: var(--inset); border: 1px dashed var(--line); border-radius: 3px;
+  padding: 8px 10px; margin: 4px 0 8px; max-height: 340px; overflow: auto; }
+
+/* «↻ ответить заново» — рядом с ▶ в строке ввода ноды: ответ по уже собранной истории. */
+.tg-test-row .tg-test-again { flex: none; width: auto; padding: 0 9px; }
+
+/* Журнал консоли: записи свёрнуты, разворачиваются кликом по шапке. */
+.con-entry.collapsed .con-detail { display: none; }
+.con-entry .con-head { cursor: pointer; user-select: none; }
+.con-entry .con-caret { flex: none; width: 12px; color: var(--muted); font-size: 10px; }
+.con-entry:not(.collapsed) .con-caret { color: var(--accent); }
+
+/* Кнопки перевода замечания в строке фидбека — компактные, как RU/EN в окне чата. */
+.tg-fb-row .tg-fb-tr { flex: none; width: auto; padding: 0 8px; font-size: 10px; }
+.tg-fb-row .tg-fb-tr.busy { opacity: .6; }
