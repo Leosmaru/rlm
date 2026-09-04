@@ -25,6 +25,7 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import crypto from 'node:crypto';
 import { getTransformersVector } from '../vectors/embedding.js';
 
 export const router = express.Router();
@@ -41,6 +42,99 @@ const embedPassage = (t) => getTransformersVector('passage: ' + String(t || '').
 
 // векторы нормализованы (normalize:true) → косинус == скалярное произведение
 const dot = (a, b) => { let s = 0; const n = Math.min(a.length, b.length); for (let i = 0; i < n; i++) s += a[i] * b[i]; return s; };
+
+// ── КЭШ ВЕКТОРОВ ────────────────────────────────────────────────────────────────
+// Раньше каждый поиск по смыслу считал эмбеддинг ЗАНОВО для каждой записи — на каждый ход, для
+// всех дневников, тем и записей лорбука. Тексты между ходами почти не меняются, поэтому держим
+// вектор рядом с текстом: ключ — хэш текста, так устаревшее просто перестаёт находиться.
+// Два уровня: память процесса (быстро) и файл _vectors.json в папке чата (переживает перезапуск).
+const VEC_MEM = new Map();                 // hash → вектор
+const VEC_MEM_MAX = 6000;                  // потолок: дальше вытесняем самые старые
+const VEC_DISK_MAX = 1200;                 // столько векторов держим в файле чата (≈3 МБ потолок)
+const vecHash = (t) => crypto.createHash('sha1').update('e5|' + String(t)).digest('hex').slice(0, 16);
+const vecFile = (dir) => path.join(dir, '_vectors.json');
+const vecMemPut = (h, v) => {
+    if (VEC_MEM.size >= VEC_MEM_MAX) { const first = VEC_MEM.keys().next().value; VEC_MEM.delete(first); }
+    VEC_MEM.set(h, v);
+};
+function vecDiskLoad(dir) {
+    if (!dir) return null;
+    try {
+        const p = vecFile(dir);
+        if (!fs.existsSync(p)) return {};
+        const j = JSON.parse(fs.readFileSync(p, 'utf-8'));
+        return (j && typeof j === 'object') ? j : {};
+    } catch (_) { return {}; }   // битый кэш — не беда, пересчитается
+}
+function vecDiskSave(dir, store) {
+    if (!dir || !store) return;
+    try {
+        let keys = Object.keys(store);
+        if (keys.length > VEC_DISK_MAX) {                      // обрезаем хвост: свежие ключи в конце
+            const drop = keys.slice(0, keys.length - VEC_DISK_MAX);
+            for (const k of drop) delete store[k];
+        }
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(vecFile(dir), JSON.stringify(store), 'utf-8');
+    } catch (_) { /* кэш — не данные, потеря не страшна */ }
+}
+// Векторы для списка текстов: берём из кэша, считаем только недостающие, файл пишем один раз.
+async function embedMany(dir, texts) {
+    const store = vecDiskLoad(dir);
+    let свежих = 0;
+    const out = [];
+    for (const raw of texts) {
+        const text = String(raw || '');
+        const h = vecHash(text);
+        let v = VEC_MEM.get(h);
+        if (!v && store && store[h]) { v = store[h]; vecMemPut(h, v); }
+        if (!v) {
+            v = await embedPassage(text);
+            vecMemPut(h, v);
+            if (store) { store[h] = Array.from(v).map((x) => +x.toFixed(4)); свежих++; }   // 4 знаков хватает: косинус не дрогнет, файл втрое легче
+        }
+        out.push(v);
+    }
+    if (свежих && dir) vecDiskSave(dir, store);
+    return out;
+}
+
+// ── ЖУРНАЛ ПРАВОК ПАМЯТИ (healing log) ──────────────────────────────────────────
+// Трекеры и темы модель перезаписывает целиком, и что именно она поменяла — не видно.
+// Пишем это САМИ, без модели: сравниваем предложения старой и новой версии.
+const healFile = (dir) => path.join(dir, '_healing.jsonl');
+const предложения = (s) => String(s || '').split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter((x) => x.length > 12);
+function healLog(dir, file, oldText, newText) {
+    try {
+        if (!dir) return;
+        const было = предложения(oldText), стало = предложения(newText);
+        if (!было.length && !стало.length) return;
+        const наборБыло = new Set(было), наборСтало = new Set(стало);
+        const ушло = было.filter((s) => !наборСтало.has(s));
+        const пришло = стало.filter((s) => !наборБыло.has(s));
+        if (!ушло.length && !пришло.length) return;                 // текст не изменился — записи не делаем
+        const короче = (arr) => arr.slice(0, 4).map((s) => s.length > 160 ? s.slice(0, 160) + '…' : s);
+        const rec = { at: new Date().toISOString(), file, removed: короче(ушло), added: короче(пришло),
+            sizes: [String(oldText || '').length, String(newText || '').length] };
+        fs.mkdirSync(dir, { recursive: true });
+        fs.appendFileSync(healFile(dir), JSON.stringify(rec) + '\n', 'utf-8');
+    } catch (_) { /* журнал — вспомогательный, ошибки глушим */ }
+}
+
+// ── ЗАЩИТА ОТ ОГРЫЗКА ───────────────────────────────────────────────────────────
+// Движок памяти перезаписывает трекер/тему целиком. Если модель вернула обрубок (сорвалась,
+// упёрлась в лимит, ответила одной строкой) — прежняя память была бы стёрта насовсем.
+// Такую запись не принимаем: старое остаётся на месте, ответ говорит, почему.
+const MIN_TRACKER = 80;    // короче — почти наверняка обрубок, а не «сцена стала проще»
+const MIN_TOPIC = 50;
+const SHRINK = 0.4;        // усушка больше чем в 2.5 раза — тоже подозрительно
+function слишкомКоротко(oldText, newText, min) {
+    const было = String(oldText || '').trim(), стало = String(newText || '').trim();
+    if (!стало) return 'empty';
+    if (стало.length < min) return 'short';
+    if (было.length >= min * 2 && стало.length < было.length * SHRINK) return 'shrink';
+    return '';
+}
 
 // имя папки чата — как в плагине (буквы/цифры/пробел/подчёрк/дефис), чтобы совпало на диске
 const safeChat = (s) => String(s || '').replace(/[^\p{L}\p{N} _-]/gu, '_').trim();
@@ -118,7 +212,8 @@ router.post('/diary', async (req, res) => {
         }
 
         const qv = await embedQuery(query);
-        for (const e of entries) e.score = dot(qv, await embedPassage(e.text));
+        const vecs = await embedMany(dir, entries.map((e) => e.text));      // кэш: считаем только новые записи
+        entries.forEach((e, i) => { e.score = dot(qv, vecs[i]); });
         entries.sort((a, b) => b.score - a.score);
         const top = entries.filter((e) => e.score >= threshold).slice(0, Math.max(1, k));
         res.json({
@@ -148,7 +243,8 @@ router.post('/topics', async (req, res) => {
         }
 
         const qv = await embedQuery(query);
-        for (const it of items) it.score = dot(qv, await embedPassage(it.text));
+        const tvecs = await embedMany(dir, items.map((x) => x.text));       // кэш тем живёт в папке чата
+        items.forEach((x, i) => { x.score = dot(qv, tvecs[i]); });
         items.sort((a, b) => b.score - a.score);
         const top = items.slice(0, Math.max(1, k));
         res.json({
@@ -168,8 +264,10 @@ router.post('/score', async (req, res) => {
         const { query, texts } = req.body || {};
         if (!query || !String(query).trim() || !Array.isArray(texts) || !texts.length) return res.json({ ok: true, scores: [] });
         const qv = await embedQuery(query);
-        const scores = [];
-        for (const t of texts) scores.push(String(t || '').trim() ? +dot(qv, await embedPassage(t)).toFixed(4) : 0);
+        // Лорбук зовёт это КАЖДЫЙ ход по всем записям — тут кэш экономит больше всего. Папки чата у
+        // запроса нет (тексты приходят снаружи), поэтому кэш только в памяти процесса.
+        const svecs = await embedMany(null, texts.map((x) => String(x || '')));
+        const scores = texts.map((x, i) => (String(x || '').trim() ? +dot(qv, svecs[i]).toFixed(4) : 0));
         res.json({ ok: true, scores });
     } catch (e) { res.status(500).json({ ok: false, error: String(e) }); }
 });
@@ -218,9 +316,13 @@ router.post('/tracker', (req, res) => {
         const { chat, name, text } = req.body || {};
         const dir = chatDir(chat); const fn = trackerFile(name);
         if (!dir || !fn) return res.json({ ok: false, skipped: 'no-chat-or-name' });
-        if (text == null || !String(text).trim()) return res.json({ ok: false, skipped: 'empty' });
+        const file = path.join(dir, fn);
+        const prev = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : '';
+        const беда = слишкомКоротко(prev, text, MIN_TRACKER);
+        if (беда) return res.json({ ok: false, skipped: беда, kept: prev.length, got: String(text || '').trim().length });
         fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(path.join(dir, fn), String(text).trim(), 'utf-8');
+        fs.writeFileSync(file, String(text).trim(), 'utf-8');
+        healLog(dir, fn, prev, String(text).trim());   // что именно поменялось — в журнал, без модели
         res.json({ ok: true, name: fn });
     } catch (e) { res.status(500).json({ ok: false, error: String(e) }); }
 });
@@ -245,9 +347,13 @@ router.post('/topic-save', (req, res) => {
         const td = dir ? path.join(dir, 'topics') : null;
         const fn = safeFile((name || '').endsWith('.md') ? name : `${name}.md`);
         if (!td || !fn) return res.json({ ok: false, skipped: 'bad-name' });
-        if (!text || !String(text).trim()) return res.json({ ok: false, skipped: 'empty' });
+        const tfile = path.join(td, fn);
+        const tprev = fs.existsSync(tfile) ? fs.readFileSync(tfile, 'utf-8') : '';
+        const тбеда = слишкомКоротко(tprev, text, MIN_TOPIC);
+        if (тбеда) return res.json({ ok: false, skipped: тбеда, kept: tprev.length, got: String(text || '').trim().length });
         fs.mkdirSync(td, { recursive: true });
-        fs.writeFileSync(path.join(td, fn), String(text).trim(), 'utf-8');
+        fs.writeFileSync(tfile, String(text).trim(), 'utf-8');
+        healLog(chatDir(chat), 'topics/' + fn, tprev, String(text).trim());
         res.json({ ok: true, name: fn });
     } catch (e) { res.status(500).json({ ok: false, error: String(e) }); }
 });
@@ -265,10 +371,26 @@ router.post('/doc-save', (req, res) => {
         const file = docFilePath(chat, group, name);
         if (!file) return res.json({ ok: false, skipped: 'bad-name' });
         fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, String(text == null ? '' : text).trim(), 'utf-8');
+        const было = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : '';
+        fs.writeFileSync(file, String(text == null ? '' : text).trim(), 'utf-8');   // ручная правка порогом НЕ ограничена: стереть своё — право ведущего
+        healLog(chatDir(chat), path.basename(file), было, String(text == null ? '' : text).trim());
         res.json({ ok: true });
     } catch (e) { res.status(500).json({ ok: false, error: String(e) }); }
 });
+// Журнал правок памяти: последние записи «что ушло / что пришло». Пишется без модели.
+router.post('/healing', (req, res) => {
+    try {
+        const { chat, limit = 40 } = req.body || {};
+        const dir = chatDir(chat);
+        const p = dir ? healFile(dir) : null;
+        if (!p || !fs.existsSync(p)) return res.json({ ok: true, log: [] });
+        const rows = fs.readFileSync(p, 'utf-8').split('\n').filter(Boolean).slice(-Math.max(1, limit));
+        const log = [];
+        for (const r of rows) { try { log.push(JSON.parse(r)); } catch (_) {} }
+        res.json({ ok: true, log: log.reverse() });        // свежие сверху
+    } catch (e) { res.status(500).json({ ok: false, log: [], error: String(e) }); }
+});
+
 // Удалить запись памяти (кнопка ✕ у записи).
 router.post('/doc-del', (req, res) => {
     try {

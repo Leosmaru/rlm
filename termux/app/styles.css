@@ -1872,6 +1872,12 @@ html.mobile-mode .chr-pv-foot .pv-btn { flex: 1 1 44%; padding: 12px 8px; font-s
 .soul-wipe:hover { color: #e5544a; border-color: #e5544a; }
 .soul-refresh:hover { border-color: var(--accent); color: var(--accent); }
 .soul-refresh-note { font-size: 10px; line-height: 1.35; color: var(--muted); }
+/* Журнал правок памяти: что движок убрал (−) и что добавил (+) при перезаписи дока. */
+.heal-rec { margin: 6px 0; padding-left: 6px; border-left: 2px solid var(--corner); }
+.heal-hd { font-size: 10px; letter-spacing: .5px; color: var(--muted); text-transform: uppercase; }
+.heal-out { color: #c98a8a; opacity: .85; }
+.heal-in { color: #8ac9a0; }
+.heal-out, .heal-in { font-size: 11px; line-height: 1.35; margin-top: 2px; word-break: break-word; }
 .soul-add { align-self: start; font-family: var(--mono); font-size: 11px; color: var(--muted); background: var(--inset); border: 1px dashed var(--line); padding: 6px 14px; cursor: pointer; }
 .soul-add:hover { color: var(--text); border-color: var(--corner); }
 /* Режиссёр — мини-приложение движка записей (как Лорбук): та же ширина 540px (от .node-lore). */

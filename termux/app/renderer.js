@@ -3553,6 +3553,14 @@ function buildLorebookNode() {
   });
 }
 
+// Сервер не принял перезапись дока: модель вернула обрубок, прежняя версия осталась на месте.
+// Показываем это словами — иначе «память не обновилась» выглядит как поломка.
+function memKeepNote(soul, name, w) {
+  const причина = (w.skipped === 'shrink')
+    ? ('ответ модели резко короче прежнего (' + w.kept + ' → ' + w.got + ' зн.)')
+    : ((w.skipped === 'short') ? 'ответ модели слишком короткий' : 'ответ модели пуст');
+  try { setNote(soul, '«' + name + '» НЕ перезаписан: ' + причина + ' — прежняя версия сохранена'); } catch (_) {}
+}
 // ── Душа: доки памяти (референс — плагин soul-md) ──
 // Душа = память в MD на конкретный чат. Файлы («доки») трёх видов:
 //   diary   — дневник (Diary_*.md): дописывается по времени, летопись сцены;
@@ -3821,6 +3829,7 @@ function buildSoulNode() {
         <div class="soul-card-note">🪪 Карточка (описание · сценарий · примеры диалогов) подаётся в доки «Psyche» и «Diary» как отправные данные.</div>
         <button class="soul-refresh" type="button">⟳ Обновить память сейчас</button>
         <button class="soul-wipe" type="button" title="Стереть ВСЕ записи памяти этой Души с диска (доки и настройки останутся)">🗑 Очистить записи</button>
+        <button class="soul-heal" type="button" title="Журнал правок памяти: что движок убрал и что добавил в каждый док. Пишется без модели — просто сравнением версий">🩹 Журнал правок</button>
         <button class="soul-add" type="button">＋ добавить док</button>
         <div class="soul-refresh-note"></div>
       </div>
@@ -3845,6 +3854,28 @@ function buildSoulNode() {
     [master, el].forEach((n) => { n._memory = ''; n._memParts = []; n._memoryUsed = []; n._sinceMem = 0; });
     if (typeof soulFillDocRecords === 'function') { await soulFillDocRecords(master); if (el !== master) await soulFillDocRecords(el); }
     if (note) note.textContent = 'Записи стёрты.';
+  });
+  // Журнал правок: показываем последние записи «что ушло / что пришло» прямо в ноте под кнопками.
+  const soulHeal = el.querySelector('.soul-heal');
+  soulHeal.addEventListener('pointerdown', (e) => e.stopPropagation());
+  soulHeal.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const master = el._master || el;
+    const note = el.querySelector('.soul-refresh-note');
+    if (typeof soulRecLoadChats === 'function') await soulRecLoadChats(el);
+    const chat = el._recChat || master._recChat;
+    if (!chat) { if (note) note.textContent = '⚠ не вижу папку памяти — открой чат/партию'; return; }
+    const r = await rlmApi('/api/rlm/soul/healing', { chat, limit: 12 }).catch(() => null);
+    const log = (r && r.log) || [];
+    if (!note) return;
+    if (!log.length) { note.textContent = 'Журнал пуст — память ещё ни разу не переписывалась.'; return; }
+    note.innerHTML = log.map((x) => {
+      const когда = String(x.at || '').replace('T', ' ').slice(5, 16);
+      const стр = [];
+      (x.removed || []).forEach((s) => стр.push('<div class="heal-out">− ' + esc(s) + '</div>'));
+      (x.added || []).forEach((s) => стр.push('<div class="heal-in">+ ' + esc(s) + '</div>'));
+      return '<div class="heal-rec"><div class="heal-hd">' + esc(когда + ' · ' + (x.file || '')) + '</div>' + стр.join('') + '</div>';
+    }).join('');
   });
   el._docs = [];
   SOUL_DOCS.forEach((d) => soulAddDocRow(el, soulNormDoc(d)));
@@ -5250,7 +5281,10 @@ async function updateMemory(chatNode, only) {
         const text = memCleanReply(r);
         if (!text) { setNote(soul, `«${d.name}»: пусто/ошибка — ${(r && r.error) || '—'}`); continue; }
         if (d.kind === 'diary') await rlmApi('/api/rlm/soul/append', { chat, text });
-        else if (d.kind === 'tracker') await rlmApi('/api/rlm/soul/tracker', { chat, name: d.name, text });
+        else if (d.kind === 'tracker') {
+          const w = await rlmApi('/api/rlm/soul/tracker', { chat, name: d.name, text });
+          if (w && w.ok === false && w.skipped) memKeepNote(soul, d.name, w);   // прежняя версия сохранена — говорим почему
+        }
         else {
           let fname = 'topic', body = text; const m = text.match(/^\s*FILE:\s*([^\n]+)\n?/i);
           if (m) { fname = m[1].trim().replace(/\.md$/i, ''); body = text.slice(m[0].length).trim(); }
@@ -5343,7 +5377,8 @@ async function updateMemoryBatch(chatNode, soul, charName, opts) {
   for (const d of docs) {
     const text = (bag[d.name] || []).join(String.fromCharCode(10)).trim();
     if (!text) continue;
-    await rlmApi('/api/rlm/soul/tracker', { chat, name: d.name, text }); wrote++;
+    { const w = await rlmApi('/api/rlm/soul/tracker', { chat, name: d.name, text }); if (w && w.ok === false && w.skipped) memKeepNote(soul, d.name, w); }
+    wrote++;
   }
   if (!wrote && docs.length === 1) {   // модель ответила без заголовков, а док один — это и есть документ
     const text = out;
