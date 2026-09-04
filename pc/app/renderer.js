@@ -609,7 +609,10 @@ const CONSOLE_QUIET = (path) => /^\/api\/rlm\/(store|soul|embed|translate)(\/|$)
 // UI-метки блоков промта (поле `_src` и любые `_`-поля сообщений) — только для «Консоли».
 // В модель уходит чистый {role, content}: перед отправкой снимаем служебные поля (клон, оригинал в логе цел).
 function stripUiFields(body) {
-  if (!body || !Array.isArray(body.messages)) return body;
+  if (!body || typeof body !== 'object') return body;
+  // Текстовый путь шлёт prompt вместо messages — служебные поля (_ctxKey, _ctxNode, _messages для
+  // консоли) всё равно должны остаться дома. Раньше выход был раньше их вычистки, и они уезжали в тело.
+  if (!Array.isArray(body.messages)) { const o = {}; for (const k in body) if (k[0] !== '_') o[k] = body[k]; return o; }
   let dirty = false;
   const messages = body.messages.map((m) => {
     if (!m || typeof m !== 'object') return m;
@@ -619,8 +622,9 @@ function stripUiFields(body) {
     const c = {}; for (const k in m) if (k[0] !== '_') c[k] = m[k];
     return c;
   });
-  const out = dirty ? { ...body, messages } : { ...body };
-  delete out._ctxKey; delete out._ctxNode;   // служебные метки подсистемы — в модель не уходят
+  const out = {};
+  const src = dirty ? { ...body, messages } : body;
+  for (const k in src) if (k[0] !== '_') out[k] = src[k];   // служебные метки подсистемы — в модель не уходят
   return out;
 }
 // Какой контекст режет ЭТОТ запрос. Порядок (ТЗ): вписанное руками в таблице «токены» → «Опции»
@@ -687,7 +691,7 @@ async function rlmApi(path, body) {
   }
   // ТЕМПЕРАТУРА (та же логика, что у контекста): вписанная в таблице у этой строки — главнее всего;
   // если в вызове температуры нет вовсе — берём из «Опций» своей цепочки. Зашитую в коде молча не трогаем.
-  if (path === '/api/rlm/generate' && body && body.params && body._ctxKey) {
+  if ((path === '/api/rlm/generate' || path === '/api/rlm/complete') && body && body.params && body._ctxKey) {
     const tKey = 'temp.' + body._ctxKey;
     if (typeof tempHas === 'function' && tempHas(tKey)) {
       body = { ...body, params: { ...body.params, temperature: tempVal(tKey, body.params.temperature) } };
@@ -6802,13 +6806,22 @@ function directorCompactWorld(wu) {
 async function sendTurn(apiEl, req, mctx) {
   const tpl = (typeof instructForApi === 'function') ? instructForApi(apiEl) : null;
   if (!tpl) return rlmApi('/api/rlm/generate', req);
-  const prompt = buildInstructPrompt(req.messages, tpl, mctx || {});
+  // Контекст режем ДО сборки: после склейки это один сплошной текст, резать в нём уже нечего.
+  // Режется только история (куски без _src) — ровно как на чат-пути, тем же trimToContext.
+  let messages = req.messages || [];
+  if (typeof ctxLimitForRequest === 'function' && typeof trimToContext === 'function') {
+    const lim = ctxLimitForRequest(req._ctxKey, req._ctxNode);
+    if (lim > 0) { const tr = trimToContext(messages, lim); if (tr.dropped) messages = tr.messages; }
+  }
+  const prompt = buildInstructPrompt(messages, tpl, mctx || {});
   const params = Object.assign({}, req.params || {});
   const stops = instructStops(tpl);
   if (stops.length) params.stop = stops;                     // стоп-строки из самой разметки
   delete params.reasoning;                                   // текстовый путь их не понимает
-  const { messages, ...rest } = req;
-  return rlmApi('/api/rlm/complete', Object.assign({}, rest, { prompt, params }));
+  const { messages: _drop, ...rest } = req;
+  // _messages — только для ноды «Консоль»: там промт показывается привычными кусками с тегами
+  // источников, иначе в журнале видна одна простыня без разбивки. В запрос это поле не уходит.
+  return rlmApi('/api/rlm/complete', Object.assign({}, rest, { prompt, params, _messages: messages }));
 }
 // Шаблон разметки этой ноды API: выбранный руками или угаданный по имени модели. null — если
 // режим не текстовый или шаблоны ещё не приехали.
@@ -9142,11 +9155,21 @@ function syncApiLabels() {
 }
 
 // ── Меню «Инструменты» (🔧) в чате: вижны нод, у которых нет своей кнопки внизу (Персонаж/карточка,
-//    Пользователь/персона, Промт комплитер, ноды API — подписаны ролью, Хроника, Озвучка, Транслитер). Клик → вижн ноды в чате. ──
+//    Пользователь/персона, Промт комплитер, ноды API — подписаны ролью, Хроника, Озвучка, Программный DRY —
+//    если подключён, Транслитер). Клик → вижн ноды в чате. ──
 const TOOLS_MENU_SEL = { character: '.node-char', persona: '.node-persona', prompt: '.node-prompt', mprompt: '.node-mprompt', api: '.node-api', chronicle: '.node-chronicle', tts: '.node-tts', state: '.node-state', objective: '.node-objective', note: '.node-note', random: '.node-random', dry: '.node-dry', critic: '.node-critic', translator: '.node-translator', soul: '.node-soul', narrator: '.node-narrator' };
+// «Программный DRY» стоит в меню ТОЛЬКО подключённым: его выход веерный (комплитер и/или разъём
+// Критика), и висящая на холсте неподключённая нода в чате ничего не решает — открывать её оттуда незачем.
+function dryConnected(dryNode) {
+  const out = dryNode && dryNode.querySelector(':scope > .port.out');
+  return !!out && connections.some((c) => c.from === out && c.to);
+}
 function toolsMenuNodes() {
   const out = [];
-  ['character', 'persona', 'prompt', 'mprompt', 'api', 'chronicle', 'tts', 'state', 'objective', 'note', 'random', 'critic', 'translator', 'soul', 'narrator'].forEach((t) => document.querySelectorAll(TOOLS_MENU_SEL[t]).forEach((n) => out.push(n)));
+  const добавить = (тип) => document.querySelectorAll(TOOLS_MENU_SEL[тип]).forEach((n) => out.push(n));
+  ['character', 'persona', 'prompt', 'mprompt', 'api', 'chronicle', 'tts', 'state', 'objective', 'note', 'random'].forEach(добавить);
+  document.querySelectorAll(TOOLS_MENU_SEL.dry).forEach((n) => { if (dryConnected(n)) out.push(n); });
+  ['critic', 'translator', 'soul', 'narrator'].forEach(добавить);
   return out;
 }
 function closeToolsMenu() { document.querySelectorAll('.tools-menu.show').forEach((ov) => ov.classList.remove('show')); }
@@ -9173,7 +9196,7 @@ function openToolsMenu(chatNode, fromImmersive) {
     list.appendChild(rk);
   }
   if (!nodes.length && !list.children.length) {
-    list.innerHTML = '<div class="tools-menu-empty">В сборке нет нод для вижна (Персонаж, Пользователь, Промт комплитер, API, Хроника, Озвучка, Состояние, Критик, Транслитер).</div>';
+    list.innerHTML = '<div class="tools-menu-empty">В сборке нет нод для вижна (Персонаж, Пользователь, Промт комплитер, API, Хроника, Озвучка, Состояние, Программный DRY, Критик, Транслитер).</div>';
   } else {
     nodes.forEach((n) => {
       const icon = ((n.querySelector('.node-head .icon') || {}).textContent) || '•';
@@ -14582,16 +14605,19 @@ function consoleWho(e) {
 function consoleDetailHtml(e) {
   const req = e.req || {};
   let h = '';
-  if (Array.isArray(req.messages)) {
+  // Текстовый путь (инструкт-разметка) шлёт prompt, а куски промта кладёт в _messages — показываем их
+  // так же, как messages чат-пути, иначе в журнале «пусто, модели ничего не ушло».
+  const msgs = Array.isArray(req.messages) ? req.messages : (Array.isArray(req._messages) ? req._messages : null);
+  if (msgs) {
     // Теги того, что реально улетело — как под сообщением в чате. Клик по тегу подсвечивает свой кусок.
     const srcs = [];
-    req.messages.forEach((m) => { const t = m._src || m.role; if (t && srcs.indexOf(t) < 0) srcs.push(t); });
+    msgs.forEach((m) => { const t = m._src || m.role; if (t && srcs.indexOf(t) < 0) srcs.push(t); });
     if (srcs.length) {
       h += '<div class="con-tags">' + srcs.map((t) => '<button class="con-tag" type="button" data-src="' + escapeConsole(t) + '" title="Показать этот кусок промта">' + escapeConsole(t) + '</button>').join('') + '</div>';
     }
     h += '<div class="con-sec">Промт (messages)' + (e._showTr ? ' · перевод (Яндекс)' : '') + '</div>';
     // Перевод запроса на русский (кнопка «🌐 RU» в шапке): показываем русский текст вместо оригинала (тумблер).
-    h += req.messages.map((m, mi) => {
+    h += msgs.map((m, mi) => {
       const txt = (e._showTr && e._tr && e._tr[mi] != null) ? e._tr[mi] : m.content;
       // Подпись блока: имя плашки/подсистемы (_src) крупно + роль тонким тегом; без _src — просто роль (как раньше).
       const label = m._src
@@ -14599,6 +14625,13 @@ function consoleDetailHtml(e) {
         : `<span class="con-src">${escapeConsole(m.role)}</span>`;
       return `<div class="con-msg${m._src ? ' has-src' : ''}" data-role="${escapeConsole(m.role)}" data-src="${escapeConsole(m._src || m.role)}"><span class="con-role">${label}</span><span class="con-mtext">${escapeConsole(txt)}</span></div>`;
     }).join('');
+  }
+  // Итоговая простыня текстового пути: то, что реально ушло модели одним куском вместе со служебными
+  // метками разметки. Свёрнута — она длинная, но по ней сразу видно, что промт не пустой.
+  if (req.prompt) {
+    h += '<div class="con-sec">Промт (текстом, по разметке)</div>';
+    h += '<details class="con-raw"><summary>' + escapeConsole(String(req.prompt).length + ' знаков — развернуть') + '</summary>'
+      + '<div class="con-mtext">' + escapeConsole(String(req.prompt)) + '</div></details>';
   }
   if (req.model) h += `<div class="con-sec">Модель</div><div class="con-kv">${escapeConsole(req.model)}</div>`;
   if (req.params && Object.keys(req.params).length) h += `<div class="con-sec">Параметры</div><div class="con-kv">${escapeConsole(JSON.stringify(req.params))}</div>`;
