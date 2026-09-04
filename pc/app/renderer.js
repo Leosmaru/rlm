@@ -1205,6 +1205,11 @@ function buildOptionsNode() {
     ${corners()}${ports()}
     ${head('⚙', 'Опции')}
     <div class="node-body opts-grid">${cells}</div>
+    <div class="node-body opts-stop">
+      <label class="opt-check" title="Обрывать ответ на заданных строках. В чат-режиме модель и так видит границы реплик, поэтому по умолчанию выключено"><input type="checkbox" class="opt-stop-on"> Стоп-слова</label>
+      <input class="field opt-stop-list" spellcheck="false" placeholder="Leo:, Rura:, \n\n" title="${STOP_HINT}">
+      <div class="opt-stop-desc">${STOP_DESC}</div>
+    </div>
     <div class="node-body opts-reason"><span class="flabel" title="Скрытое размышление модели перед ответом. Для ролеплея обычно «Выкл» (иначе «мысли вместо ответа» и лишние токены). При включении дай запас в «Ответ, ток.»">Размышления</span><span class="opts-reason-mount"></span></div>`;
   const reasonDD = describedDropdown([
     { value: 'off',    label: 'Выкл',      desc: 'Модель не думает скрыто — сразу ответ. Для ролеплея обычно лучше (дёшево, без «мыслей вместо ответа»).' },
@@ -1217,6 +1222,17 @@ function buildOptionsNode() {
   return el;
 }
 
+// «Leo:, Rura:, \n\n» → ["Leo:", "Rura:", "\n\n"]. Пустые куски выкидываем, \n и \t разворачиваем
+// в настоящие символы — иначе стоп-слово на перенос строки не сработает.
+// Подписи к полю стоп-слов — одни и те же в обеих нодах настроек.
+const STOP_HINT = 'Через запятую. \\n — перенос строки. Обычно ставят имя игрока с двоеточием, чтобы модель не писала реплики за него: «Leo:, Rura:, \\n\\n»';
+const STOP_DESC = 'Модель мгновенно замолкает, как только собирается написать одну из этих строк — само стоп-слово в ответ не попадает. Ставь сюда имена игроков с двоеточием («Leo:»), чтобы за них не сочиняли, и «\\n\\n», чтобы не уезжала в следующую сцену.';
+function parseStopList(raw) {
+  return String(raw == null ? '' : raw).split(',')
+    .map((s) => s.trim()).filter(Boolean)
+    .map((s) => s.replace(/\\n/g, '\n').replace(/\\t/g, '\t'))
+    .slice(0, 8);   // у провайдеров лимит на длину списка — больше восьми не шлём
+}
 // Прочитать сэмплеры из ноды «Опции» → объект params в формате OpenAI.
 // Пустые/нечисловые поля пропускаем.
 // seed<0 = «случайно»: шлём НОВОЕ зерно каждый запрос. Иначе некоторые провайдеры/движки (в т.ч.
@@ -1226,6 +1242,13 @@ function buildOptionsNode() {
 // Один helper на всё: «Тест ответа», рантайм Чата и Telegram.
 function readOptionsParams(optsEl) {
   const params = {};
+  // Стоп-слова уходят только при поставленной галочке: пустой список ломает часть провайдеров,
+  // а забытые в поле имена из прошлой игры молча резали бы ответы.
+  const stopOn = (optsEl.querySelector('.opt-stop-on') || {}).checked;
+  if (stopOn) {
+    const list = parseStopList((optsEl.querySelector('.opt-stop-list') || {}).value);
+    if (list.length) params.stop = list;
+  }
   optsEl.querySelectorAll('.prm input[data-key]').forEach((inp) => {
     const key = inp.dataset.key;
     const raw = String(inp.value).trim();
@@ -1286,6 +1309,11 @@ function readLocalParams(localEl) {
     params[LOCAL_KEY_MAP[k] || k] = raw[k];
   }
   if (Number.isFinite(limN) && limN > 0) params.max_tokens = limN;
+  const stopOn = (localEl.querySelector('.ls-stop-on') || {}).checked;
+  if (stopOn) {
+    const list = parseStopList((localEl.querySelector('.ls-stop-list') || {}).value);
+    if (list.length) params.stop = list;
+  }
   return params;
 }
 // Контекст, заданный в «Локал-сэмплерах»: он главнее «Опций» для своей цепочки (нода подключена
@@ -1354,6 +1382,12 @@ function buildLocalNode() {
         <div class="prm" title="Размер всего промта: история режется под этот лимит перед отправкой."><span class="flabel">Контекст, ток.</span>
           <input class="field num ls-lim" spellcheck="false" data-lim="context" value="4096"></div>
         <div class="ls-desc">Сколько модель читает за раз: под этот размер режется история перед отправкой. Ставь не больше, чем даёт твой план на хостинге.</div>
+      </div>
+      <div class="ls-sec">стоп-слова</div>
+      <div class="opts-grid ls-stop">
+        <label class="opt-check" title="Обрывать ответ на заданных строках. В текстовом режиме это почти обязательно: там нет ролей, и модель дописывает за всех подряд"><input type="checkbox" class="ls-stop-on" checked> Стоп-слова</label>
+        <input class="field ls-stop-list" spellcheck="false" value="\\n\\n" title="${STOP_HINT}">
+        <div class="ls-desc">${STOP_DESC} По умолчанию стоит «\n\n» — обрыв на пустой строке, чтобы модель не писала сразу три абзаца и не уезжала дальше по сцене.</div>
       </div>
       <div class="ls-sec">порядок сэмплеров · тащи ⋮⋮</div>
       <div class="ls-list">${orderRows}</div>
@@ -17385,10 +17419,13 @@ function nodeValues(el, type) {
   // key в снимок НЕ кладём: он живёт в rlm.apiKeys по сервисам. Раньше уезжал сюда и оседал
   // в пресетах — перед каждой публикацией его приходилось вычищать руками.
   if (type === 'api') return { provider: el.querySelector('.dd-current').textContent, base: el.querySelector('.f-base').value, model: el.querySelector('.f-model').value, mode: el.dataset.mode || 'chat', label: ((el.querySelector('.node-head .label') || {}).textContent || '').trim() };
-  if (type === 'options') return { values: [...el.querySelectorAll('.prm input')].map((i) => i.value), reason: (el.querySelector('.opt-reason') || {}).value || 'off', label: ((el.querySelector('.node-head .label') || {}).textContent || '').trim() };
+  if (type === 'options') return { values: [...el.querySelectorAll('.prm input')].map((i) => i.value), reason: (el.querySelector('.opt-reason') || {}).value || 'off',
+    stopOn: !!(el.querySelector('.opt-stop-on') || {}).checked, stopList: (el.querySelector('.opt-stop-list') || {}).value || '', label: ((el.querySelector('.node-head .label') || {}).textContent || '').trim() };
   if (type === 'local') return {
     order: [...el.querySelectorAll('.ls-item')].map((it) => it.dataset.id),           // текущий порядок строк
     values: Object.fromEntries([...el.querySelectorAll('[data-key]')].map((i) => [i.dataset.key, i.value])),
+    limits: Object.fromEntries([...el.querySelectorAll('.ls-lim')].map((i) => [i.dataset.lim, i.value])),   // «Ответ» и «Контекст» этой ноды
+    stopOn: !!(el.querySelector('.ls-stop-on') || {}).checked, stopList: (el.querySelector('.ls-stop-list') || {}).value || '',
   };
   if (type === 'sysprompt') return {
     text: trSafeVal(el.querySelector('.ta')),
@@ -17569,6 +17606,8 @@ function applyValues(el, type, d) {
     const ins = [...el.querySelectorAll('.prm input')];
     (d.values || []).forEach((v, i) => { if (ins[i]) ins[i].value = v; });
     const ord = el.querySelector('.opt-reason'); if (ord && d.reason) ord.value = d.reason;
+    const so = el.querySelector('.opt-stop-on'); if (so && d.stopOn != null) so.checked = !!d.stopOn;
+    const sl = el.querySelector('.opt-stop-list'); if (sl && d.stopList != null) sl.value = d.stopList;
     if (d.label) { const l = el.querySelector('.node-head .label'); if (l) l.textContent = d.label; }
   } else if (type === 'local') {
     const list = el.querySelector('.ls-list');
@@ -17578,6 +17617,13 @@ function applyValues(el, type, d) {
     if (d.values) Object.entries(d.values).forEach(([k, v]) => {    // восстановить значения по ключам
       const inp = el.querySelector('[data-key="' + k + '"]'); if (inp) inp.value = v;
     });
+    if (d.limits) Object.entries(d.limits).forEach(([k, v]) => {    // «Ответ» и «Контекст» этой ноды
+      const inp = el.querySelector('.ls-lim[data-lim="' + k + '"]'); if (inp) inp.value = v;
+    });
+    const lso = el.querySelector('.ls-stop-on'); if (lso && d.stopOn != null) lso.checked = !!d.stopOn;
+    // Пустую строку из СТАРОГО снимка (снят до появления поля) не принимаем: она затирала бы
+    // значение по умолчанию, и включённая галочка стоп-слов оставалась без единого слова.
+    const lsl = el.querySelector('.ls-stop-list'); if (lsl && d.stopList) lsl.value = d.stopList;
   } else if (type === 'sysprompt') {
     if (d.text != null) el.querySelector('.ta').value = d.text;
     const mix = el.querySelector('.sys-mix'); if (mix && d.mix) mix.value = d.mix;

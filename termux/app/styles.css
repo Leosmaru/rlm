@@ -2413,6 +2413,15 @@ html.mobile-mode .tb-left, html.mobile-mode .tb-right { flex: none; }
 
 /* Кнопки перевода на текстовых полях (RU — предпросмотр EN→RU обратимо; EN — замена RU→EN) */
 .tr-btns { display: flex; justify-content: flex-end; gap: 4px; margin-top: 3px; }
+/* Стоп-слова: галочка + список. Живут в обеих нодах настроек одинаково. */
+.opts-stop, .ls-stop { display: flex; flex-direction: column; gap: 5px; padding-top: 6px; border-top: 1px solid var(--line); }
+.opt-check { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text); cursor: pointer; }
+.opt-stop-list, .ls-stop-list { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 11px; text-align: left; }
+.opt-stop-desc { font-size: 10px; line-height: 1.4; color: var(--muted); }
+/* выключенная галочка — поле приглушено, но читаемо */
+.opts-stop:has(.opt-stop-on:not(:checked)) .opt-stop-list,
+.ls-stop:has(.ls-stop-on:not(:checked)) .ls-stop-list { opacity: .45; }
+
 /* Подпись под крутилкой: что делает и какие числа осмысленны. Без неё в ноде одни голые цифры. */
 .ls-desc { grid-column: 1 / -1; margin: -2px 0 7px; font-size: 10px; line-height: 1.4; color: var(--muted); }
 .ls-list .ls-desc { margin: 2px 0 8px 22px; }
