@@ -2413,6 +2413,10 @@ html.mobile-mode .tb-left, html.mobile-mode .tb-right { flex: none; }
 
 /* Кнопки перевода на текстовых полях (RU — предпросмотр EN→RU обратимо; EN — замена RU→EN) */
 .tr-btns { display: flex; justify-content: flex-end; gap: 4px; margin-top: 3px; }
+/* Разметка ролей (инструкт-шаблон) — строка в ноде API, видна только в режиме Text. */
+.api-instruct { width: 100%; box-sizing: border-box; font-size: 11px; }
+.api-instruct-desc { font-size: 10px; line-height: 1.4; color: var(--muted); margin: -2px 0 6px; }
+
 /* Стоп-слова: галочка + список. Живут в обеих нодах настроек одинаково. */
 .opts-stop, .ls-stop { display: flex; flex-direction: column; gap: 5px; padding-top: 6px; border-top: 1px solid var(--line); }
 .opt-check { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text); cursor: pointer; }

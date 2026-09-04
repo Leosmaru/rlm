@@ -68,6 +68,7 @@ import { router as rlmCardsRouter } from './endpoints/rlm-cards.js'; // RLM: к�
 import { router as rlmNetRouter } from './endpoints/rlm-net.js'; // RLM: доступ по сети (whitelist) из приложения
 import { router as rlmStoreRouter } from './endpoints/rlm-store.js'; // RLM: общее KV-хранилище (общий конфиг API ПК↔телефон)
 import { router as rlmAppRouter } from './endpoints/rlm-app.js'; // RLM: перезапуск приложения с телефона (сигнал Electron на relaunch)
+import { router as rlmInstructRouter } from './endpoints/rlm-instruct.js'; // RLM: шаблоны инструкт-режима для Text Completion
 import { router as rlmUpdateRouter } from './endpoints/rlm-update.js'; // RLM: обновление сборки с GitHub (табличка «Обновить?» на экране загрузки)
 import { router as usersPublicRouter } from './endpoints/users-public.js';
 import { init as statsInit, onExit as statsOnExit } from './endpoints/stats.js';
@@ -169,6 +170,8 @@ app.use('/api/rlm/app', rlmAppRouter);
 // RLM: обновление сборки с GitHub — тоже ПОСЛЕ whitelist: перезаписывать файлы приложения
 // может только доверенное устройство. В dev-папке маршрут молчит (нет BUILD.txt). См. endpoints/rlm-update.js
 app.use('/api/rlm/update', rlmUpdateRouter);
+// RLM: шаблоны инструкт-режима (разметка ролей для текстового пути). См. endpoints/rlm-instruct.js
+app.use('/api/rlm/instruct', rlmInstructRouter);
 
 // RLM: раздаём сам холст (папку app/) по HTTP с ТОГО ЖЕ origin (порт 8100), чтобы его можно
 // было открыть с телефона в локальной сети: http://<ip-пк>:8100/rlm/

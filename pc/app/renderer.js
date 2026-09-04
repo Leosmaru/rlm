@@ -1031,6 +1031,12 @@ function buildApiNode() {
           <div class="dd-list hidden"></div>
         </div>
       </div>
+      <div class="row api-instruct-row" hidden><span class="flabel" title="Разметка ролей для текстового режима: по ней модель понимает, где системный блок, где ход игрока, а где её собственный ответ. Служебные метки заодно работают как стоп-слова">Разметка</span>
+        <select class="field api-instruct">
+          <option value="">авто (по модели)</option>
+        </select>
+      </div>
+      <div class="api-instruct-desc" hidden>Формат, на котором модель обучалась. «Авто» подбирает по имени модели; если ответы приходят с чужими репликами или служебными метками — выбери формат руками.</div>
       <div class="row"><span class="flabel">Режим</span>
         <div class="mode-tog">
           <button class="mode-btn active" type="button" data-mode="chat" title="Chat Completion — облачный OpenAI-путь (обычные крутилки)">Chat</button>
@@ -1090,11 +1096,33 @@ function buildApiNode() {
   const setStatus = (text, state) => { status.textContent = text; status.dataset.state = state || ''; };
   // Переключатель Chat/Text: подсветить активную кнопку, запомнить режим.
   // skipPersist — при ЗАГРУЗКЕ (восстановление конфига): не писать обратно на сервер то, что только что прочитали.
+  const instrSel = el.querySelector('.api-instruct');
+  const instrRow = el.querySelector('.api-instruct-row');
+  const instrDesc = el.querySelector('.api-instruct-desc');
+  // Список шаблонов приходит с сервера один раз за сессию; выбранное значение переживает перезаход.
+  const fillInstruct = async () => {
+    const tpls = await instructTemplates();
+    if (!instrSel || !tpls.length || instrSel.dataset.filled === '1') return;
+    instrSel.insertAdjacentHTML('beforeend', tpls.map((x) => '<option value="' + esc(x.name) + '">' + esc(x.name) + '</option>').join(''));
+    instrSel.dataset.filled = '1';
+    if (instrSel.dataset.want) { instrSel.value = instrSel.dataset.want; delete instrSel.dataset.want; }
+  };
+  const showInstruct = () => {
+    const text = (el.dataset.mode || 'chat') === 'text';
+    if (instrRow) instrRow.hidden = !text;
+    if (instrDesc) instrDesc.hidden = !text;
+    if (text) fillInstruct();
+  };
+  if (instrSel) {
+    instrSel.addEventListener('pointerdown', (e) => e.stopPropagation());
+    instrSel.addEventListener('change', () => { persist(); if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); });
+  }
   const setMode = (m, skipPersist) => {
     el.dataset.mode = (m === 'text') ? 'text' : 'chat';
     modeBtns.forEach((b) => b.classList.toggle('active', b.dataset.mode === el.dataset.mode));
     if (!skipPersist) persist();
     applyLocalCaps(el);   // пересчитать, какие крутилки доступны в подключённой ноде «Локал-сэмплеры»
+    showInstruct();       // разметка нужна только текстовому пути
   };
   modeBtns.forEach((b) => {
     b.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -1205,11 +1233,6 @@ function buildOptionsNode() {
     ${corners()}${ports()}
     ${head('⚙', 'Опции')}
     <div class="node-body opts-grid">${cells}</div>
-    <div class="node-body opts-stop">
-      <label class="opt-check" title="Обрывать ответ на заданных строках. В чат-режиме модель и так видит границы реплик, поэтому по умолчанию выключено"><input type="checkbox" class="opt-stop-on"> Стоп-слова</label>
-      <input class="field opt-stop-list" spellcheck="false" placeholder="Leo:, Rura:, \n\n" title="${STOP_HINT}">
-      <div class="opt-stop-desc">${STOP_DESC}</div>
-    </div>
     <div class="node-body opts-reason"><span class="flabel" title="Скрытое размышление модели перед ответом. Для ролеплея обычно «Выкл» (иначе «мысли вместо ответа» и лишние токены). При включении дай запас в «Ответ, ток.»">Размышления</span><span class="opts-reason-mount"></span></div>`;
   const reasonDD = describedDropdown([
     { value: 'off',    label: 'Выкл',      desc: 'Модель не думает скрыто — сразу ответ. Для ролеплея обычно лучше (дёшево, без «мыслей вместо ответа»).' },
@@ -1224,14 +1247,104 @@ function buildOptionsNode() {
 
 // «Leo:, Rura:, \n\n» → ["Leo:", "Rura:", "\n\n"]. Пустые куски выкидываем, \n и \t разворачиваем
 // в настоящие символы — иначе стоп-слово на перенос строки не сработает.
-// Подписи к полю стоп-слов — одни и те же в обеих нодах настроек.
-const STOP_HINT = 'Через запятую. \\n — перенос строки. Обычно ставят имя игрока с двоеточием, чтобы модель не писала реплики за него: «Leo:, Rura:, \\n\\n»';
-const STOP_DESC = 'Модель мгновенно замолкает, как только собирается написать одну из этих строк — само стоп-слово в ответ не попадает. Ставь сюда имена игроков с двоеточием («Leo:»), чтобы за них не сочиняли, и «\\n\\n», чтобы не уезжала в следующую сцену.';
 function parseStopList(raw) {
   return String(raw == null ? '' : raw).split(',')
     .map((s) => s.trim()).filter(Boolean)
     .map((s) => s.replace(/\\n/g, '\n').replace(/\\t/g, '\t'))
     .slice(0, 8);   // у провайдеров лимит на длину списка — больше восьми не шлём
+}
+// ── ИНСТРУКТ-ШАБЛОНЫ (текстовый режим) ─────────────────────────────────────────────
+// В чат-формате разметку ролей накладывает провайдер, поэтому там всё чисто. В текстовом модель
+// получает СПЛОШНОЙ текст и не знает, где чья очередь: дописывает за игрока и вываливает служебные
+// куски промта. Лечится так же, как в SillyTavern — промт собирается по шаблону той разметки, на
+// которой модель обучалась (ChatML, Llama 3, Mistral, Alpaca…). Шаблоны лежат в форке и приезжают
+// с сервера (endpoints/rlm-instruct.js), своих копий не держим.
+let _instructTpls = null;                 // [{name, input_sequence, …}] — тянем один раз за сессию
+async function instructTemplates() {
+  if (_instructTpls) return _instructTpls;
+  try {
+    const r = await rlmApi('/api/rlm/instruct/list', {});
+    _instructTpls = (r && r.ok && Array.isArray(r.templates)) ? r.templates : [];
+  } catch (_) { _instructTpls = []; }
+  return _instructTpls;
+}
+function instructByName(name) {
+  const n = String(name || '').trim();
+  if (!n || !_instructTpls) return null;
+  return _instructTpls.find((x) => x.name === n) || null;
+}
+// Угадать шаблон по имени модели: у файлов ST есть activation_regex, но в поставке он почти везде
+// пустой, поэтому добираем таблицей «что в имени модели → какой формат». Ошибиться не страшно:
+// выбор всегда можно сменить руками, а угадывание работает только когда своё не выбрано.
+const INSTRUCT_GUESS = [
+  [/llama[-\s]?4/i, 'Llama 4 Instruct'],
+  [/llama[-\s]?3/i, 'Llama 3 Instruct'],
+  [/llama[-\s]?2/i, 'Llama 2 Chat'],
+  [/mistral|mixtral|magnum|nemo/i, 'Mistral V7-Tekken'],
+  [/gemma/i, 'Gemma 2'],
+  [/command[-\s]?r/i, 'Command R'],
+  [/deepseek/i, 'DeepSeek-V2.5'],
+  [/glm/i, 'GLM-4'],
+  [/phi/i, 'Phi'],
+  [/vicuna/i, 'Vicuna 1.1'],
+  [/alpaca/i, 'Alpaca'],
+  [/qwen|rpr|rpmax|mimo|yi|hermes|chatml/i, 'ChatML'],
+];
+function instructGuess(model) {
+  const m = String(model || '');
+  if (!m || !_instructTpls || !_instructTpls.length) return null;
+  for (const tpl of _instructTpls) {                      // сперва честный activation_regex, если он есть
+    const rx = String(tpl.activation_regex || '').trim();
+    if (!rx) continue;
+    try { if (new RegExp(rx, 'i').test(m)) return tpl; } catch (_) { /* кривой regex в шаблоне */ }
+  }
+  for (const [rx, name] of INSTRUCT_GUESS) {
+    if (rx.test(m)) { const t = instructByName(name); if (t) return t; }
+  }
+  return instructByName('ChatML');                        // самый распространённый формат современных файнтюнов
+}
+// Стоп-последовательности берём ИЗ ШАБЛОНА: как только модель начинает писать метку чужой реплики,
+// генерация обрывается. Именно это в ST заменяет ручные стоп-слова.
+function instructStops(tpl) {
+  if (!tpl) return [];
+  const out = [];
+  const add = (s) => { const v = String(s || '').trim(); if (v && !out.includes(v)) out.push(v); };
+  add(tpl.stop_sequence);
+  if (tpl.sequences_as_stop_strings !== false) {
+    add(tpl.input_sequence); add(tpl.system_sequence);
+    add(tpl.first_input_sequence); add(tpl.last_input_sequence);
+  }
+  return out.slice(0, 8);
+}
+// Сборка простыни: каждое сообщение — своим блоком разметки, в конце открываем ход персонажа,
+// чтобы модель продолжила именно за него.
+function buildInstructPrompt(messages, tpl, mctx) {
+  const t = tpl || {};
+  const имена = String(t.names_behavior || '') === 'force';
+  const charName = (mctx && mctx.char) || '';
+  const userName = (mctx && mctx.user) || '';
+  // В группе и сетевой игре реплика ПРИХОДИТ уже подписанной («Кайра: …») — там говорящих много и
+  // подпись ставит сам чат. Второй раз имя не лепим, иначе выходит «Эрика: Кайра: …».
+  const ужеПодписано = (s) => /^[^\n:]{1,32}:\s/.test(String(s || ""));
+  const кусок = (нач, тело, кон, имя) => {
+    const голова = String(нач || '');
+    const хвост = String(кон || '');
+    const текст = (имена && имя && !ужеПодписано(тело)) ? (имя + ': ' + тело) : тело;
+    return (голова ? голова + (t.wrap === false ? '' : '\n') : '') + текст + (хвост || '\n');
+  };
+  let out = '';
+  for (const m of (messages || [])) {
+    const тело = String((m && m.content) || '').trim();
+    if (!тело) continue;
+    if (m.role === 'system') out += кусок(t.system_sequence, тело, t.system_suffix, '');
+    else if (m.role === 'assistant') out += кусок(t.output_sequence, тело, t.output_suffix, charName);
+    else out += кусок(t.input_sequence, тело, t.input_suffix, userName);
+  }
+  // открываем очередь персонажа: последняя метка без текста — дальше пишет модель
+  const последняя = String(t.last_output_sequence || t.output_sequence || '');
+  out += последняя ? (последняя + (t.wrap === false ? '' : '\n')) : '';
+  if (имена && charName) out += charName + ':';
+  return out;
 }
 // Прочитать сэмплеры из ноды «Опции» → объект params в формате OpenAI.
 // Пустые/нечисловые поля пропускаем.
@@ -1242,13 +1355,6 @@ function parseStopList(raw) {
 // Один helper на всё: «Тест ответа», рантайм Чата и Telegram.
 function readOptionsParams(optsEl) {
   const params = {};
-  // Стоп-слова уходят только при поставленной галочке: пустой список ломает часть провайдеров,
-  // а забытые в поле имена из прошлой игры молча резали бы ответы.
-  const stopOn = (optsEl.querySelector('.opt-stop-on') || {}).checked;
-  if (stopOn) {
-    const list = parseStopList((optsEl.querySelector('.opt-stop-list') || {}).value);
-    if (list.length) params.stop = list;
-  }
   optsEl.querySelectorAll('.prm input[data-key]').forEach((inp) => {
     const key = inp.dataset.key;
     const raw = String(inp.value).trim();
@@ -1309,11 +1415,6 @@ function readLocalParams(localEl) {
     params[LOCAL_KEY_MAP[k] || k] = raw[k];
   }
   if (Number.isFinite(limN) && limN > 0) params.max_tokens = limN;
-  const stopOn = (localEl.querySelector('.ls-stop-on') || {}).checked;
-  if (stopOn) {
-    const list = parseStopList((localEl.querySelector('.ls-stop-list') || {}).value);
-    if (list.length) params.stop = list;
-  }
   return params;
 }
 // Контекст, заданный в «Локал-сэмплерах»: он главнее «Опций» для своей цепочки (нода подключена
@@ -1383,11 +1484,6 @@ function buildLocalNode() {
           <input class="field num ls-lim" spellcheck="false" data-lim="context" value="4096"></div>
         <div class="ls-desc">Сколько модель читает за раз: под этот размер режется история перед отправкой. Ставь не больше, чем даёт твой план на хостинге.</div>
       </div>
-      <div class="ls-sec">стоп-слова</div>
-      <div class="opts-grid ls-stop">
-        <label class="opt-check" title="Обрывать ответ на заданных строках. В текстовом режиме это почти обязательно: там нет ролей, и модель дописывает за всех подряд"><input type="checkbox" class="ls-stop-on" checked> Стоп-слова</label>
-        <input class="field ls-stop-list" spellcheck="false" value="\\n\\n" title="${STOP_HINT}">
-        <div class="ls-desc">${STOP_DESC} По умолчанию стоит «\n\n» — обрыв на пустой строке, чтобы модель не писала сразу три абзаца и не уезжала дальше по сцене.</div>
       </div>
       <div class="ls-sec">порядок сэмплеров · тащи ⋮⋮</div>
       <div class="ls-list">${orderRows}</div>
@@ -6700,6 +6796,29 @@ function directorCompactWorld(wu) {
 // Креды API: поля ноды — главное, чего в них нет — берём из ОБЩЕГО ключа `rlm.apiConfig` (одно соединение на все
 // устройства). Снимок графа мог доехать с пустыми полями (старое сохранение, обрыв) — раньше это давало
 // «впиши Base URL и модель», хотя настройки на сервере есть.
+// ОДИН ХОД. Чат-формат — как было; текстовый — только когда у ноды API стоит режим Text и подобран
+// шаблон разметки. Там мы сами склеиваем простыню по шаблону и добавляем его же метки как стоп-строки,
+// иначе модель дописывает за игрока и вываливает служебные куски промта.
+async function sendTurn(apiEl, req, mctx) {
+  const tpl = (typeof instructForApi === 'function') ? instructForApi(apiEl) : null;
+  if (!tpl) return rlmApi('/api/rlm/generate', req);
+  const prompt = buildInstructPrompt(req.messages, tpl, mctx || {});
+  const params = Object.assign({}, req.params || {});
+  const stops = instructStops(tpl);
+  if (stops.length) params.stop = stops;                     // стоп-строки из самой разметки
+  delete params.reasoning;                                   // текстовый путь их не понимает
+  const { messages, ...rest } = req;
+  return rlmApi('/api/rlm/complete', Object.assign({}, rest, { prompt, params }));
+}
+// Шаблон разметки этой ноды API: выбранный руками или угаданный по имени модели. null — если
+// режим не текстовый или шаблоны ещё не приехали.
+function instructForApi(apiEl) {
+  if (!apiEl || (apiEl.dataset.mode || 'chat') !== 'text') return null;
+  const имя = ((apiEl.querySelector('.api-instruct') || {}).value || '').trim();
+  if (имя) return instructByName(имя);
+  const model = ((apiEl.querySelector('.f-model') || {}).value || '').trim();
+  return instructGuess(model);
+}
 function apiCreds(apiEl) {
   const cfg = (typeof lsGet === 'function') ? (lsGet('rlm.apiConfig', null) || {}) : {};
   const f = (sel) => ((apiEl.querySelector(sel) || {}).value || '').trim();
@@ -8885,12 +9004,31 @@ function closeChatVision() {
 // значениями мастера. Правки вида записываются в мастер при закрытии (вид закрыт оверлеем — мастер в это
 // время не редактируют параллельно). Типы: API / Промт комплитер / Хроника / Озвучка. fromImmersive — над `#immersive`.
 const NODE_VISION_BUILD = { sysprompt: buildSysPromptNode, embedder: buildEmbedderNode, api: buildApiNode, prompt: buildPromptNode, mprompt: buildMpromptNode, chronicle: buildChronicleNode, tts: buildTtsNode, options: buildOptionsNode, local: buildLocalNode, state: buildStateNode, objective: buildObjectiveNode, note: buildNoteNode, random: buildRandomNode, dry: buildDryNode, character: buildCharacterNode, persona: buildPersonaNode, critic: buildCriticNode, translator: buildTranslatorNode };
+// Перенести в копию состояние «поле погашено»: значения applyValues копирует, а disabled и класс
+// строки — нет. Без этого разворот показывал активными крутилки, которые на самом деле выключены
+// гейтом режима (в Chat вся нода «Локал-сэмплеры» не работает).
+function copyDisabledState(master, view) {
+  try {
+    const поля = [...master.querySelectorAll('input, textarea, select')];
+    const копии = [...view.querySelectorAll('input, textarea, select')];
+    if (поля.length !== копии.length) return;                  // разметка разошлась — молча выходим
+    поля.forEach((src, i) => {
+      const dst = копии[i];
+      if (!dst) return;
+      dst.disabled = src.disabled;
+      const строкаSrc = src.closest('.ls-item') || src.closest('.prm');
+      const строкаDst = dst.closest('.ls-item') || dst.closest('.prm');
+      if (строкаSrc && строкаDst) строкаDst.classList.toggle('ls-off', строкаSrc.classList.contains('ls-off'));
+    });
+  } catch (_) { /* вижн не должен падать из-за косметики */ }
+}
 function buildNodeVision(master, type) {
   const build = NODE_VISION_BUILD[type];
   if (!build) return null;
   const view = build();
   applyValues(view, type, nodeValues(master, type));           // текущее состояние мастера → в вид (тот же круг, что при загрузке графа)
   if (typeof instrumentTranslateFields === 'function') instrumentTranslateFields(view);   // RU/EN на полях, как у ноды
+  copyDisabledState(master, view);                             // перенести «погашено» (гейт режима Chat/Text)
   view.classList.add('lore-fs-node', 'nvis');                  // во весь слот (скрыть шапку/порты); `nvis` = скролл тела в вижне
   // В чат-контейнере реальный клик по полю иногда НЕ ставит курсор (фокус перехватывается) — форсим фокус
   // по нажатию на любое поле ввода. Вид не меняется; программный focus работает (проверено), клик — нет.
@@ -12394,7 +12532,7 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
     // температура. Промт тот же, что у хода. Пусто в таблице — работает как обычный ответ чата.
     const kk = (directive && !opts.fromCritic) ? 'chat.rewrite' : 'chat.reply';   // критик — обычный ход
     const pp = (directive && tokHas('chat.rewrite')) ? Object.assign({}, params, { max_tokens: tokVal('chat.rewrite', 512) }) : params;   // не вписано своё — лимит как у обычного хода
-    const rr = await rlmApi('/api/rlm/generate', { _ctxKey: kk, base, key, model, messages: msgs, params: pp });
+    const rr = await sendTurn(apiEl, { _ctxKey: kk, base, key, model, messages: msgs, params: pp }, mctx);
     let t = (rr && rr.ok) ? (rr.text || '(пустой ответ)') : ('⚠ ' + ((rr && rr.error) || 'ошибка'));
     if (rr && rr.ok && prefill) { const pf = String(prefill).trim(); const ot = t.replace(/^\s+/, ''); if (pf && ot.startsWith(pf)) t = ot.slice(pf.length).replace(/^\s+/, ''); }   // префилл — только запуск, вырезаем из ответа
     return { rr, t };
@@ -16287,7 +16425,7 @@ async function generateReply(node, opts) {
   // _saveTo: сервер САМ положит ответ в лог этого чата, как только модель ответит. Нужно для телефона:
   // вкладка засыпает, запрос обрывается — раньше ответ пропадал, и в истории оставался плейсхолдер «…».
   const saveTo = (node && node._chatId) ? { key: chatlogKeyOf(node._chatId) } : null;
-  const r = await rlmApi('/api/rlm/generate', { _ctxKey: tokKey, _ctxNode: node, _saveTo: saveTo, base, key, model, messages, params });   // перекат по фидбеку идёт под своим ключом chat.rewrite
+  const r = await sendTurn(apiEl, { _ctxKey: tokKey, _ctxNode: node, _saveTo: saveTo, base, key, model, messages, params }, mctx);   // перекат по фидбеку идёт под своим ключом chat.rewrite
   if (node._procAbort) { node._procCancel = null; node._msgs.splice(idx, 1); renderChatLogs(node); return; }   // ✕ нажали: выкинуть плейсхолдер и результат
   const grp = (typeof isGroupChat === 'function' && isGroupChat(node));
   // Группа: пустой ответ модели (частый огрех окончания массива) — НЕ засоряем историю «(пустой ответ)»:
@@ -17418,14 +17556,19 @@ function findPort(nodeEl, key) {
 function nodeValues(el, type) {
   // key в снимок НЕ кладём: он живёт в rlm.apiKeys по сервисам. Раньше уезжал сюда и оседал
   // в пресетах — перед каждой публикацией его приходилось вычищать руками.
-  if (type === 'api') return { provider: el.querySelector('.dd-current').textContent, base: el.querySelector('.f-base').value, model: el.querySelector('.f-model').value, mode: el.dataset.mode || 'chat', label: ((el.querySelector('.node-head .label') || {}).textContent || '').trim() };
-  if (type === 'options') return { values: [...el.querySelectorAll('.prm input')].map((i) => i.value), reason: (el.querySelector('.opt-reason') || {}).value || 'off',
-    stopOn: !!(el.querySelector('.opt-stop-on') || {}).checked, stopList: (el.querySelector('.opt-stop-list') || {}).value || '', label: ((el.querySelector('.node-head .label') || {}).textContent || '').trim() };
+  if (type === 'api') return {
+    provider: el.querySelector('.dd-current').textContent,
+    base: el.querySelector('.f-base').value,
+    model: el.querySelector('.f-model').value,
+    instruct: (el.querySelector('.api-instruct') || {}).value || '',   // разметка ролей для текстового режима
+    mode: el.dataset.mode || 'chat',
+    label: ((el.querySelector('.node-head .label') || {}).textContent || '').trim(),
+  };
+  if (type === 'options') return { values: [...el.querySelectorAll('.prm input')].map((i) => i.value), reason: (el.querySelector('.opt-reason') || {}).value || 'off', label: ((el.querySelector('.node-head .label') || {}).textContent || '').trim() };
   if (type === 'local') return {
     order: [...el.querySelectorAll('.ls-item')].map((it) => it.dataset.id),           // текущий порядок строк
     values: Object.fromEntries([...el.querySelectorAll('[data-key]')].map((i) => [i.dataset.key, i.value])),
     limits: Object.fromEntries([...el.querySelectorAll('.ls-lim')].map((i) => [i.dataset.lim, i.value])),   // «Ответ» и «Контекст» этой ноды
-    stopOn: !!(el.querySelector('.ls-stop-on') || {}).checked, stopList: (el.querySelector('.ls-stop-list') || {}).value || '',
   };
   if (type === 'sysprompt') return {
     text: trSafeVal(el.querySelector('.ta')),
@@ -17601,13 +17744,25 @@ function applyValues(el, type, d) {
     el.querySelector('.f-key').value = apiKeyFor(d.provider || (el.querySelector('.dd-current') || {}).textContent) || d.key || '';   // ключ СЕРВИСА главнее снимка: старые снимки несут ключ, записанный при общей настройке (у ноды ArliAI мог лежать ключ OpenRouter)
     if (d.model != null) el.querySelector('.f-model').value = d.model;
     if (d.mode) { el.dataset.mode = d.mode; el.querySelectorAll('.mode-btn').forEach((b) => b.classList.toggle('active', b.dataset.mode === d.mode)); }
+    const ins = el.querySelector('.api-instruct');
+    if (ins && d.instruct) { if (ins.dataset.filled === '1') ins.value = d.instruct; else ins.dataset.want = d.instruct; }   // список мог ещё не приехать
+    const insRow = el.querySelector('.api-instruct-row'), insDesc = el.querySelector('.api-instruct-desc');
+    const текст = (d.mode || el.dataset.mode) === 'text';
+    if (insRow) insRow.hidden = !текст;
+    if (insDesc) insDesc.hidden = !текст;
+    if (текст && typeof instructTemplates === 'function') instructTemplates().then(() => {
+      const s = el.querySelector('.api-instruct');
+      if (!s || s.dataset.filled === '1') return;
+      const tpls = _instructTpls || [];
+      s.insertAdjacentHTML('beforeend', tpls.map((x) => '<option value="' + esc(x.name) + '">' + esc(x.name) + '</option>').join(''));
+      s.dataset.filled = '1';
+      if (d.instruct) s.value = d.instruct;
+    });
     if (d.label) { const l = el.querySelector('.node-head .label'); if (l) l.textContent = d.label; }
   } else if (type === 'options') {
     const ins = [...el.querySelectorAll('.prm input')];
     (d.values || []).forEach((v, i) => { if (ins[i]) ins[i].value = v; });
     const ord = el.querySelector('.opt-reason'); if (ord && d.reason) ord.value = d.reason;
-    const so = el.querySelector('.opt-stop-on'); if (so && d.stopOn != null) so.checked = !!d.stopOn;
-    const sl = el.querySelector('.opt-stop-list'); if (sl && d.stopList != null) sl.value = d.stopList;
     if (d.label) { const l = el.querySelector('.node-head .label'); if (l) l.textContent = d.label; }
   } else if (type === 'local') {
     const list = el.querySelector('.ls-list');
@@ -17621,9 +17776,6 @@ function applyValues(el, type, d) {
       const inp = el.querySelector('.ls-lim[data-lim="' + k + '"]'); if (inp) inp.value = v;
     });
     const lso = el.querySelector('.ls-stop-on'); if (lso && d.stopOn != null) lso.checked = !!d.stopOn;
-    // Пустую строку из СТАРОГО снимка (снят до появления поля) не принимаем: она затирала бы
-    // значение по умолчанию, и включённая галочка стоп-слов оставалась без единого слова.
-    const lsl = el.querySelector('.ls-stop-list'); if (lsl && d.stopList) lsl.value = d.stopList;
   } else if (type === 'sysprompt') {
     if (d.text != null) el.querySelector('.ta').value = d.text;
     const mix = el.querySelector('.sys-mix'); if (mix && d.mix) mix.value = d.mix;
