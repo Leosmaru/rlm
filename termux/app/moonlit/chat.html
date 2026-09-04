@@ -480,7 +480,9 @@
       if (m.criticReview) return isLast ? '<div class="mes-review interactable" data-review="1">⚖ Апрув редактора ▸</div>' : '';
       if (!m.critic) return '';
       const c = m.critic;
-      if (c.ok) return '<div class="mes-critic crit-ok interactable" data-approve="1">⚖ Критик: апрув ✓ ▸</div>';   // клик → почему одобрил + фидбек
+      // Клик по апруву открывает окно с фидбеком → доступен только у ПОСЛЕДНЕГО ответа; в истории это просто метка.
+      if (c.ok) return isLast ? '<div class="mes-critic crit-ok interactable" data-approve="1">⚖ Критик: апрув ✓ ▸</div>'
+        : '<div class="mes-critic crit-ok">⚖ Критик: апрув ✓</div>';
       return '<div class="mes-critic crit-bad">' + esc('⚖ Критик переписал: ' + (c.reason || 'не в характере')) + '</div>';
     }
     // Блок «Состояние» ПОД сообщением (вместо плавающей панели): значения на этот ход + причины изменений.
@@ -586,7 +588,8 @@
         // Весь ряд — иконки FontAwesome (единый шрифт → одинаковый размер и базовая линия; без эмодзи, что разъезжались)
         // ↻ — только на ПОСЛЕДНЕМ ответе ИИ (как в ST: перегенерируется последняя реплика)
         + ((!isUser && i === currentMsgs.length - 1) ? '<div class="mes_button mes-regen fa-solid fa-rotate-right interactable" title="Перегенерировать этот ответ" data-regen="1"></div>' : '')
-        + (!isUser ? '<div class="mes_button mes-fb fa-solid fa-comment-dots interactable" title="Фидбек: переписать этот ответ по замечанию" data-fb="' + i + '"></div>' : '')
+        // 💬 Фидбек — тоже только на ПОСЛЕДНЕМ ответе: правка середины чата сносила бы всё, что идёт после
+        + ((!isUser && i === currentMsgs.length - 1) ? '<div class="mes_button mes-fb fa-solid fa-comment-dots interactable" title="Фидбек: переписать этот ответ по замечанию" data-fb="' + i + '"></div>' : '')
         + '<div class="mes_button fa-solid fa-language mes-tr' + (m._showTr ? ' on' : '') + ' interactable" title="Перевести EN→RU (повторно — оригинал)" data-translate="' + i + '"></div>'
         + '<div class="mes_button mes-tts fa-solid fa-volume-high interactable" title="Озвучить (нода «Озвучка»)" data-tts="' + i + '"></div>'
         + '<div class="mes_button fa-solid fa-pencil interactable" title="Редактировать" data-edit="' + i + '"></div>'

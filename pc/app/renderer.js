@@ -8008,6 +8008,17 @@ async function criticJudge(node, critic, opts) {
   } catch (e) { chatToast(node, 'критик: ' + String((e && e.message) || e), 'err'); node._procCancel = null; chatProc(node, 'idle'); }
   finally { criticBusy = false; criticCheckPlate(node, false); }   // убрать плашку в любом исходе
 }
+// Правила из блокнота критика — блоком для того, кто переписывает реплику по фидбеку. Берём последние 8,
+// как и сам критик при проверке: блокнот растёт до 20, но в один запрос всё не тащим.
+function criticLessonsBlock(chatEl) {
+  try {
+    const critic = (typeof criticNodeForChat === 'function') ? criticNodeForChat(chatEl) : null;
+    const L = (critic && critic._lessons ? critic._lessons : []).map((s) => String(s || '').trim()).filter(Boolean).slice(-8);
+    if (!L.length) return '';
+    return '\n\nSTANDING NOTES — rules established from earlier corrections in this chat. They are still in force: '
+      + 'satisfy the note above WITHOUT breaking any of them.\n' + L.map((s) => '— ' + s).join('\n');
+  } catch (_) { return ''; }
+}
 // Критик учится на РУЧНОМ фидбеке пользователя: формулирует обобщённый урок и решает, писать ли в блокнот.
 // Отдельный маленький звонок ПОСЛЕ переписи. Нет ноды «Критик» → некуда писать, тихо выходим.
 async function criticLearnFromFeedback(node, feedback, oldReply, newReply) {
@@ -8016,13 +8027,16 @@ async function criticLearnFromFeedback(node, feedback, oldReply, newReply) {
   const api = chatApi(node);
   if (!api) return;
   const mctx = chatNames(node);
-  const sys = 'You keep the notebook of a roleplay critic for the character ' + (mctx.char || 'the character') + '. The user just manually corrected a reply. From the user complaint, formulate ONE short GENERAL rule to remember so the mistake does not recur — it may be about THIS CHARACTER specifically OR about roleplay conduct in general (narration, pacing, tone, honesty, anti-sycophancy, how scenes are handled) — or NONE if it is a one-off not worth remembering. Reply with exactly one line: LESSON: <rule or NONE>';
+  const sys = 'You keep the notebook of a roleplay critic for the character ' + (mctx.char || 'the character') + '. The user just manually corrected a reply. From the user complaint, formulate ONE short GENERAL rule to remember so the mistake does not recur — it may be about THIS CHARACTER specifically OR about roleplay conduct in general (narration, pacing, tone, honesty, anti-sycophancy, how scenes are handled). The user has ALREADY decided this correction is worth remembering — do NOT judge whether it matters and never answer NONE; your only job is to word it. Reply with exactly one line: LESSON: <rule>';
   const usr = 'User complaint: "' + String(feedback || '').trim() + '"\nRejected reply: "' + String(oldReply || '').trim() + '"\nRewritten reply: "' + String(newReply || '').trim() + '"';
   chatProc(node, 'pulse', 'Критик учится на фидбеке', { cancelable: false });
   try {
     const r = await rlmApi('/api/rlm/generate', { _ctxKey: 'critic.lesson', base: api.base, key: api.key, model: api.model, messages: [{ role: 'system', content: sys }, { role: 'user', content: substituteMacros(usr, mctx) }], params: { max_tokens: tokVal('critic.lesson', 400), temperature: 0.3, reasoning: { enabled: false } } });
     if (!(r && r.ok)) return;
-    const v = criticParse(criticCleanOutput(r));   // берём только v.lesson (NONE → пусто); чистый ответ без «мыслей»
+    const v = criticParse(criticCleanOutput(r));   // чистый ответ без «мыслей»
+    // Кнопку нажал пользователь — значит правило должно появиться. Модель ослушалась и ответила NONE?
+    // Пишем его замечание как есть: сырая формулировка лучше, чем молча потерянное решение.
+    if (!v.lesson) v.lesson = String(feedback || '').trim().slice(0, 300);
     if (v.lesson) {
       critic._lessons = critic._lessons || [];
       if (critic._lessons[critic._lessons.length - 1] !== v.lesson) {
@@ -8043,13 +8057,16 @@ async function criticLearnFromApproval(node, feedback, replyText, criticReason) 
   if (!api) return;
   if (!String(feedback || '').trim()) return;
   const mctx = chatNames(node);
-  const sys = 'You keep the notebook of a roleplay critic for the character ' + (mctx.char || 'the character') + '. The critic APPROVED a reply, but the user disagrees and says what the critic missed. Formulate ONE short GENERAL rule so the critic catches this next time — it may be about THIS CHARACTER specifically OR about roleplay conduct in general (narration, pacing, tone, honesty, anti-sycophancy, how scenes are handled) — or NONE if not worth remembering. Reply with exactly one line: LESSON: <rule or NONE>';
+  const sys = 'You keep the notebook of a roleplay critic for the character ' + (mctx.char || 'the character') + '. The critic APPROVED a reply, but the user disagrees and says what the critic missed. Formulate ONE short GENERAL rule so the critic catches this next time — it may be about THIS CHARACTER specifically OR about roleplay conduct in general (narration, pacing, tone, honesty, anti-sycophancy, how scenes are handled). The user has ALREADY decided this correction is worth remembering — do NOT judge whether it matters and never answer NONE; your only job is to word it. Reply with exactly one line: LESSON: <rule>';
   const usr = 'Approved reply: "' + String(replyText || '').trim() + '"\nCritic said (why approved): "' + String(criticReason || '').trim() + '"\nUser objection: "' + String(feedback).trim() + '"';
   chatProc(node, 'pulse', 'Критик учится на фидбеке', { cancelable: false });
   try {
     const r = await rlmApi('/api/rlm/generate', { _ctxKey: 'critic.lesson', base: api.base, key: api.key, model: api.model, messages: [{ role: 'system', content: sys }, { role: 'user', content: substituteMacros(usr, mctx) }], params: { max_tokens: tokVal('critic.lesson', 400), temperature: 0.3, reasoning: { enabled: false } } });
     if (!(r && r.ok)) { chatToast(node, 'критик: ошибка модели', 'err'); return; }
     const v = criticParse(criticCleanOutput(r));
+    // Кнопку нажал пользователь — значит правило должно появиться. Модель ослушалась и ответила NONE?
+    // Пишем его замечание как есть: сырая формулировка лучше, чем молча потерянное решение.
+    if (!v.lesson) v.lesson = String(feedback || '').trim().slice(0, 300);
     if (v.lesson) {
       critic._lessons = critic._lessons || [];
       if (critic._lessons[critic._lessons.length - 1] !== v.lesson) {
@@ -12548,7 +12565,8 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
       const body = opts.softEdit
         ? ('Fix ONLY this in the reply: ' + substituteMacros(String(directive).trim(), mctx) + '\n\nThis is a SURGICAL edit, not a rewrite. Return the SAME reply with the minimum change needed to satisfy the note: keep every other sentence word for word, keep the same events, the same outcome, the same order of beats, the same tone, style and length. Do NOT re-style, expand, shorten or "improve" anything the note does not touch. Stay in character and true to the character sheet. Output only the corrected in-character reply.')
         : ('The rejected reply fails on this: ' + substituteMacros(String(directive).trim(), mctx) + '\n\nRewrite ' + who + "'s reply so that flaw is fully gone. The new reply MUST be substantially different from the rejected one — actually change what " + who + ' does, decides or feels as the note demands; do NOT merely reword it, soften it, or land on the same outcome or beats. Stay in character and true to the character sheet, and continue the scene from the last user message. Output only the rewritten in-character reply.');
-      msgs.push({ role: 'system', _src: 'Редактура', content: head + body });   // жёсткий вариант — 1:1 как в generateReply Чата
+      const standing = opts.fromCritic ? '' : criticLessonsBlock(el);   // правила блокнота — как в Чате
+      msgs.push({ role: 'system', _src: 'Редактура', content: head + body + standing });   // жёсткий вариант — 1:1 как в generateReply Чата
     }
     if (prefill) msgs.push({ role: 'assistant', content: substituteMacros(prefill, mctx), _src: 'Префилл' });
     // Перекат по фидбеку (⚖ Править / ✎ Точечно) — своя строка настроек chat.rewrite: ответ, контекст,
@@ -15068,6 +15086,13 @@ window.addEventListener('message', async (e) => {
   // Команды, меняющие/сохраняющие историю: перед правкой подтянуть свежий лог с сервера, чтобы ЭТО устройство
   // не затёрло дописанное на другом (см. pullChatlogFresh). Чисто-читающие/UI-команды пропускаем — им незачем.
   if (MUTATES_LOG.includes(m.type)) await pullChatlogFresh(node);
+  // Критик и фидбек работают ТОЛЬКО по последнему сообщению чата: правка середины сносила бы всё,
+  // что идёт после неё, а вердикт критика к устаревшему тексту всё равно ничего не решает.
+  const fbLastOnly = (idx) => {
+    if (Number(idx) === node._msgs.length - 1) return true;
+    chatToast(node, 'править и судить можно только последний ответ', 'err');
+    return false;
+  };
   if (m.type === 'send' && m.text) chatSend(node, m.text);
   else if (m.type === 'newchat') newChat(node);
   else if (m.type === 'group-next') groupNextTurn(node);   // «След. ход» — форсить один ход ИИ в группе
@@ -15075,27 +15100,21 @@ window.addEventListener('message', async (e) => {
   else if (m.type === 'regen') regenerate(node);
   else if (m.type === 'greet-swipe') greetSwipe(node, m.dir);   // ‹ › на приветствии до начала ролки → выбрать первое сообщение
   else if (m.type === 'feedback') {                                              // 💬 «Переписать» → перекат с замечанием впереди, БЕЗ авто-урока (урок — отдельная кнопка «Записать в блокнот»)
-    const fb = String(m.text || '').trim(); if (!fb) return;
-    const last = node._msgs.length - 1;
-    if (m.idx < last && !confirm('Переписать этот ответ по фидбеку? Всё, что идёт ПОСЛЕ него в чате, будет стёрто.')) return;
+    const fb = String(m.text || '').trim(); if (!fb || !fbLastOnly(m.idx)) return;
     feedbackRegen(node, m.idx, fb, { noLesson: true, reason: m.reason, soft: m.mode === 'soft' });   // рассуждение при переписи (селектор в окне фидбека; node = как в «Опциях»)
   }
   else if (m.type === 'feedback-learn') {                                        // 💬 «Записать в блокнот» → И перекат по замечанию, И урок критику в блокнот
-    const fb = String(m.text || '').trim(); if (!fb) return;
-    const last = node._msgs.length - 1;
-    if (m.idx < last && !confirm('Переписать этот ответ по замечанию? Всё, что идёт ПОСЛЕ него в чате, будет стёрто.')) return;
+    const fb = String(m.text || '').trim(); if (!fb || !fbLastOnly(m.idx)) return;
     feedbackRegen(node, m.idx, fb, { reason: m.reason, soft: m.mode === 'soft' });   // noLesson НЕ задан → feedbackRegen и перепишет ответ, и запишет урок (criticLearnFromFeedback)
   }
   else if (m.type === 'critic-run') criticJudge(node, null, { manual: true });   // 🔍 «Критик» под чатом → судья проверяет последний ответ ИИ
   else if (m.type === 'critic-approve-feedback') {                                // фидбек на ЗЕЛЁНОЕ одобрение → критик формулирует урок в блокнот
-    const fb = String(m.text || '').trim(); if (!fb) return;
+    const fb = String(m.text || '').trim(); if (!fb || !fbLastOnly(m.idx)) return;
     const msg = node._msgs[m.idx];
     criticLearnFromApproval(node, fb, (msg && msg.text) || '', (msg && msg.critic && msg.critic.reason) || '').catch(() => {});
   }
   else if (m.type === 'critic-approve-rewrite') {                                // «Не записывать · переписать» у зелёного апрува → перекат ЭТОГО ответа по замечанию, БЕЗ урока
-    const fb = String(m.text || '').trim(); if (!fb) return;
-    const last = node._msgs.length - 1;
-    if (m.idx < last && !confirm('Переписать этот ответ по замечанию? Всё, что идёт ПОСЛЕ него в чате, будет стёрто.')) return;
+    const fb = String(m.text || '').trim(); if (!fb || !fbLastOnly(m.idx)) return;
     feedbackRegen(node, m.idx, fb, { noLesson: true });
   }
   else if (m.type === 'edit') editMessage(node, m.idx, m.text);
@@ -16442,7 +16461,8 @@ async function generateReply(node, opts) {
     const rwBody = opts.softEdit
       ? ('Fix ONLY this in the reply: ' + d + '\n\nThis is a SURGICAL edit, not a rewrite. Return the SAME reply with the minimum change needed to satisfy the note: keep every other sentence word for word, keep the same events, the same outcome, the same order of beats, the same tone, style and length. Do NOT re-style, expand, shorten or \"improve\" anything the note does not touch. Stay in character and true to the character sheet. Output only the corrected in-character reply.')
       : ('The rejected reply fails on this: ' + d + '\n\nRewrite ' + who + "'s reply so that flaw is fully gone. The new reply MUST be substantially different from the rejected one — actually change what " + who + ' does, decides or feels as the note demands; do NOT merely reword it, soften it, or land on the same outcome or beats. Stay in character and true to the character sheet, and continue the scene from the last user message. Output only the rewritten in-character reply.');
-    messages.push({ role: 'system', content: '[EDITOR NOTE — out of character, NOT part of the story. Do NOT answer, quote or mention this note; just obey it.]\n' + prev + rwBody, _src: 'Редактура' });
+    const standing = opts.fromCritic ? '' : criticLessonsBlock(node);   // накопленные правила — вместе с замечанием
+    messages.push({ role: 'system', content: '[EDITOR NOTE — out of character, NOT part of the story. Do NOT answer, quote or mention this note; just obey it.]\n' + prev + rwBody + standing, _src: 'Редактура' });
   }
   const prefill = prefillOf(compEl, sysEl);
   if (prefill) messages.push({ role: 'assistant', content: substituteMacros(prefill, mctx), _src: 'Префилл' });
