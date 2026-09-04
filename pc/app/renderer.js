@@ -8186,12 +8186,13 @@ async function tgCriticLearn(el, feedback, oldReply, newReply) {
     const critic = criticNodeForChat(el); if (!critic) return;
     const api = tgApiCreds(el); if (!api) return;
     const mctx = chatNames(el);
-    const sys = 'You keep the notebook of a roleplay critic for the character ' + (mctx.char || 'the character') + '. The user just manually corrected a reply. From the user complaint, formulate ONE short GENERAL rule to remember so the mistake does not recur — it may be about THIS CHARACTER specifically OR about roleplay conduct in general (narration, pacing, tone, honesty, anti-sycophancy, how scenes are handled) — or NONE if it is a one-off not worth remembering. Reply with exactly one line: LESSON: <rule or NONE>';   // урок-промт — 1:1 как criticLearnFromFeedback Чата
+    const sys = 'You keep the notebook of a roleplay critic for the character ' + (mctx.char || 'the character') + '. The user just manually corrected a reply. From the user complaint, formulate ONE short GENERAL rule to remember so the mistake does not recur — it may be about THIS CHARACTER specifically OR about roleplay conduct in general (narration, pacing, tone, honesty, anti-sycophancy, how scenes are handled). The user has ALREADY decided this correction is worth remembering — do NOT judge whether it matters and never answer NONE; your only job is to word it. Reply with exactly one line: LESSON: <rule>';   // урок-промт — 1:1 как criticLearnFromFeedback Чата
     const usr = 'User complaint: "' + String(feedback || '').trim() + '"\nRejected reply: "' + String(oldReply || '').trim() + '"\nRewritten reply: "' + String(newReply || '').trim() + '"';
     const r = await rlmApi('/api/rlm/generate', { _ctxKey: 'critic.lesson', base: api.base, key: api.key, model: api.model, messages: [{ role: 'system', content: sys }, { role: 'user', content: substituteMacros(usr, mctx) }], params: { max_tokens: tokVal('critic.lesson', 400), temperature: 0.3, reasoning: { enabled: false } } });
     if (!(r && r.ok)) return;
     const v = criticParse(criticCleanOutput(r));
-    if (v.lesson) tgCriticRecordLesson(critic, v.lesson);
+    // Кнопку нажал пользователь — правило должно появиться; модель промолчала → пишем само замечание.
+    tgCriticRecordLesson(critic, v.lesson || String(feedback || '').trim().slice(0, 300));
   } catch (e) { /* обучение опционально */ }
 }
 // Ручной фидбек из панели ноды Telegram: переписать ПОСЛЕДНИЙ ответ бота по замечанию.
@@ -8247,7 +8248,7 @@ async function tgFeedbackRewrite(el, note, opts) {
   await telegramReply(el, token, chatId, null, thread, { directive: note, editLast: true, rejectedText: last, softEdit: !!opts.soft, editInPlace: inPlace });
   // Критик учится на фидбеке (обобщённый урок → блокнот). newReply = новый последний ответ бота.
   let neu = ''; for (let i = (convo.msgs || []).length - 1; i >= 0; i--) { if (convo.msgs[i].role === 'char') { neu = convo.msgs[i].text || ''; break; } if (convo.msgs[i].role === 'user') break; }
-  tgCriticLearn(el, note, last, neu).catch(() => {});
+  if (opts.learn) tgCriticLearn(el, note, last, neu).catch(() => {});   // разовая правка (поле под лентой) правил не заводит
 }
 
 function buildChronicleNode() {
@@ -10748,6 +10749,36 @@ function tgLastCtx(convo) {
   for (let i = msgs.length - 1; i >= 0; i--) { if (msgs[i].role === 'char') return msgs[i].ctx || null; }
   return null;
 }
+// Окно фидбека у сообщения в ленте партии — то же, что окно 💬 в одиночном чате: замечание, режим правки
+// и ДВЕ кнопки. «Записать в блокнот» = правка + правило критику, «Переписать» = разовая правка.
+// Поле под лентой осталось быстрым разовым путём — оно правил не заводит.
+function tgFeedbackDialog(el) {
+  const back = document.createElement('div'); back.className = 'rlm-dialog-back';
+  const box = document.createElement('div'); box.className = 'rlm-dialog tg-fb-dlg';
+  box.innerHTML = '<div class="rlm-dialog-title">💬 Фидбек — правка последнего ответа</div>'
+    + '<textarea class="rlm-dialog-input tg-fb-dlg-note" rows="3" spellcheck="false" placeholder="напр.: он слишком легко согласился — перепиши жёстче"></textarea>'
+    + '<label class="tg-fb-dlg-opt"><input type="checkbox" class="tg-fb-dlg-soft"> ✎ точечно — менять только названное</label>'
+    + '<div class="rlm-dialog-btns">'
+    + '<button class="rlm-dialog-cancel" type="button">Отмена</button>'
+    + '<button class="rlm-dialog-ok tg-fb-dlg-learn" type="button" title="Переписать по замечанию И записать правило в блокнот критика">Записать в блокнот</button>'
+    + '<button class="rlm-dialog-ok tg-fb-dlg-go" type="button" title="Разовая правка: переписать по замечанию, правило не заводить">Переписать</button>'
+    + '</div>';
+  back.appendChild(box); document.body.appendChild(back);
+  const ta = box.querySelector('.tg-fb-dlg-note'); ta.focus();
+  let done = false;
+  const close = () => { if (done) return; done = true; back.remove(); };
+  const пуск = (learn) => {
+    const note = ta.value.trim(); if (!note) return;
+    const soft = !!(box.querySelector('.tg-fb-dlg-soft') || {}).checked;
+    close();
+    tgFeedbackRewrite(el, note, { soft, learn }).catch(() => {});
+  };
+  box.querySelector('.tg-fb-dlg-learn').addEventListener('click', () => пуск(true));
+  box.querySelector('.tg-fb-dlg-go').addEventListener('click', () => пуск(false));
+  box.querySelector('.rlm-dialog-cancel').addEventListener('click', close);
+  back.addEventListener('click', (e) => { if (e.target === back) close(); });
+  ta.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Escape') { e.preventDefault(); close(); } });
+}
 // Значки под ответом бота: перекат, правка текста, фидбек, русский предпросмотр.
 // Всё работает по ПОСЛЕДНЕМУ ответу бота (его и правит Telegram на месте) — как кнопка «⚖ Править» в панели.
 async function tgActClick(el, row, act) {
@@ -10755,9 +10786,8 @@ async function tgActClick(el, row, act) {
   const chatId = tgTargetChat(el);
   const convo = (el._convos || {})[chatId];
   const thread = tgOutThread(el);   // заперта тема → строго она
-  if (act === 'fb') {                                   // ⚖ — курсор в поле замечания под лентой
-    const note = el.querySelector('.tg-fb-note'); if (note) { note.focus(); note.scrollIntoView({ block: 'nearest' }); }
-    el._setStatus('впиши замечание: «✎ Точечно» — подправить, «⚖ Править» — переписать заново', '');
+  if (act === 'fb') {                                   // ⚖ — окно фидбека с выбором (как 💬 в одиночном чате)
+    tgFeedbackDialog(el);
     return;
   }
   if (act === 'ru') {                                   // 🌐 — предпросмотр по-русски, повторный клик возвращает оригинал
@@ -11042,7 +11072,7 @@ function tgFeed(el, text, dir, name, opts) {
         + '<button class="tg-act" data-act="regen" type="button" title="Перегенерить ответ (заменит его на месте)">🔄</button>'
         + '<button class="tg-act" data-act="branch" type="button" title="Ветка: новый чат-копия ОТ этого сообщения — история до него, вся сборка и память копируются">⑃</button>'
         + '<button class="tg-act" data-act="edit" type="button" title="Редактировать текст ответа">✏</button>'
-        + '<button class="tg-act" data-act="fb" type="button" title="Фидбек: правка по замечанию — точечно или заново (кнопки под лентой)">⚖</button>'
+        + '<button class="tg-act" data-act="fb" type="button" title="Фидбек: окно правки — переписать разово или ещё и записать правило в блокнот критика">⚖</button>'
         + '<button class="tg-act" data-act="ru" type="button" title="Показать по-русски (предпросмотр, обратимо)">🌐</button>'
       + '</span>' : '')
     + '<button class="tg-line-x" type="button" title="Удалить реплику">✕</button>'   // ✕ ВНУТРИ пузыря, в его правом верхнем углу — одинаково у реплик ИИ и игроков

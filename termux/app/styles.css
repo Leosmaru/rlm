@@ -2559,6 +2559,10 @@ html.mobile-mode .tb-left, html.mobile-mode .tb-right { flex: none; }
 .rlm-dialog { width: min(360px, 100%); background: var(--popup); border: 1px solid var(--line); border-radius: 6px; padding: 16px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55); display: flex; flex-direction: column; gap: 12px; }
 .rlm-dialog-title { font-size: 13px; color: var(--text); }
 .rlm-dialog-input { font-family: var(--mono); font-size: 13px; color: var(--text); background: var(--inset); border: 1px solid var(--corner); border-radius: 3px; padding: 8px 10px; }
+/* Окно фидбека в ленте партии: то же диалоговое окно, но с многострочным полем и галочкой режима. */
+.tg-fb-dlg .rlm-dialog-input { min-height: 74px; resize: vertical; font: inherit; line-height: 1.4; }
+.tg-fb-dlg .tg-fb-dlg-opt { display: flex; align-items: center; gap: 6px; margin: 8px 0 2px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.tg-fb-dlg .rlm-dialog-btns { flex-wrap: wrap; }
 .rlm-dialog-input:focus { outline: none; border-color: var(--accent); }
 .rlm-dialog-btns { display: flex; justify-content: flex-end; gap: 8px; }
 .rlm-dialog-btns button { font-family: var(--mono); font-size: 12px; padding: 7px 14px; cursor: pointer; border: 1px solid var(--corner); background: var(--inset); color: var(--text); border-radius: 3px; }
