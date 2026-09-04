@@ -635,6 +635,12 @@ function ctxLimitForRequest(key, node) {
     const reg = TOK_REG.find((r) => (r.k || (r.input + '@' + r.node)) === key);
     if (reg) n = tokLiveNodes(reg.node)[0] || null;
   }
+  // «Локал-сэмплеры» этой же цепочки главнее: их контекст задан для конкретного хостинга.
+  try {
+    const api = (n && typeof tokApiForNode === 'function') ? tokApiForNode(n) : null;
+    const lv = api ? localCtxLimit(api) : 0;
+    if (lv > 0) return lv;
+  } catch (_) { /* ноды «Локал» может не быть — это норма */ }
   const opt = (n && typeof tokOptsForNode === 'function') ? tokOptsForNode(n) : null;
   if (opt) { const v = parseInt((opt.querySelectorAll('.prm input')[1] || {}).value, 10); if (v > 0) return v; }
   } catch (_) {}
@@ -838,6 +844,10 @@ const TOK_REG = [
   // optsCtx/optsAns — это САМИ «Опции»: их число живёт в своей колонке и не дублируется соседней
   { g: 'Опции API', node: '.node-opts', input: '.prm:nth-of-type(2) input', t: 'Контекст — лимит всего промта', d: 4096, tempInput: '.prm:nth-of-type(3) input', optsCtx: true },
   { g: 'Опции API', node: '.node-opts', input: '.prm:nth-of-type(1) input', t: 'Ответ модели — сколько пишет за ход', d: 300, cfg: true, optsAns: true },
+  // «Локал-сэмплеры» (RP-хостинги, режим Text): свои лимиты и своя температура — они перебивают
+  // «Опции» этой же цепочки, поэтому и в таблице стоят отдельными строками.
+  { g: 'Локал-сэмплеры', node: '.node-local', input: '.ls-lim[data-lim="context"]', t: 'Контекст — лимит всего промта', d: 4096, tempInput: '.ls-item[data-id="temp"] input', optsCtx: true },
+  { g: 'Локал-сэмплеры', node: '.node-local', input: '.ls-lim[data-lim="max_tokens"]', t: 'Ответ модели — сколько пишет за ход', d: 300, cfg: true, optsAns: true },
   // Ответ в игре
   { g: 'Чат', node: '.node-chat, .node-netgame, .node-telegram', k: 'chat.reply', t: 'Ответ модели (если в «Опциях» не задан)', d: 512, t0: null, inhOptsAns: true },
   // Правка по фидбеку (💬 «Переписать» и «✎ Точечно») — СВОЙ запрос: свои токены на ответ, свой
@@ -1263,6 +1273,10 @@ function readLocalParams(localEl) {
     }
     const n = Number(v); if (Number.isFinite(n)) raw[inp.dataset.key] = n;
   });
+  // «Ответ, ток.» — обычный max_tokens запроса. «Контекст» в API не уходит: им режется промт
+  // на нашей стороне (см. contextLimitFor), поэтому в params ему делать нечего.
+  const lim = localEl.querySelector('.ls-lim[data-lim="max_tokens"]');
+  const limN = lim ? parseInt(String(lim.value).trim(), 10) : NaN;
   const isNeutral = (k) => k in LOCAL_NEUTRAL && raw[k] === LOCAL_NEUTRAL[k];
   const params = {};
   for (const k of Object.keys(raw)) {
@@ -1271,7 +1285,17 @@ function readLocalParams(localEl) {
     if (gate && (!(gate in raw) || isNeutral(gate))) continue;    // спутник без активного выключателя
     params[LOCAL_KEY_MAP[k] || k] = raw[k];
   }
+  if (Number.isFinite(limN) && limN > 0) params.max_tokens = limN;
   return params;
+}
+// Контекст, заданный в «Локал-сэмплерах»: он главнее «Опций» для своей цепочки (нода подключена
+// к тому же входу API, значит её значение — более частное).
+function localCtxLimit(apiEl) {
+  const localEl = (typeof localForApi === 'function') ? localForApi(apiEl) : null;
+  if (!localEl) return 0;
+  const inp = localEl.querySelector('.ls-lim[data-lim="context"]');
+  const v = inp ? parseInt(String(inp.value).trim(), 10) : NaN;
+  return (Number.isFinite(v) && v > 0) ? v : 0;
 }
 
 // Конкретный вход ноды «API»: which = 'prompt' | 'options'.
@@ -1322,6 +1346,15 @@ function buildLocalNode() {
     <span class="port out" data-dir="out" title="Локальные сэмплеры → вход «Опции» ноды API"></span>
     ${head('☰', 'Локал-сэмплеры')}
     <div class="node-body ls-body">
+      <div class="ls-sec">сколько пишет и сколько читает</div>
+      <div class="opts-grid ls-limits">
+        <div class="prm" title="Сколько модель пишет за один ход. Уходит как max_tokens."><span class="flabel">Ответ, ток.</span>
+          <input class="field num ls-lim" spellcheck="false" data-lim="max_tokens" value="300"></div>
+        <div class="ls-desc">Потолок ответа за ход. 300 — короткая реплика, 800 — развёрнутая сцена. Слишком мало — ответ обрывается на полуслове.</div>
+        <div class="prm" title="Размер всего промта: история режется под этот лимит перед отправкой."><span class="flabel">Контекст, ток.</span>
+          <input class="field num ls-lim" spellcheck="false" data-lim="context" value="4096"></div>
+        <div class="ls-desc">Сколько модель читает за раз: под этот размер режется история перед отправкой. Ставь не больше, чем даёт твой план на хостинге.</div>
+      </div>
       <div class="ls-sec">порядок сэмплеров · тащи ⋮⋮</div>
       <div class="ls-list">${orderRows}</div>
       <div class="ls-sec">умные крутилки</div>
@@ -14017,15 +14050,21 @@ function renderTokPanel(ov) {
   // прежними — на них завязаны правка значений и полосы, поэтому меняется только ПОРЯДОК вывода.
   const chains = [];
   groups.forEach((g, gi) => g.rows.forEach((row, ri) => {
-    const opt = tokOptsForNode(row.node || tokLiveNodes(row.r.node)[0] || null);
-    let ch = chains.find((c) => c.opt === opt);
-    if (!ch) { ch = { opt, groups: [] }; chains.push(ch); }
+    const n0 = row.node || tokLiveNodes(row.r.node)[0] || null;
+    const opt = tokOptsForNode(n0);
+    // Цепочку опознаём по ноде API: у сборки с RP-хостингом ноды «Опции» может не быть вовсе —
+    // настройки приходят от «Локал-сэмплеров», и по opt=null такие строки сваливались в «Без Опций».
+    const api = (typeof tokApiForNode === 'function') ? tokApiForNode(n0) : null;
+    const local = (api && typeof localForApi === 'function') ? localForApi(api) : null;
+    const ключ = api || opt;
+    let ch = chains.find((c) => c.key === ключ);
+    if (!ch) { ch = { key: ключ, opt, api, local, groups: [] }; chains.push(ch); }
     let gg = ch.groups.find((x) => x.name === g.name);
     if (!gg) { gg = { name: g.name, rows: [] }; ch.groups.push(gg); }
     gg.rows.push({ row, gi, ri });
   }));
   const mainOpt = (typeof tokOptsNode === 'function') ? tokOptsNode() : null;   // цепочка чата — первой
-  chains.sort((a, b) => (b.opt === mainOpt) - (a.opt === mainOpt));
+  chains.sort((a, b) => (b.opt === mainOpt && !!mainOpt) - (a.opt === mainOpt && !!mainOpt));
   const rowHtml = ({ row, gi, ri }) => {
     const unit = row.r.unit || 'ток.';
     // Справа — СВОЙ контекст этой подсистемы: пусто = слушает «Опции» своей цепочки (их число подсказкой),
@@ -14094,9 +14133,13 @@ function renderTokPanel(ov) {
   const nodeName = (n) => n ? (((n.querySelector('.node-head .label') || {}).textContent || '').trim() || 'нода') : '';
   const chainHead = (ch) => {
     if (chains.length < 2) return '';   // цепочка одна — делить нечего, не мусорим
-    const api = ch.opt ? tokApiForNode(ch.opt) : null;
-    const lim = ch.opt ? (parseInt((ch.opt.querySelectorAll('.prm input')[1] || {}).value, 10) || 0) : 0;
-    return '<div class="con-tok-chain"><b>' + escapeConsole(ch.opt ? nodeName(ch.opt) : 'Без «Опций»') + '</b>'
+    const api = ch.api || (ch.opt ? tokApiForNode(ch.opt) : null);
+    // Контекст цепочки: сперва «Локал-сэмплеры» (они главнее для своего хостинга), потом «Опции».
+    const locLim = ch.local ? (parseInt((ch.local.querySelector('.ls-lim[data-lim="context"]') || {}).value, 10) || 0) : 0;
+    const optLim = ch.opt ? (parseInt((ch.opt.querySelectorAll('.prm input')[1] || {}).value, 10) || 0) : 0;
+    const lim = locLim || optLim;
+    const чем = ch.opt ? nodeName(ch.opt) : (ch.local ? nodeName(ch.local) : 'Без настроек');
+    return '<div class="con-tok-chain"><b>' + escapeConsole(чем) + '</b>'
       + '<span>' + escapeConsole(api ? ('через ' + nodeName(api)) : 'нода API не найдена') + '</span>'
       + '<span class="con-tok-chain-lim">' + (lim ? ('контекст ' + fmtTok(lim)) : 'контекст не задан') + '</span></div>';
   };
@@ -17518,7 +17561,7 @@ function applyValues(el, type, d) {
     if (d.provider) el.querySelector('.dd-current').textContent = d.provider;
     if (d.base != null) el.querySelector('.f-base').value = d.base;
     // d.key — только у старых снимков (раньше ключ уезжал в граф); иначе берём ключ этого сервиса
-    el.querySelector('.f-key').value = d.key || apiKeyFor(d.provider || (el.querySelector('.dd-current') || {}).textContent);
+    el.querySelector('.f-key').value = apiKeyFor(d.provider || (el.querySelector('.dd-current') || {}).textContent) || d.key || '';   // ключ СЕРВИСА главнее снимка: старые снимки несут ключ, записанный при общей настройке (у ноды ArliAI мог лежать ключ OpenRouter)
     if (d.model != null) el.querySelector('.f-model').value = d.model;
     if (d.mode) { el.dataset.mode = d.mode; el.querySelectorAll('.mode-btn').forEach((b) => b.classList.toggle('active', b.dataset.mode === d.mode)); }
     if (d.label) { const l = el.querySelector('.node-head .label'); if (l) l.textContent = d.label; }
