@@ -9207,6 +9207,141 @@ function syncApiLabels() {
   });
 }
 
+// ── ✂ CLIP: выделенный кусок чата → запись «Лорбука чата» ─────────────────────────
+// Зачем: правила и договорённости, сказанные в игре («порядок этапов гипноза»), Душа ведёт МОДЕЛЬЮ —
+// она их переформулирует и может уронить при перезаписи. Лорбук же отдаёт текст слово в слово, поэтому
+// такие вещи место им. Формат записи — как в MachineMechanic: куски копятся между маркерами.
+const CLIP_SUFFIX = ' [клип]';                       // по нему узнаём записи-клипы в списке лорбука
+const clipMark = (h) => '=== ' + h + ' ===';
+const clipEnd  = (h) => '=== END ' + h + ' ===';
+const clipTitle = (h) => String(h || '').trim() + CLIP_SUFFIX;
+const clipHeadline = (name) => String(name || '').replace(CLIP_SUFFIX, '').trim();
+const clipIsEntry = (e) => String((e && e.name) || '').trimEnd().endsWith(CLIP_SUFFIX);
+// Пункт: первая строка с тире, продолжения — с отступом (чтобы в промте читалось списком).
+function clipBullet(text) {
+  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n')
+    .map((s) => s.replace(/^\s*(?:[-*•]\s+|\d+[.)]\s+)/, '').trim()).filter(Boolean);
+  if (!lines.length) return '';
+  return ['- ' + lines[0], ...lines.slice(1).map((s) => '  ' + s)].join('\n');
+}
+const clipNorm = (s) => String(s || '').replace(/^\s*[-*•]\s*/, '').trim().replace(/\s+/g, ' ').toLowerCase();
+function clipNewContent(headline, bullet) {
+  return clipMark(headline) + '\n\n' + bullet + '\n\n' + clipEnd(headline);
+}
+// Дописать пункт в существующую запись — перед закрывающим маркером. Нет маркеров (обычная запись)
+// → оборачиваем её содержимое, ничего не теряя. Такой же пункт уже есть → возвращаем null (дубль).
+function clipAppend(content, headline, bullet) {
+  const было = String(content || '').trim();
+  const пункты = было.split('\n').filter((l) => /^\s*-\s+/.test(l)).map(clipNorm);
+  if (пункты.includes(clipNorm(bullet))) return null;                 // этот кусок уже сохранён
+  const end = clipEnd(headline);
+  if (было.includes(end)) return было.replace(end, bullet + '\n\n' + end);
+  if (!было) return clipNewContent(headline, bullet);
+  return clipMark(headline) + '\n\n' + было + '\n\n' + bullet + '\n\n' + clipEnd(headline);
+}
+// Модель придумывает ключи или фразу-эталон по выделенному куску (по кнопке ✨, не автоматом).
+async function clipAsk(chatNode, kind, text) {
+  const api = (typeof chatApi === 'function') ? chatApi(chatNode) : null;
+  if (!api) return '';
+  const sys = (kind === 'keys')
+    ? 'Extract 3-6 short trigger keywords for a lorebook entry from the text. Nouns and names as they would appear in dialogue, lowercase, comma-separated, no explanations. Reply with the keywords only.'
+    : 'Write ONE short sentence that captures what this text is about, in the language of the text. It will be compared by meaning against the current scene, so keep it plain and specific. Reply with the sentence only.';
+  try {
+    const r = await rlmApi('/api/rlm/generate', { _ctxNode: chatNode, base: api.base, key: api.key, model: api.model,
+      messages: [{ role: 'system', content: sys }, { role: 'user', content: String(text || '').slice(0, 2000) }],
+      params: { max_tokens: 120, temperature: 0.3, reasoning: { enabled: false } } });
+    if (!(r && r.ok)) return '';
+    return String(r.text || '').replace(/<think[\s\S]*?<\/think>/gi, '').trim().split('\n')[0].trim();
+  } catch (_) { return ''; }
+}
+// Окно клипа. Всё в одном месте: текст (правится), куда положить, заголовок, когда всплывает,
+// ключи или фраза. У каждого текстового поля — RU/EN, как на нодах.
+function openClipDialog(chatNode, selected) {
+  const lore = (typeof loreNodeByScope === 'function') ? loreNodeByScope('chat') : null;
+  if (!lore) { chatToast(chatNode, 'нет ноды «Лорбук чата» — клипу некуда', 'err'); return; }
+  const клипы = (lore._entries || []).filter(clipIsEntry);
+  const back = document.createElement('div'); back.className = 'rlm-dialog-back';
+  const box = document.createElement('div'); box.className = 'rlm-dialog clip-dlg';
+  box.innerHTML = '<div class=\'rlm-dialog-title\'>✂ В «Лорбук чата»</div>'
+    + '<div class=\'clip-row\'><div class=\'clip-lbl\'>Текст</div><textarea class=\'rlm-dialog-input clip-text\' rows=\'4\' spellcheck=\'false\'></textarea></div>'
+    + '<div class=\'clip-row\'><div class=\'clip-lbl\'>Куда</div><select class=\'rlm-dialog-input clip-where\'></select></div>'
+    + '<div class=\'clip-row\'><div class=\'clip-lbl\'>Заголовок</div><input class=\'rlm-dialog-input clip-head\' type=\'text\' spellcheck=\'false\' placeholder=\'напр.: Гипноз — порядок этапов\'></div>'
+    + '<div class=\'clip-row\'><div class=\'clip-lbl\'>Когда всплывает</div><select class=\'rlm-dialog-input clip-mode\'>'
+      + '<option value=\'always_on\'>Всегда — висит в промте постоянно</option>'
+      + '<option value=\'semantic\' selected>По смыслу — когда сцена близка к фразе</option>'
+      + '<option value=\'keyword\'>По ключам — когда прозвучало слово</option>'
+      + '<option value=\'vectorized\'>Векторизация — по смыслу самого текста</option>'
+      + '</select></div>'
+    + '<div class=\'clip-row clip-sem\'><div class=\'clip-lbl\'>Фраза по смыслу<button class=\'clip-gen\' type=\'button\' data-kind=\'sem\' title=\'Пусть модель сформулирует фразу по выделенному тексту\'>✨</button></div>'
+      + '<input class=\'rlm-dialog-input clip-semtext\' type=\'text\' spellcheck=\'false\' placeholder=\'напр.: он вводит её в транс\'></div>'
+    + '<div class=\'clip-row clip-kw\' hidden><div class=\'clip-lbl\'>Ключи<button class=\'clip-gen\' type=\'button\' data-kind=\'keys\' title=\'Пусть модель подберёт ключи по выделенному тексту\'>✨</button></div>'
+      + '<input class=\'rlm-dialog-input clip-keys\' type=\'text\' spellcheck=\'false\' placeholder=\'гипноз, транс, маятник\'></div>'
+    + '<div class=\'clip-note\'></div>'
+    + '<div class=\'rlm-dialog-btns\'><button class=\'rlm-dialog-cancel\' type=\'button\'>Отмена</button>'
+      + '<button class=\'rlm-dialog-ok clip-save\' type=\'button\'>В лорбук</button></div>';
+  back.appendChild(box); document.body.appendChild(back);
+  const q = (s) => box.querySelector(s);
+  const текст = q('.clip-text'), где = q('.clip-where'), голова = q('.clip-head');
+  const режим = q('.clip-mode'), фраза = q('.clip-semtext'), ключи = q('.clip-keys'), нота = q('.clip-note');
+  текст.value = String(selected || '').trim();
+  где.innerHTML = '<option value=\'new\'>новая запись</option>'
+    + клипы.map((e) => '<option value=\'' + esc(e.id) + '\'>дописать в «' + esc(clipHeadline(e.name)) + '»</option>').join('');
+  // Переводчики — у каждого текстового поля, как на нодах (RU — предпросмотр, EN — заменить).
+  [текст, голова, фраза, ключи].forEach((el) => { if (typeof attachFieldTranslate === 'function') attachFieldTranslate(el); });
+  const синк = () => {
+    const сущ = где.value !== 'new';
+    const e = сущ ? (lore._entries || []).find((x) => x.id === где.value) : null;
+    if (e) { голова.value = clipHeadline(e.name); режим.value = e.trigger || 'keyword'; фраза.value = e.semTrigger || ''; ключи.value = e.keys || ''; }
+    голова.disabled = !!e;
+    [режим, фраза, ключи].forEach((x) => { x.disabled = !!e; });                 // у существующей записи настройки уже свои
+    q('.clip-sem').hidden = режим.value !== 'semantic';
+    q('.clip-kw').hidden = режим.value !== 'keyword';
+    нота.textContent = e ? 'Кусок добавится пунктом в конец этой записи — её настройки не трогаем.'
+      : (режим.value === 'always_on' ? 'Запись будет в промте всегда — держи её короткой.'
+      : (режим.value === 'vectorized' ? 'Всплывёт, когда сцена близка по смыслу к самому тексту (нужен «Эмбеддер»).'
+      : (режим.value === 'semantic' ? 'Всплывёт, когда сцена близка по смыслу к твоей фразе (нужен «Эмбеддер»).'
+      : 'Всплывёт, когда в сцене прозвучит один из ключей.')));
+  };
+  где.addEventListener('change', синк); режим.addEventListener('change', синк); синк();
+  box.querySelectorAll('.clip-gen').forEach((b) => b.addEventListener('click', async () => {
+    const цель = b.dataset.kind === 'keys' ? ключи : фраза;
+    const было = b.textContent; b.textContent = '…'; b.disabled = true;
+    const v = await clipAsk(chatNode, b.dataset.kind === 'keys' ? 'keys' : 'sem', текст.value);
+    b.textContent = было; b.disabled = false;
+    if (v) цель.value = v; else нота.textContent = 'модель не ответила — впиши сам';
+  }));
+  let done = false;
+  const close = () => { if (done) return; done = true; back.remove(); };
+  q('.rlm-dialog-cancel').addEventListener('click', close);
+  back.addEventListener('click', (e) => { if (e.target === back) close(); });
+  box.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Escape') { e.preventDefault(); close(); } });
+  q('.clip-save').addEventListener('click', () => {
+    const bullet = clipBullet(текст.value);
+    if (!bullet) { нота.textContent = 'нечего сохранять — текст пуст'; return; }
+    const сущ = где.value !== 'new';
+    if (сущ) {
+      const e = (lore._entries || []).find((x) => x.id === где.value);
+      if (!e) { нота.textContent = 'запись не нашлась — обнови окно'; return; }
+      const upd = clipAppend(e.content, clipHeadline(e.name), bullet);
+      if (upd === null) { нота.textContent = 'такой кусок в этой записи уже есть'; return; }
+      e.content = upd;
+    } else {
+      const h = String(голова.value || '').trim();
+      if (!h) { нота.textContent = 'впиши заголовок записи'; return; }
+      if (режим.value === 'semantic' && !String(фраза.value || '').trim()) { нота.textContent = 'впиши фразу по смыслу (или нажми ✨)'; return; }
+      if (режим.value === 'keyword' && !String(ключи.value || '').trim()) { нота.textContent = 'впиши ключи (или нажми ✨)'; return; }
+      const entry = loreNormEntry({ name: clipTitle(h), trigger: режим.value, injection: 'lore',
+        keys: ключи.value || '', semTrigger: фраза.value || '', content: clipNewContent(h, bullet),
+        constant: режим.value === 'always_on' });
+      lore._entries.push(entry);
+      lore._sel = entry.id;
+    }
+    loreRenderList(lore); loreRenderEditor(lore); persistCurrentGraph();
+    close();
+    chatToast(chatNode, 'кусок сохранён в «Лорбук чата»', 'ok', { title: 'CLIP', icon: '✂', autohide: 5000 });
+  });
+  текст.focus();
+}
 // ── Меню «Инструменты» (🔧) в чате: вижны нод, у которых нет своей кнопки внизу (Персонаж/карточка,
 //    Пользователь/персона, Промт комплитер, ноды API — подписаны ролью, Хроника, Озвучка, Программный DRY —
 //    если подключён, Транслитер). Клик → вижн ноды в чате. ──
@@ -15258,10 +15393,7 @@ window.addEventListener('message', async (e) => {
     openLoreInChat(dir, node, !frame);
   }
   else if (m.type === 'guests-open') openGuestsPanel(node, !frame);                // значок 👥 → список гостей и визитёров лорбука чата
-  else if (m.type === 'clip') {                                                  // Clip: выделил кусок в сообщении → сюда (пока заглушка «скоро»)
-    const snip = String(m.text || '').replace(/\s+/g, ' ').slice(0, 32);
-    chatToast(node, `✂ Clip — скоро: «${snip}${(m.text || '').length > 32 ? '…' : ''}»`, 'ok');
-  }
+  else if (m.type === 'clip') openClipDialog(node, m.text);                       // ✂ выделил кусок в сообщении → окно «в Лорбук чата»
   else if (m.type === 'translate-mes') {                                        // сообщение EN→RU (предпросмотр) — с лентой статуса (как Душа/Критик), можно прервать
     const clearBusy = () => e.source && e.source.postMessage({ type: 'mes-translated', idx: m.idx, text: null }, '*');   // снять спиннер с кнопки без показа перевода
     node._procAbort = false;

@@ -2567,6 +2567,16 @@ html.mobile-mode .tb-left, html.mobile-mode .tb-right { flex: none; }
 .rlm-dialog-input { font-family: var(--mono); font-size: 13px; color: var(--text); background: var(--inset); border: 1px solid var(--corner); border-radius: 3px; padding: 8px 10px; }
 /* Окно фидбека в ленте партии: то же диалоговое окно, но с многострочным полем и галочкой режима. */
 .tg-fb-dlg .rlm-dialog-input { min-height: 74px; resize: vertical; font: inherit; line-height: 1.4; }
+/* Окно ✂ Clip: строки «подпись → поле», текст выделения многострочный, поля во всю ширину. */
+.clip-dlg { min-width: 420px; max-width: 560px; }
+.clip-dlg .clip-row { margin: 8px 0 0; }
+.clip-dlg .clip-lbl { display: flex; align-items: center; gap: 6px; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-bottom: 3px; }
+.clip-dlg .rlm-dialog-input { width: 100%; box-sizing: border-box; }
+.clip-dlg .clip-text { min-height: 86px; resize: vertical; line-height: 1.4; }
+.clip-dlg .clip-gen { background: none; border: 1px solid var(--corner); border-radius: 3px; color: var(--muted); cursor: pointer; font-size: 11px; line-height: 1; padding: 2px 5px; }
+.clip-dlg .clip-gen:hover { color: var(--text); border-color: var(--accent); }
+.clip-dlg .clip-note { margin: 8px 0 0; font-size: 11px; line-height: 1.35; color: var(--muted); }
+.clip-dlg .tr-btns { margin-top: 3px; }
 .tg-fb-dlg .tg-fb-dlg-opt { display: flex; align-items: center; gap: 6px; margin: 8px 0 2px; font-size: 12px; color: var(--muted); cursor: pointer; }
 .tg-fb-dlg .rlm-dialog-btns { flex-wrap: wrap; }
 .rlm-dialog-input:focus { outline: none; border-color: var(--accent); }
