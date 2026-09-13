@@ -574,8 +574,8 @@ const DD_OPTS = {
     { value: 'not_all', label: 'есть не все вторичные', desc: 'Сработает, если хотя бы одного вторичного не хватает.' },
   ],
   embModel: [
-    { value: 'multilingual-e5-small', label: 'multilingual-e5-small · RU', desc: 'Русский + многоязычная, лёгкая (512 ток.). Дефолт для телефона/Termux.' },
-    { value: 'all-MiniLM-L6-v2', label: 'all-MiniLM-L6-v2 · EN', desc: 'Только английский, крошечная (256 ток.). Для импортных англ-карточек.' },
+    { value: 'multilingual-e5-small', label: 'multilingual-e5-small · RU', desc: 'Русский + многоязычная, лёгкая (512 ток.). Оценки у всех записей почти одинаковые — веса лорбука мало что значат.' },
+    { value: 'all-MiniLM-L6-v2', label: 'all-MiniLM-L6-v2 · EN · дефолт', desc: 'Только английский, крошечная (256 ток.). Дефолт: на лорбуке Ептенбурга нужная запись в тройке 21 из 30, разброс оценок вчетверо шире, чем у e5.' },
     { value: 'jina-embeddings-v2-base-en', label: 'jina-embeddings-v2-base-en · EN', desc: 'Только английский, тяжёлая, длинный контекст (8192 ток.). Для ПК.' },
   ],
   tgMode: [
@@ -653,13 +653,30 @@ function ctxLimitForRequest(key, node) {
 // ── ПОЛНАЯ ОСТАНОВКА (кнопка «⏹ Стоп» на панели холста) ────────────────────────────
 // Реестр идущих запросов к модели: рвём их все разом и гасим процессы у нод — чтобы одна кнопка
 // действительно останавливала ВСЁ, что сейчас крутится, а не только текущий ход.
-const RLM_INFLIGHT = new Set();
-let RLM_STOP_ALL = false;
+const RLM_INFLIGHT = new Set();                               // { ac, rid, aborted } — каждый идущий запрос rlmApi
+const RLM_MODEL_PATH = /^\/api\/rlm\/(generate|complete)$/;   // запросы К МОДЕЛИ — им даём rid, их рвёт сервер
+// Сказать серверу «оборви запросы к провайдеру с этими номерами». Мимо rlmApi: сама отмена не должна
+// попадать в реестр и в «Консоль». Electron — тем же мостом, телефон — fetch.
+function rlmAbortOnServer(ids) {
+  if (!ids || !ids.length) return;
+  const body = { ids };
+  try {
+    if (window.rlm && window.rlm.api) { Promise.resolve(window.rlm.api('/api/rlm/abort', body)).catch(() => {}); return; }
+    const base = location.protocol.startsWith('http') ? '' : 'http://127.0.0.1:8100';
+    fetch(base + '/api/rlm/abort', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
+  } catch (_) {}
+}
 function rlmStopEverything() {
-  RLM_STOP_ALL = true;
   let killed = 0;
-  RLM_INFLIGHT.forEach((ac) => { try { ac.abort(); killed++; } catch (_) {} });
+  const rids = [];
+  RLM_INFLIGHT.forEach((q) => {
+    q.aborted = true;                                   // ответ этого запроса уже не применяется
+    if (q.rid) rids.push(q.rid);
+    try { if (q.ac) q.ac.abort(); } catch (_) {}
+    killed++;
+  });
   RLM_INFLIGHT.clear();
+  rlmAbortOnServer(rids);                               // и главное — сервер рвёт запрос к провайдеру
   // ноды: снять их собственные процессы (ленты статуса, «печатает…», очереди Душ)
   document.querySelectorAll('.node-chat, .node-netgame, .node-telegram, .node-groupchat').forEach((n) => {
     n._procAbort = true;
@@ -668,8 +685,27 @@ function rlmStopEverything() {
     if (n._setStatus) { try { n._setStatus('остановлено', 'err'); } catch (_) {} }
   });
   document.querySelectorAll('.node-soul').forEach((n) => { n._memBusy = false; n._ngSoulBusy = false; });
-  setTimeout(() => { RLM_STOP_ALL = false; document.querySelectorAll('.node-chat, .node-netgame, .node-telegram, .node-groupchat').forEach((n) => { n._procAbort = false; }); }, 8000);   // держим окно, пока доедут ответы уже отправленных запросов
+  setTimeout(() => { document.querySelectorAll('.node-chat, .node-netgame, .node-telegram, .node-groupchat').forEach((n) => { n._procAbort = false; }); }, 8000);   // держим окно, пока доедут ответы уже отправленных запросов
   return killed;
+}
+// Настройка «Хостеры» той ноды «API», от которой идёт этот запрос (сопоставляем по base+model).
+// Пусто — ничего не добавляем: пусть OpenRouter решает сам, как и раньше.
+function apiProviderPrefs(base, model) {
+  try {
+    const want = String(base || '').trim().replace(/\/+$/, '');
+    const same = [...document.querySelectorAll('.node-api')].filter((n) => {
+      const b = ((n.querySelector('.f-base') || {}).value || '').trim().replace(/\/+$/, '');
+      const m = ((n.querySelector('.f-model') || {}).value || '').trim();
+      return b === want && (!model || m === String(model).trim());
+    });
+    // Нод «API» на один сервис может быть несколько (комплитер и переводчик) — берём ту, где список
+    // ВПИСАН: иначе настройка из одной ноды не действовала на запросы, ушедшие «от соседней».
+    const hit = same.find((n) => ((n.querySelector('.f-provider') || {}).value || '').trim()) || same[0];
+    if (!hit) return null;
+    const list = ((hit.querySelector('.f-provider') || {}).value || '').split(',').map((x) => x.trim()).filter(Boolean);
+    if (!list.length) return null;
+    return { order: list, allow_fallbacks: ((hit.querySelector('.f-provider-strict') || {}).checked === false) };
+  } catch (_) { return null; }
 }
 async function rlmApi(path, body) {
   // Путь папки памяти нормализуем ОДИН раз здесь: даже если где-то хвост дописали дважды, на диск
@@ -689,6 +725,16 @@ async function rlmApi(path, body) {
       if (tr.dropped) body = { ...body, messages: tr.messages };
     }
   }
+  // ХОСТЕРЫ (OpenRouter): одна модель раздаётся разными провайдерами, и маршрут выбирается на КАЖДЫЙ
+  // запрос. Замер на живой z-ai/glm-5: StreamLake отвечает за 25-49 с, DigitalOcean думает 5-10 минут
+  // (наш потолок ожидания — 2 минуты, значит такие ответы просто не доходят), Baidu вернул пустоту.
+  // Список из ноды «API» уходит в тело запроса как `provider` — OpenRouter понимает его сам.
+  // Ищем ноду по base+model самого запроса: так настройка работает для ВСЕХ вызовов (ход, критик,
+  // память, правка), не трогая каждое место сборки промта.
+  if ((path === '/api/rlm/generate' || path === '/api/rlm/complete') && body && body.base && /openrouter\.ai/i.test(String(body.base))) {
+    const pr = apiProviderPrefs(body.base, body.model);
+    if (pr) body = { ...body, params: { ...(body.params || {}), provider: pr } };
+  }
   // ТЕМПЕРАТУРА (та же логика, что у контекста): вписанная в таблице у этой строки — главнее всего;
   // если в вызове температуры нет вовсе — берём из «Опций» своей цепочки. Зашитую в коде молча не трогаем.
   if ((path === '/api/rlm/generate' || path === '/api/rlm/complete') && body && body.params && body._ctxKey) {
@@ -702,9 +748,13 @@ async function rlmApi(path, body) {
   }
   const entry = CONSOLE_QUIET(path) ? null : consoleLog(path, body);   // журнал ноды «Консоль»: логируем ОРИГИНАЛ (с UI-метками источника _src)
   const sendBody = stripUiFields(body);                                // модели — чистый промт без UI-полей
-  // Каждый идущий запрос держим в реестре — «⏹ Стоп» на панели холста рвёт их все разом.
+  // Каждый идущий запрос держим в реестре — крестик ленты и «⏹ Стоп» рвут их все разом.
+  // Запросу к модели даём номер `rid`: по нему сервер обрывает запрос К ПРОВАЙДЕРУ (POST /abort).
+  // Без этого отмена лишь выбрасывала ответ, а провайдер дорабатывал и списывал токены (см. rlm.js).
   const ac = (typeof AbortController === 'function') ? new AbortController() : null;
-  if (ac) RLM_INFLIGHT.add(ac);
+  const inflight = { ac, rid: null, aborted: false };
+  if (RLM_MODEL_PATH.test(path) && sendBody && typeof sendBody === 'object') { inflight.rid = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); sendBody.rid = inflight.rid; }
+  RLM_INFLIGHT.add(inflight);
   let r;
   try {
     if (window.rlm && window.rlm.api) r = await window.rlm.api(path, sendBody);
@@ -719,14 +769,15 @@ async function rlmApi(path, body) {
       r = await res.json();
     }
   } catch (e) {
-    const stopped = e && (e.name === 'AbortError' || RLM_STOP_ALL);
+    const stopped = e && (e.name === 'AbortError' || inflight.aborted);
     r = { ok: false, error: stopped ? 'остановлено' : String((e && e.message) || e), aborted: !!stopped };
   } finally {
-    if (ac) RLM_INFLIGHT.delete(ac);
+    RLM_INFLIGHT.delete(inflight);
   }
-  // Нажали «⏹ Стоп», пока ответ был в пути (в Electron запрос идёт через мост, оборвать сокет нельзя) —
-  // результат ПРИМЕНЯТЬ НЕЛЬЗЯ: отдаём его как отменённый, движок такой ответ не пишет никуда.
-  if (RLM_STOP_ALL && path === '/api/rlm/generate') r = { ok: false, error: 'остановлено', aborted: true };
+  // Этот запрос отменили, пока он шёл (сервер старый и /abort не знает, или ответ уже был в пути) —
+  // результат ПРИМЕНЯТЬ НЕЛЬЗЯ. Только ЭТОТ запрос: раньше стояло общее окно на 8 секунд, и новый ход,
+  // начатый сразу после «Стопа», тоже выбрасывался.
+  if (inflight.aborted) r = { ok: false, error: 'остановлено', aborted: true };
   if (entry) consoleResolve(entry, r);              // дополнить ответом + перерисовать консоли (для персистенса entry=null — не логируем)
   return r;
 }
@@ -916,8 +967,12 @@ function tokensBox() {
   const box = (typeof lsGet === 'function' ? lsGet(tokensKeyOf(), null) : null);
   if (box && typeof box === 'object') return { tok: box.tok || {}, temp: box.temp || {} };
   // Первый заход этого чата: подхватываем прежние общие значения, чтобы ничего не пропало.
+  const tok = { ...(typeof lsGet === 'function' ? (lsGet(TOK_KEY, null) || {}) : {}) };
+  // Сетевая сборка: старые общие лимиты НИЖЕ сетевого запаса не наследуем — иначе «критик 3000» из старой общей таблицы
+  // перебивал сетевые 8000 в каждом новом сетевом чате, и критик снова оставался без вердикта.
+  try { if (tokNgGraph()) Object.keys(TOK_NG_DEF).forEach((k) => { if (parseInt(tok[k], 10) < TOK_NG_DEF[k]) delete tok[k]; }); } catch (_) { /* реестр ещё не прочитан */ }
   return {
-    tok: (typeof lsGet === 'function' ? (lsGet(TOK_KEY, null) || {}) : {}),
+    tok,
     temp: (typeof lsGet === 'function' ? (lsGet(TEMP_KEY, null) || {}) : {}),
   };
 }
@@ -940,8 +995,17 @@ function tempFromOpts(node) {
   } catch (_) { return null; }
 }
 function tokAll() { return tokensBox().tok; }
-// Значение зашитого лимита: правка из панели или дефолт из реестра.
-function tokVal(key, def) { const v = parseInt(tokAll()[key], 10); return (v > 0) ? v : def; }
+// Сетевая игра — свои лимиты по умолчанию, с запасом (решение Leon: «повысить количество токенов в консоли по умолчанию
+// для сетевых»). Замер стенда 2026-09-13: критик на «Коротком» при 3000 токенов дважды остался без вердикта — мысли
+// съели лимит, при 8000 пустых 0 из 16; пакет Души мира упирался в 5200. Своё число в таблице по-прежнему главнее.
+const TOK_NG_DEF = { 'critic.low': 8000, 'critic.medium': 12000, 'critic.high': 16000, 'soul.think': 12000, 'chat.rewrite': 8000 };
+function tokNgGraph() { try { return !!document.querySelector('#world .node-netgame'); } catch (_) { return false; } }
+// Значение зашитого лимита: правка из панели или дефолт из реестра (в сетевой сборке — сетевой, если он больше).
+function tokVal(key, def) {
+  const v = parseInt(tokAll()[key], 10); if (v > 0) return v;
+  const ng = TOK_NG_DEF[key];
+  return (ng && ng > (def || 0) && tokNgGraph()) ? ng : def;
+}
 // Значение ЗАДАНО РУКАМИ в таблице «Все токены»? Тогда оно главнее «Опций» API (ТЗ: таблица перебивает опции).
 // Пусто/дефолт (записи нет) — слушаем «Опции» конвейера, а если и там пусто, берём дефолт реестра.
 function tokHas(key) { const v = parseInt(tokAll()[key], 10); return v > 0; }
@@ -1056,6 +1120,12 @@ function buildApiNode() {
           <input class="field f-model" spellcheck="false" placeholder="имя модели">
           <div class="dd-list model-list hidden"></div>
         </div></div>
+      <div class="row api-prov-row" title="OpenRouter раздаёт одну модель через РАЗНЫХ хостеров, и маршрут выбирается на каждый запрос: один отвечает за 25 секунд, другой думает 10 минут, третий обрывает генерацию и возвращает пустоту. Впиши имена хостеров через запятую (как в списке провайдеров OpenRouter) — запросы пойдут только к ним, по порядку.">
+        <span class="flabel">Хостеры</span>
+        <input class="field f-provider" spellcheck="false" placeholder="напр.: StreamLake, Together (пусто — любой)"></div>
+      <div class="row api-prov-row2">
+        <label class="api-prov-strict" title="Строго по списку: если ни один из указанных хостеров не доступен, запрос вернёт ошибку, а не уйдёт к случайному. Снято — список только задаёт порядок предпочтения."><input type="checkbox" class="f-provider-strict" checked> только эти, без замен</label>
+      </div>
       <div class="row">
         <button class="btn ghost f-check" type="button">Проверить связь</button>
         <div class="rlm-status"></div>
@@ -1289,6 +1359,7 @@ const INSTRUCT_GUESS = [
   [/command[-\s]?r/i, 'Command R'],
   [/deepseek/i, 'DeepSeek-V2.5'],
   [/glm/i, 'GLM-4'],
+  [/kimi|moonshot/i, 'Moonshot AI'],
   [/phi/i, 'Phi'],
   [/vicuna/i, 'Vicuna 1.1'],
   [/alpaca/i, 'Alpaca'],
@@ -1337,9 +1408,18 @@ function buildInstructPrompt(messages, tpl, mctx) {
     return (голова ? голова + (t.wrap === false ? '' : '\n') : '') + текст + (хвост || '\n');
   };
   let out = '';
-  for (const m of (messages || [])) {
-    const тело = String((m && m.content) || '').trim();
-    if (!тело) continue;
+  const все = (messages || []).filter((m) => String((m && m.content) || '').trim());
+  for (let i = 0; i < все.length; i++) {
+    const m = все[i];
+    const тело = String(m.content || '').trim();
+    // ПРЕФИЛЛ — последняя реплика модели: её НЕ закрываем и новую не открываем, модель продолжает начатый текст.
+    // Раньше префилл закрывался меткой конца (<|im_end|>) и модель начинала ответ заново — замер 2026-09-13 на
+    // Kimi K2-Thinking: открытый префилл 115 с и 2 тыс. токенов против 202 с и 4,2 тыс. без него. Хвостовые
+    // переводы строк префилла сохраняем, имя перед ним не ставим: это буквально начало ответа модели.
+    if (m.role === 'assistant' && i === все.length - 1) {
+      const голова = String(t.last_output_sequence || t.output_sequence || '');
+      return out + (голова ? голова + (t.wrap === false ? '' : '\n') : '') + String(m.content).replace(/^\s+/, '');
+    }
     if (m.role === 'system') out += кусок(t.system_sequence, тело, t.system_suffix, '');
     else if (m.role === 'assistant') out += кусок(t.output_sequence, тело, t.output_suffix, charName);
     else out += кусок(t.input_sequence, тело, t.input_suffix, userName);
@@ -2073,6 +2153,9 @@ function muCreateNodesForRow(row) {
   // цепляет ноды к нажатому ряду независимо от id (даже если он случайно совпал с соседним).
   const link = (node, field) => { const o = findPort(node, 'out'), inp = row.querySelector('.port.in[data-field="' + field + '"]'); if (o && inp) addConnection(o, inp); };
   link(persona, 'persona'); link(soul, 'soul'); link(state, 'state');
+  // Своя модель Душ: если у какой-то Души сборки уже есть «Души · API» — новая Душа игрока пишет той же моделью.
+  const soulsApi = (typeof soulApiNode === 'function') ? [...document.querySelectorAll('.node-soul:not(.nvis)')].filter((s) => s !== soul).map((s) => soulApiNode(s)).find(Boolean) : null;
+  if (soulsApi) { const o = findPort(soulsApi, 'out'), inp = findPort(soul, 'in:api'); if (o && inp) addConnection(o, inp); }
   if (typeof applyNetgameSoulDocs === 'function') applyNetgameSoulDocs(soul);   // Душа игрока: доки под сетевую игру (Inventory)
   const nm = ((row.querySelector('.pm-mu-nm') || {}).textContent || '').trim();  // имя ряда → имя персоны (костюм)
   if (nm) { const ni = persona.querySelector('.ch-name-input'); if (ni) ni.value = nm; }
@@ -2547,7 +2630,10 @@ function applyCard(el, card) {
   });
   const anote = el.querySelector('.ch-anote');                            // Заметки автора = creator_notes (данные ST-карточки, В ПРОМТ НЕ ИДУТ)
   if (anote) anote.value = d.creator_notes || '';
-  if (book) spawnCharacterBook(el, book); // встроенный лорбук карточки → в ноду «Лорбук»
+  el._book = book || null; el._bookKnown = true;   // книга карточки (или её отсутствие) — для проводов, которые протянут позже
+  const wiredBooks = booksWiredToCard(el);
+  if (wiredBooks.length) wiredBooks.forEach((lore) => pushCardBookToLore(el, lore));   // подключено проводом → обновляем ИМЕННО эти лорбуки (другая карточка = её записи вместо прежних)
+  else if (book) spawnCharacterBook(el, book); // встроенный лорбук карточки → в ноду «Лорбук»
   else { const cl = charLorebookNode(); if (cl) fillLorebook(cl, []); } // карточка без лора → чистим лорбук персонажа (контакт обновился)
   el._greetings = guestGreetings(card);   // все приветствия карточки: first_mes + alternate_greetings (непустые)
   el._greetIdx = 0;
@@ -2577,6 +2663,38 @@ function fillLorebook(loreEl, entries) {
   loreEl._sel = loreEl._entries[0] && loreEl._entries[0].id;
   loreRenderList(loreEl); loreRenderEditor(loreEl);
   redrawWires();
+}
+// Встроенный лорбук КАРТОЧКИ, что сейчас в ноде «Персонаж». В самой ноде книга не хранится (в снимок
+// уезжает только строка-итог «имя · N записей»), поэтому: сперва то, что запомнили при applyCard, а
+// после перезагрузки графа — из библиотеки персонажей по имени.
+function charCardBook(charEl) {
+  if (!charEl) return null;
+  // Карточку применяли в этой сессии — верим ноде, в том числе её «книги нет» (иначе поиск по имени
+  // подсунул бы лор ПРЕЖНЕЙ карточки с тем же именем, и лорбук не очищался бы).
+  if (charEl._bookKnown) return charEl._book || null;
+  const nm = ((charEl.querySelector('.ch-name-input') || {}).value || '').trim();
+  if (!nm) return null;
+  const hit = (lsGet(CHAR_LIB_KEY, []) || []).find((c) => ((c && c.name) || '').trim() === nm);
+  const card = (hit && hit.card) || null;
+  return (card && (card.character_book || (card.data && card.data.character_book))) || null;
+}
+// Лорбуки, подключённые проводом ОТ поля «Лорбук» этой карточки. Именно они и есть «контакт с карточкой».
+function booksWiredToCard(charEl) {
+  const fp = charEl && findPort(charEl, 'field:book');
+  if (!fp) return [];
+  return connections
+    .filter((c) => c.from === fp && c.to && c.to.closest)
+    .map((c) => c.to.closest('.node-lore'))
+    .filter((n) => n && !n.classList.contains('node-director'));
+}
+// Перелить карточку в подключённый лорбук. Записи карточки ЗАМЕНЯЮТ прежние (подключил другую карточку —
+// её записи вместо старых), а карточка без встроенного лора лорбук очищает: в нём не должно оставаться
+// чужого лора от прошлой карточки.
+function pushCardBookToLore(charEl, loreEl) {
+  if (!charEl || !loreEl || loreEl.classList.contains('node-director')) return;
+  const book = charCardBook(charEl);
+  fillLorebook(loreEl, book ? parseLorebook(book) : []);
+  if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
 }
 // Найти ноду «Лорбук персонажа» — это scope «персонаж». Определяем по тому, что её выход
 // подключён к плашке `charLore` комплитера (устойчиво к переименованию); запасной поиск — по подписи.
@@ -3009,6 +3127,13 @@ const BOOK_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" s
 const LOREBOOK_ENTRIES = [];
 
 // Разбор лорбука: файл лорбука ST ({entries:{...}}) или встроенный character_book ({entries:[...]}).
+// Порог близости «по смыслу» — на шкале MiniLM (эмбеддер по умолчанию). Замер 2026-09-13 на лорбуке Ептенбурга (30 заявок
+// игроков, без ИИ): у нужных записей в среднем 0,30, у лишних 0,17; порог 0,30 — нужная запись в тройке 19 из 30, лишних в
+// тройках на 28% меньше. Пороги карточек 0,66–0,72 — старая шкала (SW / e5): с MiniLM их не проходит ни одна запись.
+// Решение Leon: «пусть перепишется всё» — порог выше 0,40 считается старой шкалой и становится 0,30 (при загрузке лорбука).
+const SEM_THR_DEF = 0.30;
+const SEM_THR_OLD_SCALE = 0.40;
+function semThrScale(v) { const n = parseFloat(v); return (isFinite(n) && n >= 0 && n <= SEM_THR_OLD_SCALE) ? n : SEM_THR_DEF; }
 function parseLorebook(obj) {
   const raw = obj && obj.entries;
   if (!raw) return [];
@@ -3020,8 +3145,20 @@ function parseLorebook(obj) {
     // Наши надстройки (тип триггера, семантика, метки Режиссёра) лежат в extensions.rlm — их кладёт
     // туда правка лорбука прямо в карточке (loreEntryToBookEntry). Есть — накрываем ими разбор.
     const x = (e.extensions && e.extensions.rlm && typeof e.extensions.rlm === 'object') ? e.extensions.rlm : null;
-    if (x) return Object.assign({ name: e.comment || e.name || '', content: e.content || '' }, x);
+    if (x) { const o = Object.assign({ name: e.comment || e.name || '', content: e.content || '' }, x); if (o.semThreshold != null) o.semThreshold = semThrScale(o.semThreshold); if (o.vecThreshold != null) o.vecThreshold = semThrScale(o.vecThreshold); return o; }
+    // Смысловой слой карточки (формат SW): тип `trigger_type` и фраза-эталон `semantic_trigger` с порогом —
+    // в самой записи или в её extensions. Раньше разбор их не читал: все смысловые записи становились
+    // «по ключам» с пустой фразой (замер 2026-09-13, Ептенбург: 40 из 42). Поле SW главнее внутреннего
+    // `trigger`/`semTrigger` (решение Leon: эталон — `semantic_trigger`). Смысл без фразы сработать не может —
+    // такая запись остаётся на ключах.
+    const ex = e.extensions || {};
+    const tt = String(e.trigger_type || ex.trigger_type || e.trigger || '').trim().toLowerCase();
+    const phrase = String(e.semantic_trigger || ex.semantic_trigger || e.semTrigger || '').trim();
+    const thrRaw = parseFloat(e.semantic_threshold ?? ex.semantic_threshold ?? e.semThreshold);
+    const trig = (tt === 'semantic') ? (phrase ? 'semantic' : '') : ((tt === 'always_on' || tt === 'vectorized' || tt === 'keyword') ? tt : '');
     return {
+      ...(trig ? { trigger: trig } : {}),
+      ...(trig === 'semantic' ? { semTrigger: phrase, semThreshold: semThrScale(thrRaw) } : {}),
       name: e.comment || e.name || '',
       keys: Array.isArray(k) ? k.join(', ') : String(k || ''),
       keys2: Array.isArray(k2) ? k2.join(', ') : String(k2 || ''),
@@ -3041,6 +3178,11 @@ function parseLorebook(obj) {
 // ── Нода Лорбук: мини-приложение (слева список+фильтр, справа редактор записи) ──
 // Записи живут в el._entries (JS-модель); редактор синхронится с выбранной (el._sel).
 let loreSeq = 0;
+// Сколько записей «по смыслу»/«векторизация» уходит в промт за ход (поле ноды «По смыслу — не больше»).
+// Замер 2026-09-13 (e5-small, Ептенбург): всем 40 фразам эмбеддер дал 0,735–0,824 при порогах 0,66–0,72 —
+// порог пропускал всё, и бюджет набирал 12 записей по приоритету, а не по близости к сцене.
+const LORE_SEM_TOPK_DEF = 3;
+const LORE_SEM_QUERY_CHARS = 1600;   // столько знаков сцены сервер кладёт в вектор запроса (embedQuery в rlm-soul.js)
 const LORE_TRIGGERS = [ // полный список (для подписей `[тип]` в списке записей)
   ['keyword', 'По ключам'], ['semantic', 'По смыслу'], ['vectorized', 'Векторизация'], ['always_on', 'Всегда'],
   ['range', 'По акту'], ['random', 'Случайно'], ['chain', 'Цепочка'],
@@ -3082,8 +3224,8 @@ function loreNormEntry(e) {
     // range — окно номеров сообщений; chain — предок + пауза; semantic — фраза-эталон + порог.
     msgMin: e.msgMin ?? 0, msgMax: e.msgMax ?? 0,
     dependsOn: e.dependsOn || '', chainDelay: e.chainDelay ?? 0, dependsOnName: e.dependsOnName || '',
-    semTrigger: e.semTrigger || '', semThreshold: e.semThreshold ?? 0.72,
-    vecThreshold: e.vecThreshold ?? 0.6, // vectorized (ST): порог близости по смыслу самой записи
+    semTrigger: e.semTrigger || '', semThreshold: semThrScale(e.semThreshold),   // шкала MiniLM: выше 0,40 — старая шкала → 0,30
+    vecThreshold: semThrScale(e.vecThreshold), // vectorized (ST): порог близости по смыслу самой записи (та же шкала)
     constant: !!e.constant || e.trigger === 'always_on',
     order: e.order ?? 100,               // приоритет для бюджета (выше order — раньше влезает)
     ignoreBudget: !!e.ignoreBudget,      // запись всегда влезает мимо бюджета
@@ -3436,11 +3578,11 @@ function buildLoreApp(cfg) {
             </div>
             <div class="lb-semblock hidden">
               <label class="lb-f">Фраза-эталон смысла<input class="lb-semtrigger" spellcheck="false" placeholder="напр.: разговор о войне"></label>
-              <label class="lb-f">Порог близости (0–1)<input class="lb-semthr" value="0.72"></label>
+              <label class="lb-f" title="Шкала эмбеддера MiniLM: у подходящих записей обычно 0,25–0,40. Выше 0,40 — старая шкала, при загрузке станет 0,30">Порог близости (0–1)<input class="lb-semthr" value="0.30"></label>
               <div class="lb-hint">SW-стиль: срабатывает, когда смысл сцены близок к твоей фразе-эталону (точнее). ⚠ Нужен «Эмбеддер» (ждёт бэкенд векторов).</div>
             </div>
             <div class="lb-vecblock hidden">
-              <label class="lb-f">Порог близости (0–1)<input class="lb-vecthr" value="0.6"></label>
+              <label class="lb-f" title="Шкала эмбеддера MiniLM: у подходящих записей обычно 0,25–0,40. Выше 0,40 — старая шкала, при загрузке станет 0,30">Порог близости (0–1)<input class="lb-vecthr" value="0.30"></label>
               <div class="lb-hint">ST-стиль (неточная векторизация): срабатывает по вектору САМОЙ записи (её текста), без эталонной фразы — ловит по общему смыслу. ⚠ Нужен «Эмбеддер» (ждёт бэкенд векторов).</div>
             </div>
             <div class="lb-rangeblock hidden">
@@ -3474,6 +3616,8 @@ function buildLoreApp(cfg) {
       <div class="lb-foot">
         <span>Дальность сканирования:</span>
         <input class="lb-scan" value="3"><span class="lb-unit">сообщ.</span>
+        ${cfg.scoped ? `<span title="Записи «По смыслу» и «Векторизация»: из прошедших порог в промт идут только самые близкие к сцене — не больше этого числа. Эмбеддер ставит почти всем записям похожий балл, и без предела срабатывало всё подряд. В сетевой игре число делится между игроками по кругу: каждому — самая близкая к его заявке">По смыслу — не больше:</span>
+        <input class="lb-semk" value="${LORE_SEM_TOPK_DEF}"><span class="lb-unit">зап.</span>` : ''}
         <button class="lb-import" type="button">Импорт JSON</button>
         <button class="lb-export" type="button">Экспорт JSON</button>
       </div>
@@ -3524,6 +3668,7 @@ function buildLoreApp(cfg) {
   const delBtn = el.querySelector('.lb-del'); stop(delBtn);
   delBtn.addEventListener('click', (ev) => { ev.stopPropagation(); const di = el._entries.findIndex((x) => x.id === el._sel); if (di >= 0) el._entries.splice(di, 1); el._sel = el._entries[0] && el._entries[0].id; loreRenderList(el); loreRenderEditor(el); redrawWires(); persistCurrentGraph(); });   // in-place splice — общий массив не отвязываем
   stop(el.querySelector('.lb-scan'));
+  { const sk = el.querySelector('.lb-semk'); if (sk) { stop(sk); sk.addEventListener('change', () => persistCurrentGraph()); } }
   // Мобайл: список записей (оглавление) — выезжающая слева шторка; значок ☰ справа её открывает/прячет,
   // тап по фону-затемнению закрывает. На десктопе кнопка скрыта (CSS), список стоит колонкой как раньше.
   const lbApp = el.querySelector('.lb-app');
@@ -3555,11 +3700,27 @@ function buildLorebookNode() {
 
 // Сервер не принял перезапись дока: модель вернула обрубок, прежняя версия осталась на месте.
 // Показываем это словами — иначе «память не обновилась» выглядит как поломка.
-function memKeepNote(soul, name, w) {
+// Раньше подпись не появлялась вовсе: звался `setNote` — локальная функция `updateMemory`, отсюда её не видно (ReferenceError
+// глотал try). А и появись — её тут же затирала итоговая «Готово: доков обновлено — N». Теперь подпись висит под доками,
+// пока ЭТОТ док не запишется удачно: каждая подпись Души при записи памяти несёт её хвостом. Своя на каждую папку памяти:
+// сменился чат — старые подписи уходят.
+function memKeepNote(soul, name, w, chat) {
   const причина = (w.skipped === 'shrink')
     ? ('ответ модели резко короче прежнего (' + w.kept + ' → ' + w.got + ' зн.)')
     : ((w.skipped === 'short') ? 'ответ модели слишком короткий' : 'ответ модели пуст');
-  try { setNote(soul, '«' + name + '» НЕ перезаписан: ' + причина + ' — прежняя версия сохранена'); } catch (_) {}
+  try {
+    soulKeepFor(soul, chat)[name] = '«' + name + '» НЕ перезаписан: ' + причина + ' — прежняя версия сохранена.';
+    const n = soul.querySelector('.soul-refresh-note'); if (n) n.textContent = soulNoteText(soul, '');
+  } catch (_) {}
+}
+function soulKeepFor(soul, chat) {
+  if (!soul._keep || soul._keepChat !== chat) { soul._keep = {}; soul._keepChat = chat; }
+  return soul._keep;
+}
+function memKeepClear(soul, name, chat) { try { delete soulKeepFor(soul, chat)[name]; } catch (_) {} }   // док записан — подпись снять
+function soulNoteText(soul, text) {
+  const keep = (soul && soul._keep) ? Object.values(soul._keep) : [];
+  return [String(text || '').trim(), ...keep].filter(Boolean).join(' ');
 }
 // ── Душа: доки памяти (референс — плагин soul-md) ──
 // Душа = память в MD на конкретный чат. Файлы («доки») трёх видов:
@@ -3594,7 +3755,7 @@ const SOUL_DOCS = [
   { name: 'Status', kind: 'tracker', desc: 'сейчас: сцена, кто где, вид, состояние, предметы (наст. время)',
     lead: 'The scene as it stands RIGHT NOW — place, positions, clothing, condition, what is at hand. This is the present moment: trust it over anything older in the log and stay consistent with it.',
     prompt: 'Update the "here and now" snapshot by merging the previous version with the new messages. Write in the PRESENT tense, densely, no repetition, up to ~150 words. Keep only the current state — do not carry history. Overwrite the whole file.\n\nTrack:\n- Where the scene takes place; exact positioning and poses of the characters.\n- Time of day, weather, lighting, atmosphere, smells.\n- Who is present, what they wear, visible injuries/fatigue/condition.\n- What they carry (key items, inventory).\n- Each character\'s immediate intentions; any dangers, time limits, or unresolved hooks in the scene.' },
-  { name: 'World', kind: 'tracker', desc: 'факты о мире вокруг: места, лор, NPC, правила, тайны',
+  { name: 'World', kind: 'tracker', squeeze: true, desc: 'факты о мире вокруг: места, лор, NPC, правила, тайны',
     lead: 'Established facts about the world and the people in it — true right now. The world may keep changing, but openly, through what happens in the scene; never quietly undo what is written here. What is not here has not been established — do not present invented details as settled fact.',
     prompt: 'Maintain facts about the world around the scene by merging the previous version with the new. Hard facts only, third person, no fluff, up to ~200 words. Resolve contradictions in favor of the new; remove outdated info. Overwrite the whole file.\n\nInclude:\n- Important places and settings, significant objects.\n- Secondary characters (NPCs): who they are, their role, their attitude.\n- World rules/laws, magic/technology.\n- Revealed secrets, backstories, agreements.\n\nIf nothing new was discovered, keep the established lore.' },
   { name: 'Psyche', kind: 'tracker', desc: 'внутренняя психология {{char}} и отношение к {{user}}',
@@ -3636,7 +3797,7 @@ function soulPresetLead(name, mode) {
 // Набор «один персонаж» / «несколько» = пять дефолтных доков (SOUL_DOCS) с промтами и сопроводительными под режим.
 function soulDefaultSet(mode) {
   return SOUL_DOCS.map((d) => ({
-    name: d.name, kind: d.kind, desc: d.desc, enabled: d.enabled !== false, into: d.into || 'memory',
+    name: d.name, kind: d.kind, desc: d.desc, enabled: d.enabled !== false, into: d.into || 'memory', ...(d.squeeze ? { squeeze: true } : {}),
     prompt: (mode === 'multi' && SOUL_PROMPTS_MULTI[d.name] != null) ? SOUL_PROMPTS_MULTI[d.name] : d.prompt,
     lead: soulPresetLead(d.name, mode),
   }));
@@ -3649,7 +3810,7 @@ const SOUL_PRESET_SETS = {
     { name: 'Status', kind: 'tracker', desc: 'сцена сейчас: место, кто где стоит, чем занят',
       lead: 'Where the scene stands right now. This is the present moment of the game — trust it over anything older in the log.',
       prompt: 'Update the live snapshot of the scene by merging the previous version with the new messages. Present tense, dense, no repetition, up to ~180 words. Current state ONLY — no history. This document alone IS written fresh each time: it is a snapshot of this second, so whatever stopped being true simply goes. The CURRENT VERSION you are shown is the PREVIOUS second — keep from it only what is still happening; an action that has already played out is over and must not appear again. Call every player by their character name from the log; a name they merely gave the world is an alias of that same person — never write it as a second character.\n\nTrack:\n- Where the scene takes place; time of day, weather, lighting, atmosphere.\n- EVERY player character present, BY NAME: where they stand, their pose, what they are doing right now.\n- Who else is present (NPCs) and what they are doing.\n- What is physically happening this second and what is within reach.\n\nList characters by name — never merge them together. If a player left the scene, note where they went.\n\nNOT YOURS — other documents hold these, never write them here: what anyone knows, thinks or feels about a player, and their reputation; anything about to happen — an ultimatum, a countdown, a deadline, a threat not yet carried out (write that the guard stands with his hand on the pommel, never that he gave ten seconds); anything that was already true before this moment. If a line would still be true after everyone walks away, it does not belong here.' },
-    { name: 'World', kind: 'tracker', desc: 'мир: места, NPC, необратимые следы (про игроков — ничего)',
+    { name: 'World', kind: 'tracker', cadence: 'scene', squeeze: true, desc: 'мир: места, NPC, необратимые следы (про игроков — ничего)',
       lead: 'Established facts of the world and its people — treat them as true right now. This is the world, not the players: nothing here describes who the players are or what anyone thinks of them. The world is free to keep changing, but only through what happens in play and in the open: a fact stops being true when the story makes it so, and the change is shown. What is forbidden is quietly undoing it — a killed character alive again, a smashed door intact, a paid debt owed once more — for convenience.',
       prompt: 'Maintain the hard facts of the world by merging the previous version with the new. Third person, facts only, no fluff, up to ~220 words. Resolve contradictions in favor of the new. Output the document in full, carrying over EVERY line of the current version that is still true — word for word if nothing changed. You are UPDATING it, not writing it anew: a line disappears only when it stopped being true or stopped mattering, never because you did not think of it this time.\n\nInclude:\n- IRREVERSIBLE marks left on the world: what was broken, burned, stolen, opened, killed, or paid for.\n- NPCs who matter, as PEOPLE OF THE WORLD: who they are, where they are, what they want, what they are like.\n- Places, factions, prices, and how things work here — only as actually shown in play.\n\nNOT YOURS — other documents hold these, never write them here: the players themselves — NEVER name a player in this file, not their traits, deeds, feelings or relationships (if play revealed a rule of the world, write the rule alone: "magic does not work in the city", never who tried it); what any NPC thinks or feels about a player, and who knows what about whom; the laws of the world; anything pending or about to happen.\n\nDROP a line when it stops mattering to play, even if it is still true — a fire nobody is investigating any more is not worth a line. Record only what happened in the story; never invent.' },
     { name: 'Threads', kind: 'tracker', desc: 'часики: то, что выстрелит само (есть срок или спусковой крючок)',
@@ -3789,6 +3950,7 @@ function buildSoulNode() {
     ${head('🕯', 'Душа')}
     <div class="node-body soul-body">
       <div class="svc-in" data-in="embedder"><span class="port in" data-dir="in" title="Эмбеддер (RAG)"></span><span class="svc-lbl">Эмбеддер</span></div>
+      <div class="svc-in soul-api-in" data-in="api"><span class="port in" data-dir="in" title="← нода «API»: СВОЯ модель для записи памяти. Не подключена — Душа пишет моделью чата, как раньше"></span><span class="svc-lbl">API</span></div>
       <div class="soul-sec">
         <div class="soul-sec-hd soul-docs-hd">
           <span>Доки памяти</span>
@@ -3820,7 +3982,7 @@ function buildSoulNode() {
       <div class="soul-sec soul-sec-engine">
         <div class="soul-sec-hd">Как ИИ ведёт память</div>
         <div class="soul-opts-row">
-          <label class="soul-opt" title="Через сколько новых реплик ИИ перечитывает диалог и переписывает память">каждые<input class="soul-batch" value="4">сообщ.</label>
+          <label class="soul-opt" title="Через сколько новых реплик ИИ перечитывает диалог и переписывает память. 0 — авто-обновление выключено (только вручную, кнопкой «⟳ Обновить память сейчас»)">каждые<input class="soul-batch" value="4">сообщ. <span class="soul-opt-hint">(0 — выкл.)</span></label>
           <label class="soul-opt" title="Окно контекста для записи памяти: сколько последних сообщений ИИ перечитывает, когда переписывает доки (Дневник/Статус/Мир/Психика)">глубина<input class="soul-delta" value="14">посл. сообщ.</label>
           <label class="soul-opt" title="Сколько тем-файлов подтягивать по смыслу в промт (нужен «Эмбеддер»)">тем<input class="soul-topk" value="3"></label>
           <label class="soul-opt" title="Лимит на САМУ запись — сколько токенов ИИ пишет в каждый док. На размышления модели запас добавляется сверху автоматически (мысли в документ не попадают)">лимит, ток.<input class="soul-maxtok" value="400"></label>
@@ -3851,7 +4013,7 @@ function buildSoulNode() {
     if (!chat) { if (note) note.textContent = '⚠ не вижу папку памяти — открой чат/партию'; return; }
     if (!confirm('Стереть все записи памяти этой Души (' + chat + ')? Доки и промты останутся.')) return;
     await rlmApi('/api/rlm/soul/purge', { chat });
-    [master, el].forEach((n) => { n._memory = ''; n._memParts = []; n._memoryUsed = []; n._sinceMem = 0; });
+    [master, el].forEach((n) => { n._memory = ''; n._memParts = []; n._memoryUsed = []; n._sinceMem = 0; n._keep = {}; });
     if (typeof soulFillDocRecords === 'function') { await soulFillDocRecords(master); if (el !== master) await soulFillDocRecords(el); }
     if (note) note.textContent = 'Записи стёрты.';
   });
@@ -4512,7 +4674,8 @@ async function objCheckTask(el, opts) {
   finally { objBusy = false; }
 }
 // Пост-ответный хук: раз в N ответов ИИ — проверить выполнение / (опц.) пересоздать задачи. Как onMessageReceived в плагине.
-function maybeCheckObjective(chatNode) {
+function maybeCheckObjective(chatNode, opts) {
+  if (opts && opts.replaced) return;   // ход ПЕРЕПИСАН (🔄 перегенерация, перекат по фидбеку, вердикт критика), а не новый — счётчики «Цели» не двигаем
   const el = objectiveNodeForChat(chatNode);
   if (!el || !objGoal(el)) return;
   const chk = parseInt((el.querySelector('.obj-check-freq') || {}).value, 10) || 0;
@@ -4905,17 +5068,26 @@ async function memReaderLoad() {
   list.innerHTML = memDocsHtml(docs, 'mem');   // каждый док — своя озаглавленная секция
 }
 // Кандидаты семантики лорбука для теста прозрачности: все semantic/vectorized-записи + их пороги/scope.
+// Модель, выбранная в ноде «Эмбеддер», воткнутой во вход «Эмбеддер» этой ноды (лорбук, Душа). Нет ноды — '' (сервер
+// возьмёт модель из config.yaml). Раньше выбор в ноде никуда не передавался и считалось всегда моделью сервера.
+function embedderModelOf(node) {
+  const inP = node && node.querySelector('.svc-in[data-in="embedder"] .port.in');
+  const c = inP && connections.find((x) => x.to === inP && x.from.closest && x.from.closest('.node-embedder'));
+  const emb = c ? c.from.closest('.node-embedder') : null;
+  return emb ? String((emb.querySelector('.emb-model') || {}).value || '') : '';
+}
 function loreSemanticCandidates() {
   const out = [];
   document.querySelectorAll('.node-lore').forEach((loreEl) => {
     const embIn = loreEl.querySelector('.svc-in[data-in="embedder"] .port.in');
     const hasEmb = !!embIn && connections.some((c) => c.to === embIn && c.from.closest('.node-embedder'));
     const scope = ((loreEl.querySelector('.node-head .label') || {}).textContent || 'Лорбук').trim();
+    const model = embedderModelOf(loreEl);
     (loreEl._entries || []).forEach((e) => {
       if (e.trigger === 'semantic' && (e.semTrigger || '').trim())
-        out.push({ name: loreLabel(e), scope, phrase: e.semTrigger.trim(), content: e.content || '', threshold: Number(e.semThreshold) || 0.72, kind: 'фраза-эталон', hasEmb });
+        out.push({ name: loreLabel(e), scope, phrase: e.semTrigger.trim(), content: e.content || '', threshold: semThrScale(e.semThreshold), kind: 'фраза-эталон', hasEmb, model });
       else if (e.trigger === 'vectorized' && (e.content || '').trim())
-        out.push({ name: loreLabel(e), scope, phrase: e.content.trim(), content: e.content || '', threshold: Number(e.vecThreshold) || 0.6, kind: 'текст записи', hasEmb });
+        out.push({ name: loreLabel(e), scope, phrase: e.content.trim(), content: e.content || '', threshold: semThrScale(e.vecThreshold), kind: 'текст записи', hasEmb, model });
     });
   });
   return out;
@@ -4947,9 +5119,10 @@ async function memReaderSearch() {
   const note = ov.querySelector('.mem-note'), hits = ov.querySelector('.mem-hits');
   if (!query) { hits.innerHTML = ''; note.textContent = ''; return; }
   note.textContent = 'Считаю векторы…'; hits.innerHTML = '';
+  const memModel = embedderModelOf((typeof connectedSoulNodes === 'function' ? connectedSoulNodes() : [])[0]);
   const [diary, topics] = await Promise.all([
-    rlmApi('/api/rlm/soul/diary', { chat: memReaderChat, query, k: 3 }),
-    rlmApi('/api/rlm/soul/topics', { chat: memReaderChat, query, k: 3 }),
+    rlmApi('/api/rlm/soul/diary', { chat: memReaderChat, query, k: 3, model: memModel }),
+    rlmApi('/api/rlm/soul/topics', { chat: memReaderChat, query, k: 3, model: memModel }),
   ]);
   const err = (diary && diary.error) || (topics && topics.error);
   if (err) { note.textContent = 'Ошибка эмбеддера: ' + err + ' (запущен сервер на 8100?)'; return; }
@@ -4961,7 +5134,14 @@ async function memReaderSearch() {
   // Лорбук — что всплыло бы по ЭТОЙ фразе (тест семантики): скорим semantic/vectorized-записи всех лорбуков.
   const cands = loreSemanticCandidates();
   if (cands.length) {
-    const rs = await rlmApi('/api/rlm/soul/score', { query, texts: cands.map((c) => c.phrase) });
+    // по вызову на модель: у разных лорбуков могут быть разные ноды «Эмбеддер»
+    const rs = { scores: new Array(cands.length).fill(null) };
+    for (const m of [...new Set(cands.map((c) => c.model))]) {
+      const idx = cands.map((c, i) => (c.model === m ? i : -1)).filter((i) => i >= 0);
+      const r1 = await rlmApi('/api/rlm/soul/score', { query, texts: idx.map((i) => cands[i].phrase), model: m });
+      if (r1 && r1.error) { rs.error = r1.error; break; }
+      idx.forEach((ci, k) => { rs.scores[ci] = r1 && r1.scores ? r1.scores[k] : null; });
+    }
     if (rs && rs.error) { note.textContent = 'Ошибка эмбеддера: ' + rs.error + ' (запущен сервер на 8100?)'; }
     else if (rs && rs.scores) {
       const scored = cands.map((c, i) => ({ ...c, score: rs.scores[i] })).sort((a, b) => (b.score || 0) - (a.score || 0));
@@ -5068,21 +5248,24 @@ async function refreshSoulMemory(chatNode) {
     const chat = soulMemChat(chatNode, soul);   // у каждой Души — СВОЯ папка (игрок сетевой игры / слот группы / общая)
     const k = Math.max(1, parseInt((soul.querySelector('.soul-topk') || {}).value, 10) || 3);
     try {
+      const model = embedderModelOf(soul);
       const [all, diary, topics] = await Promise.all([
         rlmApi('/api/rlm/soul/all', { chat }),
-        rlmApi('/api/rlm/soul/diary', { chat, query, k }),
-        rlmApi('/api/rlm/soul/topics', { chat, query, k }),
+        rlmApi('/api/rlm/soul/diary', { chat, query, k, model }),
+        rlmApi('/api/rlm/soul/topics', { chat, query, k, model }),
       ]);
       // Собираем ЗАПИСИ по одной: у каждой — свой сопроводительный промт и своё место в промте
       // (в «Память» / следом за описанием персоны игрока / вместо него — поле `into` дока).
       const nrm = (x) => String(x || '').trim().toLowerCase();
       const docByName = (nm) => (soul._docs || []).find((x) => nrm(x.name) === nrm(nm));
-      const docByKind = (k) => (soul._docs || []).find((x) => x.kind === k);
+      const docByKind = (k) => { const ds = (soul._docs || []).filter((x) => x.kind === k); return ds.find((x) => x.enabled) || ds[0]; };   // включённый док этого вида, если есть
       const parts = [];
       // «дополнять/подменять персону» умеет только сборка ряда игрока (сетевая игра). Вне её вставлять некуда,
       // поэтому такой док не теряется, а идёт в «Память» как обычный.
       const inMu = !!(typeof soulMuRow === 'function' && soulMuRow(soul));
-      const push = (name, doc, text) => { if (!(text || '').trim()) return; parts.push({ name, text: text.trim(), lead: String((doc && doc.lead) || '').trim(), into: (inMu && doc && doc.into) || 'memory' }); };
+      // Док, выключенный кнопкой, в промт не идёт — ни ведущему, ни критику, ни в листы игроков (файл на диске цел).
+      // Раньше память собиралась из файлов папки, а флаг дока не смотрелся: выключил Psyche — раздел Psyche оставался.
+      const push = (name, doc, text) => { if (!(text || '').trim()) return; if (doc && !doc.enabled) return; parts.push({ name, text: text.trim(), lead: String((doc && doc.lead) || '').trim(), into: (inMu && doc && doc.into) || 'memory' }); };
       ((all && all.docs) || []).filter((d) => d.group === 'tracker' && (d.text || '').trim())
         .forEach((d) => { const nm = d.name.replace(/\.md$/, ''); push(nm, docByName(nm), d.text); });
       if (diary && (diary.memory || '').trim()) push('Diary (semantic)', docByKind('diary'), diary.memory);
@@ -5095,25 +5278,76 @@ async function refreshSoulMemory(chatNode) {
   }
 }
 
+// Сетевая игра: у каждого игрока свой запрос к смысловому лорбуку — его прошлая и свежая заявка.
+// Сцена целиком смешивает игроков в разных местах, и вектор усредняется. Замер 2026-09-13 на 15 заявках
+// партии Kimi: нужная запись попадала в выбор 2 раза из 15 по сцене, 5 — по свежей заявке, 8 — по прошлой+свежей.
+// Не сетевая игра или заявок нет → null (работает обычный запрос по сцене).
+function netgameLoreQueries(chatNode, msgs) {
+  if (!chatNode || !chatNode.classList || !chatNode.classList.contains('node-netgame')) return null;
+  const mu = (typeof tgNgMuser === 'function') ? tgNgMuser(chatNode) : null; if (!mu) return null;
+  const names = [...mu.querySelectorAll('.pm-mu-row')].map((r) => String(muRowPersonaName(r) || '').trim()).filter(Boolean)
+    .sort((a, b) => b.length - a.length);   // длинные имена первыми: «Nera» не должна ловиться как «Ner»
+  if (!names.length) return null;
+  const heads = names.map((n) => ({ n, re: new RegExp('^\\s*' + n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*:\\s*') }));
+  // Ход приходит одним сообщением «Персона: заявка» построчно; строки без имени — продолжение заявки выше.
+  const split = (text) => {
+    const out = {}; let cur = null;
+    String(text || '').split('\n').forEach((ln) => {
+      const h = heads.find((x) => x.re.test(ln));
+      if (h) { cur = h.n; out[cur] = (out[cur] ? out[cur] + '\n' : '') + ln.replace(h.re, ''); }
+      else if (cur && ln.trim()) out[cur] += '\n' + ln;
+    });
+    return out;
+  };
+  const users = (msgs || []).filter((m) => m && m.role === 'user');
+  const cur = split(users.length ? users[users.length - 1].text : '');
+  const prev = split(users.length > 1 ? users[users.length - 2].text : '');
+  const list = Object.keys(cur).map((name) => ({ name, query: ((prev[name] ? prev[name] + '\n' : '') + cur[name]).trim() })).filter((q) => q.query);
+  return list.length ? list : null;
+}
+
 // Перед сборкой промта: близость сцены к semantic (по фразе-эталону) / vectorized (по тексту
 // записи) для всех лорбуков с подключённым «Эмбеддером». Результат → loreEl._semCache (фраза→балл).
+// Сетевая игра — отдельный запрос на каждого игрока: loreEl._semByPlayer (баллы по игрокам), в кэше — лучший балл.
 async function refreshSemanticLore(chatNode) {
   const msgs = (chatNode && chatNode._msgs) || [];
+  const playerQueries = netgameLoreQueries(chatNode, msgs);
   for (const loreEl of document.querySelectorAll('.node-lore')) {
+    loreEl._semByPlayer = null;
     const embIn = loreEl.querySelector('.svc-in[data-in="embedder"] .port.in');
     const hasEmb = !!embIn && connections.some((c) => c.to === embIn && c.from.closest('.node-embedder'));
     if (!hasEmb) { loreEl._semCache = {}; continue; }
     const scan = parseInt((loreEl.querySelector('.lb-scan') || {}).value, 10);
     const slice = (scan > 0) ? msgs.slice(-scan) : msgs;
-    const scene = slice.map((m) => (m && m.text) || '').join(' ').trim();
+    // Эмбеддер (сервер) берёт из запроса только первые ~1600 знаков. Сцена склеена от старого к новому — и
+    // в вектор шло старое (приветствие), а свежий ход обрезался. Отдаём ХВОСТ: последнее действие важнее.
+    // Замер 2026-09-13: Bardi, с которым только что говорили, стоял 24-м из 40 по голове сцены и 6-м по хвосту.
+    const sceneAll = slice.map((m) => (m && m.text) || '').join(' ').trim();
+    const scene = sceneAll.length > LORE_SEM_QUERY_CHARS ? sceneAll.slice(-LORE_SEM_QUERY_CHARS) : sceneAll;
     const phrases = [];
     (loreEl._entries || []).forEach((e) => {
       if (e.trigger === 'semantic' && (e.semTrigger || '').trim()) phrases.push(e.semTrigger.trim());
       else if (e.trigger === 'vectorized' && (e.content || '').trim()) phrases.push(e.content.trim());
     });
+    if (playerQueries && phrases.length) {
+      try {
+        const cache = {}; const byPlayer = [];
+        for (const q of playerQueries) {
+          const query = q.query.length > LORE_SEM_QUERY_CHARS ? q.query.slice(-LORE_SEM_QUERY_CHARS) : q.query;
+          const r = await rlmApi('/api/rlm/soul/score', { query, texts: phrases, model: embedderModelOf(loreEl) });
+          if (!(r && r.scores)) continue;
+          const own = {};
+          phrases.forEach((p, i) => { const s = r.scores[i]; own[p] = s; if (!(cache[p] >= s)) cache[p] = s; });
+          byPlayer.push({ name: q.name, scores: own });
+        }
+        loreEl._semCache = cache;
+        loreEl._semByPlayer = byPlayer.length ? byPlayer : null;
+      } catch (e) { loreEl._semCache = {}; loreEl._semByPlayer = null; }
+      continue;
+    }
     if (!scene || !phrases.length) { loreEl._semCache = {}; continue; }
     try {
-      const r = await rlmApi('/api/rlm/soul/score', { query: scene, texts: phrases });
+      const r = await rlmApi('/api/rlm/soul/score', { query: scene, texts: phrases, model: embedderModelOf(loreEl) });
       const cache = {};
       if (r && r.scores) phrases.forEach((p, i) => { cache[p] = r.scores[i]; });
       loreEl._semCache = cache;
@@ -5132,7 +5366,7 @@ function docInstruction(soulEl, docId) {
 function memTranscript(chatNode, n) {
   const names = chatNames(chatNode);
   return (chatNode._msgs || []).filter((m) => m.role === 'user' || m.role === 'char')
-    .slice(-(n || 14)).map((m) => (m.role === 'user' ? names.user : names.char) + ': ' + (m.text || '')).join('\n');
+    .slice(-(n || 14)).map((m) => (m.role === 'user' ? dlgUserLabel(chatNode, names) : names.char + ': ') + (m.text || '')).join('\n');
 }
 let soulBusy = false;
 // Отправные данные персонажа(ей) из КАРТОЧКИ для движка памяти: Описание/Личность/Сценарий/Примеры диалогов.
@@ -5187,7 +5421,7 @@ function soulPersonaBaseline(soul) {
 // пишет в СВОЮ папку (chatId:playerId), и {{char}} её доков = имя персоны ряда (как в tgNgUpdateSouls).
 async function runSoulRefresh(el, docId) {
   const note = el.querySelector('.soul-refresh-note');
-  const say = (t) => { if (note) note.textContent = t; };
+  const say = (t) => { if (note) note.textContent = soulNoteText(el._master || el, t); };   // + «док НЕ перезаписан», пока он не записан
   const soul = el._master || el;   // в вижне кнопка живёт на КЛОНЕ, а провода — у мастера
   const chat = document.querySelector('.node-chat');
   const tg = chat ? null : (document.querySelector('.node-netgame') || document.querySelector('.node-telegram'));
@@ -5228,6 +5462,82 @@ function memCleanReply(r) {
   const m = src.match(/<\/think(?:ing)?>([\s\S]*)$/i);
   return m ? m[1].trim() : '';
 }
+// Текст РЕПЛИКИ из ответа модели (ход чата / сетевой игры). `r.text` = content || reasoning — для реплики это
+// ловушка: когда размышления съели весь лимит, content пуст, и репликой становились МЫСЛИ модели. Замер
+// 2026-09-13 (GLM-4.7, Featherless): перекат по вердикту критика — 4000 токенов мыслей, content пуст,
+// игрокам ушло «1. Analyze the User's Input…» в переводе. Теперь это пустой ответ — дальше его ловят
+// штатные ветки «модель вернула пустой ответ» (прошлый ход не трогается).
+function chatReplyText(r) { return memCleanReply(r); }
+// Разрезать ответ писаря тем на файлы: каждая строка «FILE: имя.md» (допускаем **жирный** и обратные
+// кавычки вокруг) открывает новый кусок. Текст до первого FILE — преамбула, выбрасывается. Ни одного
+// FILE — весь ответ одной темой «topic», как раньше.
+function splitTopicFiles(text) {
+  const src = String(text || '');
+  const out = [];
+  const push = (name, body) => {
+    body = String(body || '').trim(); if (!body) return;
+    const nm = String(name || '').replace(/[`*"'\s]+$/g, '').replace(/^[`*"'\s]+/g, '').replace(/\.md$/i, '').trim();
+    out.push({ name: nm || 'topic', body });
+  };
+  const re = /^[ \t]*[*`_]*\s*FILE:\s*([^\n]+?)\s*[*`_]*[ \t]*$/gim;
+  const idx = []; let m;
+  while ((m = re.exec(src))) idx.push({ at: m.index, end: m.index + m[0].length, name: m[1] });
+  if (!idx.length) { push('topic', src); return out; }
+  for (let i = 0; i < idx.length; i++) push(idx[i].name, src.slice(idx[i].end, i + 1 < idx.length ? idx[i + 1].at : undefined));
+  return out;
+}
+// Порог близости для отсева дублей (косинус e5). ПОДБИРАЕТСЯ на живых ходах, а не назначен «по аналогии»:
+// выше — ловит только почти дословные повторы, ниже — начинает выкидывать просто «про одну тему».
+// Живой замер 2026-09-08 (GLM-5, чат-тест, 4 темы против Status/Psyche/Diary/World): настоящие дубли легли
+// на 0.906–0.957, ложные («Leon живёт этажом ниже» ↔ «дверь квартиры Анастасии») — на 0.864–0.894. Порог 0.90.
+const SOUL_DEDUPE_TH = 0.90;
+// У MiniLM своя шкала — баллы ниже, чем у e5. Замер 2026-09-13 без модели на живой памяти (6 чатов с темами + World ↔ трекеры
+// ещё 23 чатов, 66 пар размечены: повтор / разные факты): при 0.82 срезано 11 повторов и ни одного факта; ложные сверху — 0.803
+// («убила многих… сломала хребет» ↔ «убила многих», деталь теряется) и 0.799 (плата и груз Барди теряются). Порог 0.90 на MiniLM
+// ловил только 3 повтора из тех же пар. Остальные модели (e5, jina, без ноды эмбеддера — сервер берёт e5) — прежние 0.90.
+const SOUL_DEDUPE_TH_MINILM = 0.82;
+const soulDedupeTh = (model) => (/minilm/i.test(String(model || '')) ? SOUL_DEDUPE_TH_MINILM : SOUL_DEDUPE_TH);
+// Отсев дублей МЕЖДУ КОМНАТАМИ. Общий блок (Status/World/Psyche/Diary) пишется одним запросом и доки
+// видят друг друга; темы пишутся отдельным промтом и трекеров не видят — поэтому свежие темы сверяем
+// с тем, что уже записано. Кто отдаёт строку — правило хозяина по сроку её жизни:
+//   совпало со Status / Psyche / дневником (сцена, чувства, внутреннее) → режем ИЗ ТЕМЫ;
+//   совпало с World (долговременный факт о человеке — это досье) → режем ИЗ WORLD, World худеет до «мира».
+// Сторож усушки на сохранении действует и здесь: срезали слишком много — запись не принимается, старое остаётся.
+async function soulDedupeTopics(soul, chat, saved, setNote) {
+  try {
+    const all = await rlmApi('/api/rlm/soul/all', { chat }); const docs = (all && all.docs) || [];
+    const isWorld = (n) => /^world\.md$/i.test(String(n || ''));
+    const trackers = docs.filter((x) => x.group === 'tracker' && !isWorld(x.name) && (x.text || '').trim()).map((x) => x.text);
+    const diary = docs.filter((x) => x.group === 'diary' && (x.text || '').trim()).slice(-1).map((x) => x.text);   // последний файл дневника (сегодня)
+    const world = docs.find((x) => x.group === 'tracker' && isWorld(x.name) && (x.text || '').trim());
+    const report = [];
+    const bodies = [];   // темы после чистки — против них потом ОДИН раз сверяется World
+    for (const part of saved) {
+      let body = part.body;
+      const against = [...trackers, ...diary];
+      if (against.length) {
+        const r = await rlmApi('/api/rlm/soul/dedupe', { chat, source: body, against, threshold: soulDedupeTh(embedderModelOf(soul)), model: embedderModelOf(soul) });
+        if (r && r.ok && r.dropped && r.dropped.length) {
+          const w = await rlmApi('/api/rlm/soul/topic-save', { chat, name: part.name, text: r.text });
+          if (w && w.ok !== false) { body = r.text; report.push(`${part.name} −${r.dropped.length}`); }
+          else report.push(`${part.name}: −${r.dropped.length} не принято (${w && w.skipped})`);
+        }
+      }
+      if (body.trim()) bodies.push(body);
+    }
+    // World против ВСЕХ свежих тем одним вызовом. Раньше — по вызову на тему: World худел шагами (199 → 59 слов
+    // на живом прогоне), и каждый шаг по отдельности обходил сторож усушки. Одним вызовом сторож видит всю разницу.
+    if (world && bodies.length) {
+      const r = await rlmApi('/api/rlm/soul/dedupe', { chat, source: world.text, against: bodies, threshold: soulDedupeTh(embedderModelOf(soul)), model: embedderModelOf(soul) });
+      if (r && r.ok && r.dropped && r.dropped.length) {
+        const w = await rlmApi('/api/rlm/soul/tracker', { chat, name: String(world.name).replace(/\.md$/i, ''), text: r.text });
+        if (w && w.ok !== false) report.push(`World −${r.dropped.length}`);
+        else report.push(`World: −${r.dropped.length} не принято (${w && w.skipped})`);
+      }
+    }
+    if (report.length && typeof setNote === 'function') setNote(soul, 'Отсев дублей по смыслу: ' + report.join(', '));
+  } catch (_) { /* отсев — шлифовка; её сбой не должен ронять запись */ }
+}
 async function updateMemory(chatNode, only) {
   // Группа: пишет только Душа АКТИВНОГО слота (говорящего) — в свою личную папку памяти.
   let souls;
@@ -5235,9 +5545,8 @@ async function updateMemory(chatNode, only) {
   else if (typeof isGroupChat === 'function' && isGroupChat(chatNode)) { const s = activeSlotSoul(chatNode); souls = s ? [s] : []; }
   else souls = connectedSoulNodes();
   if (!souls.length || !chatNode) return;
-  const setNote = (soul, s) => { const n = soul.querySelector('.soul-refresh-note'); if (n) n.textContent = s; };
-  const api = chatApi(chatNode);
-  if (!api) { souls.forEach((s) => setNote(s, '⚠ Нужен API с ключом/моделью, подключённый к чату.')); return; }
+  const setNote = (soul, s) => { const n = soul.querySelector('.soul-refresh-note'); if (n) n.textContent = soulNoteText(soul, s); };   // + «док НЕ перезаписан», пока он не записан
+  if (!souls.some((s) => soulApi(s, chatNode))) { souls.forEach((s) => setNote(s, '⚠ Нужен API с ключом/моделью: свой (вход «API» Души) или у чата.')); return; }
   if (soulBusy) return; soulBusy = true;
   const chat = memChatId(chatNode);   // группа: пишем в память активного слота (личный канал перса / мир рассказчика)
   const mctx = (only && only.charName) ? { ...chatNames(chatNode), char: only.charName } : chatNames(chatNode);   // сетевая игра: {{char}} дока = имя персоны (а не движка)
@@ -5251,19 +5560,33 @@ async function updateMemory(chatNode, only) {
   try {
     for (const soul of souls) {
       if (chatNode._procAbort) break;   // ✕ — прервать между Душами
+      soulKeepFor(soul, chat);          // подписи «НЕ перезаписан» от другой папки памяти (сменился чат) — снять
+      const api = soulApi(soul, chatNode);
+      if (!api) { setNote(soul, '⚠ Нужен API с ключом/моделью: свой (вход «API» Души) или у чата.'); continue; }
       const delta = Math.max(2, parseInt((soul.querySelector('.soul-delta') || {}).value, 10) || 14);
       const maxtok = Math.max(50, parseInt((soul.querySelector('.soul-maxtok') || {}).value, 10) || 400);   // лимит ответа (настройка ноды)
       const tempRaw = parseFloat((soul.querySelector('.soul-temp') || {}).value); const temp = isFinite(tempRaw) ? tempRaw : 0.3;
-      const convo = memTranscript(chatNode, delta);
+      const convo = (only && only.convo) || memTranscript(chatNode, delta);   // only.convo — готовый транскрипт (свёрнутая сцена)
       if (!convo.trim()) { setNote(soul, 'Пусто — нечего записывать.'); continue; }
       const pcard = (typeof soulPersonaBaseline === 'function') ? soulPersonaBaseline(soul) : '';   // Душа игрока: отправные данные из его «Персоны»
-      const docs = (soul._docs || []).filter((d) => d.enabled && d.kind !== 'manual' && (!only || d.id === only.docId));   // ручная запись — ИИ её не пишет
-      let done = 0, skipped = 0;
+      // ОБЩИЙ БЛОК (сингл и группа): все доки с одним известным документом — трекеры и дневник — пишутся
+      // ОДНИМ запросом и видят друг друга (граница без единого знака в промте, транскрипт уходит один раз).
+      // Сетевая игра зовёт пачку сама и приходит сюда с `only` — здесь не дублируем. Что пачка не записала
+      // (модель не выдала секцию, пачка не отработала) — допишется ниже по одному.
+      let batched = null;
+      if (!only) {
+        chatProc(chatNode, 'fill', 'Формирование Души · общий блок', { frac: 0, cancelable: true });
+        batched = await updateMemoryBatch(chatNode, soul, '', {});
+        if (batched) procN += batched.size;
+      }
+      const docs = (soul._docs || []).filter((d) => d.enabled && d.kind !== 'manual' && (!only || d.id === only.docId) && !(batched && batched.has(d.id)));   // ручная запись — ИИ её не пишет
+      let done = batched ? batched.size : 0, skipped = 0;
       for (const d of docs) {
         if (chatNode._procAbort) break;   // ✕ — прервать формирование Души между доками
         procN++; if (procTotal) chatProc(chatNode, 'fill', 'Формирование Души · ' + d.name, { frac: (procN - 1) / procTotal, cancelable: true });
-        const instr = substituteMacros(docInstruction(soul, d.id), mctx).trim();
-        if (!instr) { skipped++; continue; }                 // нет подключённой «Систем промт» с инструкцией
+        const instrBase = substituteMacros(docInstruction(soul, d.id), mctx).trim();
+        if (!instrBase) { skipped++; continue; }             // нет подключённой «Систем промт» с инструкцией
+        const instr = instrBase + soulNoGuessRule(soul);
         setNote(soul, `Пишу «${d.name}»…`);
         const dcard = (d.name === 'Psyche' || d.name === 'Diary') ? cardBlock : '';   // карточку подаём ТОЛЬКО в Психику (Psyche) и Дневник (Diary) — остальным дорого и не нужно
         const side = String((only && only.sheet) || '') + memSideBlocks(String((only && only.scene) || '').trim(), String((only && only.state) || '').trim());   // сцена мира + числа Состояния (контекст, не для переписывания)
@@ -5274,24 +5597,43 @@ async function updateMemory(chatNode, only) {
         } else if (d.kind === 'diary') {
           user = `${pcard}${side}${dcard}RECENT CONVERSATION:\n${convo}\n\nWrite the diary entry now.`;
         } else {
-          user = `${pcard}${side}${dcard}RECENT CONVERSATION:\n${convo}\n\nFIRST line: "FILE: <short_snake_case>.md" (the subject). Then the topic content.`;
+          // Формат «файл на тему»: ПРЕЖДЕ чем решить — дополнить существующую тему или завести новую — писарь
+          // читает три темы, ближайшие к сцене (тот же смысловой поиск, что на чтении). Без этого он не видел
+          // ни одной папки и каждый раз писал заново поверх. Ровно три — цифры поиска не трогаем.
+          const near = await rlmApi('/api/rlm/soul/topics', { chat, query: sceneQuery(chatNode, 6), k: 3, model: embedderModelOf(soul) }).catch(() => null);
+          const nearList = ((near && near.entries) || []).filter((t) => (t.text || '').trim());
+          const shelf = nearList.length
+            ? 'EXISTING TOPIC FILES closest to this scene (update one of these by reusing its exact FILE name, or create a new one if the subject is different):\n\n'
+              + nearList.map((t) => `FILE: ${t.name}.md\n${t.text.trim()}`).join('\n\n') + '\n\n'
+            : 'EXISTING TOPIC FILES: none yet.\n\n';
+          user = `${pcard}${side}${dcard}${shelf}RECENT CONVERSATION:\n${convo}\n\nFor EACH topic you write, start it with a line "FILE: <short_snake_case>.md" (the subject), then the topic content. Several topics = several FILE blocks. Output only FILE blocks, nothing else.`;
         }
         const messages = [{ role: 'system', content: instr }, { role: 'user', content: substituteMacros(user, mctx) }];
         const r = await rlmApi('/api/rlm/generate', { _ctxKey: '.soul-maxtok@.node-soul', _ctxNode: soul, base: api.base, key: api.key, model: api.model, messages, params: { max_tokens: maxtok + tokVal('soul.think', MEM_THINK_BUDGET_DEF), temperature: temp } });   // лимит записи + запас на размышления (иначе мысли съедают лимит и запись обрывается)
         const text = memCleanReply(r);
+        if (chatNode._procAbort) break;   // ✕ нажали, пока модель писала этот док: ответ пришёл — не записываем (раньше отмена проверялась только ДО запроса, и док всё равно ложился на диск)
         if (!text) { setNote(soul, `«${d.name}»: пусто/ошибка — ${(r && r.error) || '—'}`); continue; }
         if (d.kind === 'diary') await rlmApi('/api/rlm/soul/append', { chat, text });
         else if (d.kind === 'tracker') {
           const w = await rlmApi('/api/rlm/soul/tracker', { chat, name: d.name, text });
-          if (w && w.ok === false && w.skipped) memKeepNote(soul, d.name, w);   // прежняя версия сохранена — говорим почему
+          if (w && w.ok === false && w.skipped) memKeepNote(soul, d.name, w, chat);   // прежняя версия сохранена — говорим почему
+          else if (w && w.ok !== false) { memKeepClear(soul, d.name, chat); await soulSqueezeDoc(chatNode, soul, chat, d, text, mctx); }   // World длиннее лимита — ужать
         }
         else {
-          let fname = 'topic', body = text; const m = text.match(/^\s*FILE:\s*([^\n]+)\n?/i);
-          if (m) { fname = m[1].trim().replace(/\.md$/i, ''); body = text.slice(m[0].length).trim(); }
-          await rlmApi('/api/rlm/soul/topic-save', { chat, name: fname, text: body });
+          // Ответ режем по КАЖДОЙ строке «FILE: имя.md» — каждый кусок в свой файл. Раньше бралась только
+          // первая, и остальные темы прилипали текстом внутрь первого файла.
+          const saved = [];
+          for (const part of splitTopicFiles(text)) {
+            const w = await rlmApi('/api/rlm/soul/topic-save', { chat, name: part.name, text: part.body });
+            if (w && w.ok === false && w.skipped) memKeepNote(soul, `${d.name} · ${part.name}`, w, chat);
+            else { if (w && w.ok !== false) memKeepClear(soul, `${d.name} · ${part.name}`, chat); saved.push(part); }
+          }
+          // Отсев дублей по смыслу: тема писалась отдельным промтом и трекеров не видела — сверяем с ними.
+          if (saved.length) await soulDedupeTopics(soul, chat, saved, setNote);
         }
         done++;
       }
+      if (chatNode._procAbort) { setNote(soul, 'Формирование Души прервано — записи не тронуты.'); continue; }   // ✕: счётчик не сбрасываем — вопрос вернётся на следующем ответе
       soul._sinceMem = 0;
       setNote(soul, `Готово: доков обновлено — ${done}${skipped ? `, пропущено (нет инструкции) — ${skipped}` : ''}.`);
     }
@@ -5300,6 +5642,15 @@ async function updateMemory(chatNode, only) {
     souls.forEach((s) => soulFillDocRecords(s));   // обновить записи под доками (память изменилась)
     chatNode._procCancel = null; if (procTotal && !chatNode._procAbort) chatProc(chatNode, 'done', 'Душа собрана');
   } finally { soulBusy = false; }
+}
+// Правило писарю Душ СЕТЕВОЙ игры (наборы «ведущий»/«игрок»): писать только то, что сказано в сцене. Status там главнее
+// истории (решение Leon 2026-09-13), и догадка писаря становится фактом: после хода 1 DeepSeek решил, что «мужик у доски,
+// вероятно, клерк», — и клерк стал мужиком до конца партии. Замер на том же ходе, по 5 прогонов: без правила «клерк» 2 из 5
+// и одно «likely», с правилом 0 из 5, нужные факты (Bardi, бочки, дым) на месте во всех.
+function soulNoGuessRule(soul) {
+  const mode = soul && soul._promptMode;
+  if (mode !== 'gm' && mode !== 'player') return '';
+  return '\n\nWRITE ONLY WHAT THE SCENE STATES. Never give an unnamed person a name, title, job or role the text did not give them: keep "the heavy-set man at the board", do not turn him into "the clerk". No guesses and no hedged facts — never write "likely", "probably", "seems to be" or "presumably"; if the text does not say it, leave it out.';
 }
 // Лист МИРА для Души мира: описание и сценарий карточки-движка. Это сеттинг, который И ТАК в промте каждого хода —
 // без него `World` тратит свои слова на пересказ карточки («Вэлоран — горный город…») вместо следов игры.
@@ -5324,41 +5675,103 @@ function memSideBlocks(scene, nums) {
   if (nums) out += 'CURRENT STATE (kept as numbers elsewhere — never put these amounts into words in your documents):' + BSN + nums + BSN + BSN;
   return out;
 }
+// World — КОРОТКИЙ документ, помощник Хроники (Leon 2026-09-13: «ворлд короткий документ как в SW, он небольшой помощник
+// хроникам.. защита от пустоты и защита от переполнения»). Подробности «что было» — в главах Хроники.
+// ПЕРЕПОЛНЕНИЕ: лимит в инструкции («up to ~200 words») модели не держат — в сингл-чатах World доходил до 705 слов, в сетевой
+// 365 при 220. Поэтому док, записанный длиннее лимита, ОДИН раз ужимается моделью Души по правилу SW (строгий лимит; старое
+// и мелкое — в короткую фразу; без повторов). ПУСТОТА: ужатое проходит сторож сервера, но мерка — лимит, а не прежняя длина
+// (иначе честное 705 → 190 слов резалось бы как «усушка»). Не ужалось или пришёл огрызок — остаётся записанное.
+// Ужимать ли док — свойство ЗАПИСИ в наборе доков (`squeeze`, как `cadence`); число — из инструкции самого дока.
+function soulDocSqueeze(soul, d) {
+  if (d && d.squeeze != null) return !!d.squeeze;
+  const set = (soul && typeof soulPresetSet === 'function') ? soulPresetSet(soul._promptMode) : null;
+  const nm = String((d && d.name) || '').trim().toLowerCase();
+  const def = Array.isArray(set) ? set.find((x) => String(x.name).toLowerCase() === nm) : null;
+  return !!(def && def.squeeze);
+}
+function soulDocWordLimit(d) {
+  const m = String((d && d.prompt) || '').match(/\b(?:up to|under)\s*~?\s*(\d{2,4})\s*words\b/i);
+  return m ? parseInt(m[1], 10) : 0;
+}
+const soulWords = (t) => String(t || '').split(/\s+/).filter(Boolean).length;
+async function soulSqueezeDoc(chatNode, soul, chat, d, text, mctx) {
+  try {
+    if (!soulDocSqueeze(soul, d)) return;
+    const limit = soulDocWordLimit(d); const words = soulWords(text);
+    if (!limit || words <= limit || (chatNode && chatNode._procAbort)) return;
+    const api = soulApi(soul, chatNode); if (!api) return;
+    const note = (s) => { const n = soul.querySelector('.soul-refresh-note'); if (n) n.textContent = soulNoteText(soul, s); };   // + «док НЕ перезаписан», пока он не записан
+    note('«' + d.name + '» длиннее лимита (' + words + ' слов при ' + limit + ') — ужимаю…');
+    const maxtok = Math.max(50, parseInt((soul.querySelector('.soul-maxtok') || {}).value, 10) || 400);
+    const tRaw = parseFloat((soul.querySelector('.soul-temp') || {}).value); const temp = isFinite(tRaw) ? tRaw : 0.3;
+    const lead = String(d.lead || '').trim();
+    const user = 'DOCUMENT "' + d.name + '" — ' + words + ' words; its limit is ' + limit + ' words.' + BSN
+      + (lead ? 'WHAT IT IS FOR: ' + lead + BSN : '') + BSN + String(text).trim() + BSN + BSN
+      + 'Shorten this document to UNDER ' + limit + ' words:' + BSN
+      + '1. STRICT LENGTH LIMIT: the whole output under ' + limit + ' words.' + BSN
+      + '2. DO NOT drop vital established facts — the ones the story still depends on.' + BSN
+      + '3. COMPRESSION: condense older and minor facts into single, short sentences; merge lines about the same person, place or thing; drop what stopped mattering.' + BSN
+      + '4. NO REPETITION: never state a fact twice.' + BSN
+      + '5. Nothing new: do not add, guess or change facts.' + BSN
+      + 'Output only the shortened document, no preface.';
+    const r = await rlmApi('/api/rlm/generate', { _ctxKey: '.soul-maxtok@.node-soul', _ctxNode: soul, base: api.base, key: api.key, model: api.model,
+      messages: [{ role: 'system', content: 'You shorten one memory document to fit its word limit, keeping what matters most.' }, { role: 'user', content: substituteMacros(user, mctx || {}) }],
+      params: { max_tokens: Math.max(maxtok, limit * 2) + tokVal('soul.think', MEM_THINK_BUDGET_DEF), temperature: temp } });
+    if (chatNode && chatNode._procAbort) return;   // ✕ нажали, пока модель ужимала: ужатое не пишем
+    const out = memCleanReply(r); const got = soulWords(out);
+    if (!out || got >= words) { note('«' + d.name + '» длиннее лимита (' + words + ' слов при ' + limit + '), ужать не вышло — ' + (out ? 'ответ не короче' : ((r && r.error) || 'пустой ответ')) + '; записанное оставлено.'); return; }
+    const w = await rlmApi('/api/rlm/soul/tracker', { chat, name: d.name, text: out, limit });
+    if (w && w.ok === false) note('«' + d.name + '» ужат до ' + got + ' слов — огрызок для лимита ' + limit + ', не принят; записанное (' + words + ' слов) оставлено.');
+    else if (w) note('«' + d.name + '» ужат: ' + words + ' → ' + got + ' слов (лимит ' + limit + ').');
+  } catch (_) { /* ужатие — страховка: её сбой не должен ронять запись памяти */ }
+}
 // ПАЧКА: все трекеры одной Души обновляются ОДНИМ запросом (а не по документу на запрос) — так они видят
 // друг друга и не расходятся, и ход стоит одного вызова модели. Ответ программно раскладывается по файлам.
 // Возвращает true, если пачка отработала; false — вызывающий пусть идёт обычным путём (по одному).
 async function updateMemoryBatch(chatNode, soul, charName, opts) {
   const seed = !!(opts && opts.seed);   // старт игры: сцены ещё нет, опора — лист Персоны
-  const api = chatApi(chatNode); if (!api) return false;
-  const docs = (soul._docs || []).filter((d) => d.enabled && d.kind === 'tracker' && String(d.prompt || '').trim());
-  if (docs.length < 2) return false;                       // один документ — пачка не нужна
+  const api = soulApi(soul, chatNode); if (!api) return null;
+  // Состав общего блока: все доки, чей результат — ОДИН известный документ: трекеры и дневник. Формат
+  // «файл на тему» (kind topic) идёт отдельным промтом — там имена файлов заранее неизвестны и их может
+  // быть несколько. При посеве (seed) дневника нет: сцены ещё не было, записывать нечего.
+  const skip = opts && opts.skip;                             // доки, которые пачка НЕ пишет: функция (док) → true (World Души мира — раз на сцену)
+  const docs = (soul._docs || []).filter((d) => d.enabled && (d.kind === 'tracker' || (d.kind === 'diary' && !seed)) && String(d.prompt || '').trim() && !(typeof skip === 'function' && skip(d)));
+  if (docs.length < 2) return null;                        // один документ — пачка не нужна
   const chat = soulMemChat(chatNode, soul);
+  soulKeepFor(soul, chat);   // подписи «НЕ перезаписан» от другой папки памяти — снять
   const mctx = charName ? { ...chatNames(chatNode), char: charName } : chatNames(chatNode);
   const delta = Math.max(2, parseInt((soul.querySelector('.soul-delta') || {}).value, 10) || 14);
   const maxtok = Math.max(50, parseInt((soul.querySelector('.soul-maxtok') || {}).value, 10) || 400);
   const tRaw = parseFloat((soul.querySelector('.soul-temp') || {}).value); const temp = isFinite(tRaw) ? tRaw : 0.3;
-  const convo = seed ? '' : memTranscript(chatNode, delta); if (!seed && !convo.trim()) return false;
+  const convo = seed ? '' : memTranscript(chatNode, delta); if (!seed && !convo.trim()) return null;
   const pcard = (typeof soulPersonaBaseline === 'function') ? soulPersonaBaseline(soul) : '';
   const wsheet = String((opts && opts.sheet) || '');           // лист МИРА (карточка-движок) — только для Души мира
   const scene = String((opts && opts.scene) || '').trim();     // свежая сцена от Души МИРА (мир обновляется первым)
   const nums = String((opts && opts.state) || '').trim();      // что уже ведётся числами в ноде «Состояние» этого игрока
   const parts = [];
   for (const d of docs) {
+    if (d.kind === 'diary') {
+      // Дневник не обновляется, а ДОПИСЫВАЕТСЯ: одна новая запись за ход. Прошлую версию не даём — он её не правит.
+      parts.push('### ' + d.name + BSN + 'INSTRUCTION: ' + substituteMacros(String(d.prompt || ''), mctx).trim()
+        + BSN + '(This is a diary: write ONE new entry about the recent conversation. Do not rewrite or repeat older entries.)');
+      continue;
+    }
     const prev = await rlmApi('/api/rlm/soul/get', { chat, name: d.name });
     parts.push('### ' + d.name + BSN + 'INSTRUCTION: ' + substituteMacros(String(d.prompt || ''), mctx).trim()
       + BSN + 'CURRENT VERSION:' + BSN + (String((prev && prev.text) || '').trim() || '(empty)'));
   }
   const sys = 'You keep several short documents about one character. Follow each instruction exactly, keep the documents '
-    + 'consistent with one another, and never repeat in one document what belongs in another.';
+    + 'consistent with one another, and never repeat in one document what belongs in another.' + soulNoGuessRule(soul);
   const user = pcard + wsheet + memSideBlocks(scene, nums) + parts.join(BSN + BSN) + BSN + BSN + (convo ? ('RECENT CONVERSATION:' + BSN + convo + BSN + BSN) : '')
     + (seed ? 'Write every document above for the first time, from the sheet and each instruction. '
         : 'Update each document above, do not start it over: keep everything from its current version that is still true, add what the scene changed, drop only what stopped being true. Output the full updated text of each. ')
     + 'Output them in exactly this form and nothing else:' + BSN
-    + docs.map((d) => '### ' + d.name + BSN + '<the updated document>').join(BSN);
+    + docs.map((d) => '### ' + d.name + BSN + (d.kind === 'diary' ? '<the new diary entry>' : '<the updated document>')).join(BSN);
   const r = await rlmApi('/api/rlm/generate', { _ctxKey: '.soul-maxtok@.node-soul', _ctxNode: soul, base: api.base, key: api.key, model: api.model,
     messages: [{ role: 'system', content: sys }, { role: 'user', content: substituteMacros(user, mctx) }],
     params: { max_tokens: maxtok * docs.length + tokVal('soul.think', MEM_THINK_BUDGET_DEF), temperature: temp } });
-  const out = memCleanReply(r); if (!out) return false;
+  const out = memCleanReply(r); if (!out) return null;
+  if (chatNode._procAbort) return null;   // ✕ нажали, пока модель писала: результат НЕ пишем (сокет в Electron не рвётся — ждём, но выбрасываем)
   // Раскладываем ответ по документам: заголовком считаем строку, где стоит имя дока в любом оформлении
   // (### Имя, **Имя**, «Имя:»). Так разбор не ломается от того, как модель оформила ответ.
   const lines = out.split(String.fromCharCode(10));
@@ -5373,27 +5786,55 @@ async function updateMemoryBatch(chatNode, soul, charName, opts) {
     if (nm) { cur = nm; bag[cur] = bag[cur] || []; continue; }
     if (cur) bag[cur].push(ln);
   }
-  let wrote = 0;
+  // Возвращаем МНОЖЕСТВО id доков, которые реально записаны. Секция, которую модель не выдала (слабая модель
+  // может вернуть две из четырёх), в множество не попадает — вызывающий допишет такой док обычным путём,
+  // по одному. Раньше пачка отвечала «успех», если записался хоть один, и пропавшие доки молча не обновлялись.
+  const wrote = new Set();
   for (const d of docs) {
     const text = (bag[d.name] || []).join(String.fromCharCode(10)).trim();
     if (!text) continue;
-    { const w = await rlmApi('/api/rlm/soul/tracker', { chat, name: d.name, text }); if (w && w.ok === false && w.skipped) memKeepNote(soul, d.name, w); }
-    wrote++;
+    if (d.kind === 'diary') { const w = await rlmApi('/api/rlm/soul/append', { chat, text }); if (w && w.ok !== false) wrote.add(d.id); continue; }
+    const w = await rlmApi('/api/rlm/soul/tracker', { chat, name: d.name, text });
+    if (w && w.ok === false && w.skipped) memKeepNote(soul, d.name, w, chat);
+    else if (w && w.ok !== false) { memKeepClear(soul, d.name, chat); await soulSqueezeDoc(chatNode, soul, chat, d, text, mctx); }   // World длиннее лимита — ужать
+    wrote.add(d.id);   // сторож отклонил огрызок → прежняя версия на месте, второй раз по одному не гоняем
   }
-  if (!wrote && docs.length === 1) {   // модель ответила без заголовков, а док один — это и есть документ
+  if (!wrote.size && docs.length === 1) {   // модель ответила без заголовков, а док один — это и есть документ
     const text = out;
-    if (text) { await rlmApi('/api/rlm/soul/tracker', { chat, name: docs[0].name, text }); wrote++; }
+    if (text) { await rlmApi('/api/rlm/soul/tracker', { chat, name: docs[0].name, text }); wrote.add(docs[0].id); }
   }
-  return wrote > 0;
+  return wrote.size ? wrote : null;
 }
 // Планировщик: после ответа копим реплики; раз в «batch» — авто-обновление памяти (фоном).
-function maybeUpdateMemory(chatNode) {
+// «каждые 0 сообщ.» = авто-обновление ВЫКЛЮЧЕНО (память пишется только вручную, кнопкой ⟳).
+function maybeUpdateMemory(chatNode, opts) {
+  if (opts && opts.replaced) return;   // ход не новый, а ПЕРЕПИСАН (🔄 перегенерация, перекат по фидбеку, вердикт критика) — реплика та же, второй раз не считаем
   // Группа: копит и пишет память Душа АКТИВНОГО слота (говорящего); одиночный — единственная Душа.
   const soul = (typeof isGroupChat === 'function' && isGroupChat(chatNode)) ? activeSlotSoul(chatNode) : connectedSoulNodes()[0];
   if (!soul) return;
-  const batch = Math.max(1, parseInt((soul.querySelector('.soul-batch') || {}).value, 10) || 4);
+  const raw = (soul.querySelector('.soul-batch') || {}).value;
+  const n = parseInt(raw, 10);
+  const batch = Number.isFinite(n) ? n : 4;      // пусто/мусор → 4; ЯВНЫЙ 0 доходит сюда нулём (0 || 4 давал 4 — из-за этого ноль не выключал)
+  if (batch <= 0) return;
   soul._sinceMem = (soul._sinceMem || 0) + 1;
-  if (soul._sinceMem >= batch) updateMemory(chatNode).catch(() => {});
+  if (soul._sinceMem < batch) return;
+  // СИНГЛ: не стартуем сами — спрашиваем в ленте внизу «Душа: обновить память? ✓ / ✕». Причина (Leon):
+  // ответ модели мог не подойти, а память уже пишется по нему. ✕ = «не сейчас»: счётчик не сбрасываем,
+  // перекат и стрелки вопрос не повторяют (они replaced), следующий НОВЫЙ ответ спросит снова.
+  // Группа, сетевая игра и Telegram — как раньше, автоматически.
+  const single = chatNode.classList && chatNode.classList.contains('node-chat')
+    && !(typeof isGroupChat === 'function' && isGroupChat(chatNode))
+    && !chatNode.classList.contains('node-telegram') && !chatNode.classList.contains('node-netgame');
+  if (!single) { updateMemory(chatNode).catch(() => {}); return; }
+  chatNode._soulAsk = true;
+  chatProc(chatNode, 'ask', 'Душа: обновить память по этому ответу?');
+}
+// Ответ на вопрос ленты «Душа: обновить память?» (из кадра чата: ✓ / ✕).
+function soulConfirm(chatNode, yes) {
+  if (!chatNode || !chatNode._soulAsk) return;
+  chatNode._soulAsk = false;
+  if (yes) updateMemory(chatNode).catch(() => {});
+  else chatProc(chatNode, 'idle');   // «не сейчас» — счётчик остаётся, спросим на следующем новом ответе
 }
 // Строка-док: имя + вид + СВОЙ вход-коннектор. Порт биндим вручную — createNode биндит только
 // порты, что есть в момент создания ноды; динамически добавленный док иначе бы не тянул провод.
@@ -5599,7 +6040,11 @@ const RANDOM_CRITIC_PROMPT = 'DICE — this game decides uncertain outcomes by a
   + '(walking, talking, opening an unlocked door) need no roll: do not demand one.\n'
   + '2. WAS THE ROLL HONOURED. A FAILURE must really fail and cost something; a SUCCESS must really work. Reject a failure softened into a partial win, '
   + 'an invented lucky break, an attempt quietly dropped, or a harsh outcome refused — including a wound, a capture, a loss, or death. '
-  + 'The roll is not a suggestion.';
+  + 'The roll is not a suggestion. '
+  // Без этой фразы критик противоречил себе (замер 2026-09-13, ход 10): завернул GLM за «провал, а контракт дали» и Kimi — за
+  // «контракт уже занят, противоречит сюжету». С фразой: ответ GLM по-прежнему заворачивается 3 из 3, ответ Kimi принят 3 из 3 (было 2 из 3).
+  + 'A FAILURE may land as a cost or a lost opportunity — worse terms, a delay, a missed chance — but it never undoes what the story '
+  + 'already established: an open contract or offer stays in the world; the attempt just goes badly or slips away.';
 const RANDOM_QUEUE_LEN = 24;   // сколько исходов держим наготове (кончились — код молча докидывает)
 function randomRoll(chance) { return (Math.random() * 100 < chance) ? 'success' : 'fail'; }
 function randomFillQueue(el, keep) {
@@ -5725,10 +6170,14 @@ function randomCriticBlock(chatNode) {
   const on = el.querySelector('.rnd-on'); if (on && !on.checked) return '';        // выключён — критик про кубики не знает
   if (!(el.querySelector('.rnd-crit-on') || {}).checked) return '';                 // проверка критиком не подключена
   const body = String((el.querySelector('.rnd-crit-p') || {}).value || RANDOM_CRITIC_PROMPT).trim(); if (!body) return '';
-  const many = Array.isArray(el._ngRolls) && el._ngRolls.length;
-  const roll = randomNext(el);
-  const tail = many
-    ? ('The rolls supplied to the reply under review, one per player attempt: ' + randomRollsLine(el._ngRolls) + '.')
+  // Критик судит ответ, который УЖЕ написан по броскам этого хода. К его вызову очередь сдвинута (бросок уходит
+  // с ходом), и её голова — бросок СЛЕДУЮЩЕГО хода: раньше критик получал его и заворачивал честный ответ.
+  // Поэтому берём снимок, который randomTick сделал перед сдвигом; до сдвига — живые броски хода.
+  const rolls = (Array.isArray(el._ngRolls) && el._ngRolls.length) ? el._ngRolls
+    : ((Array.isArray(el._critRolls) && el._critRolls.length) ? el._critRolls : null);
+  const roll = rolls ? null : (el._critRoll || randomNext(el));
+  const tail = rolls
+    ? ('The rolls supplied to the reply under review, one per player attempt: ' + randomRollsLine(rolls) + '.')
     : (roll ? ('The roll supplied to the reply under review was: ' + (roll === 'success' ? 'SUCCESS' : 'FAILURE') + '.') : '');
   return [body, tail].filter(Boolean).join(String.fromCharCode(10) + String.fromCharCode(10));
 }
@@ -5736,8 +6185,11 @@ function randomCriticBlock(chatNode) {
 function randomTick() {
   document.querySelectorAll('.node-random:not(.nvis)').forEach((el) => {
     const on = el.querySelector('.rnd-on');
-    if (on && !on.checked) { el._ngRolls = null; return; }
+    if (on && !on.checked) { el._ngRolls = null; el._critRolls = null; el._critRoll = null; return; }
     const n = (Array.isArray(el._ngRolls) && el._ngRolls.length) ? el._ngRolls.length : 1;   // сетевой ход забрал N исходов — сдвигаем на N
+    // Снимок того, что УШЛО в промт этого хода, — для критика (randomCriticBlock): он зовётся после сдвига.
+    el._critRolls = (Array.isArray(el._ngRolls) && el._ngRolls.length) ? el._ngRolls.slice() : null;
+    el._critRoll = el._critRolls ? null : randomNext(el);
     for (let i = 0; i < n; i++) randomAdvance(el);
     el._ngRolls = null;                                                                       // снимок хода отработал
   });
@@ -6271,7 +6723,7 @@ function guestHistoryText(chatNode) {
   const mctx = chatNames(chatNode);
   const turns = (chatNode._msgs || []).filter((m) => (m.role === 'user' || m.role === 'char') && !m.chrHidden);
   if (!turns.length) return '(the scene has not started yet — empty history)';
-  return turns.map((m) => (m.role === 'user' ? (mctx.user || 'User') : (mctx.char || 'Char')) + ': ' + (m.text || '')).join('\n');
+  return turns.map((m) => (m.role === 'user' ? dlgUserLabel(chatNode, mctx) : (mctx.char || 'Char') + ': ') + (m.text || '')).join('\n');
 }
 // Рассуждение приглашения (off/low/medium/high) — как у Критика: reasoning-режим + БОЛЬШОЙ лимит вывода,
 // т.к. «мысли» reasoning-модели едят тот же max_tokens; плюс контекст большой (карточка+история+итерации).
@@ -7141,7 +7593,7 @@ function dirPlanHistory(node, n) {
   // Свёрнутые в Хронику сообщения (призраки) НЕ шлём: их заменяют сводки сцен/глав — иначе одно и то же
   // прошлое приезжает дважды, сырым текстом и сводкой, и съедает контекст.
   return src.filter((m) => (m.role === 'user' || m.role === 'char') && !m.chrHidden).slice(-(n || 24))
-    .map((m) => (m.role === 'user' ? names.user : names.char) + ': ' + String(m.text || '').replace(/\s+/g, ' ').slice(0, 700)).join('\n');
+    .map((m) => (m.role === 'user' ? dlgUserLabel(node, names) : names.char + ': ') + String(m.text || '').replace(/\s+/g, ' ').slice(0, 700)).join('\n');
 }
 const DIR_PLAN_SYSTEM = `You are the writers' room of a live roleplay: a story planner that keeps the world alive and the plot moving. You never write the characters' replies - you plan what the WORLD does around them. Ground everything in the material you are given; invent nothing that contradicts it.`;
 const DIR_PLAN_R1 = `ROUND 1 of 3 - READ THE ROOM.
@@ -7546,7 +7998,12 @@ function critPromptApplyMode(text, checklist) {
   const i = src.indexOf('\n\n');
   return CRITIC_CHECKLIST_HEAD + (i >= 0 ? src.slice(i) : '');
 }
-const CRITIC_DEFAULT_PROMPT_MP = CRITIC_DEFAULT_PROMPT + '\n\n' + CRITIC_MULTIPLAYER_BLOCK;
+// Мультиплеер (сетевая игра) — на СВОИХ тегах: {{user}} в сетевой игре = первая Персона на холсте, и «не пиши слова
+// {{user}}» касалось одной Mia (замер 2026-09-13). Решение Leon: «multi_user и юзер 1 2 3, как положено, по их порядку
+// в комплитере» — {{user}} не переопределяем, в текстах сетевой игры стоят {{multi_user}} / {{user_N}}.
+const CRITIC_DEFAULT_PROMPT_MP_OLD = CRITIC_DEFAULT_PROMPT + '\n\n' + CRITIC_MULTIPLAYER_BLOCK;   // прежний текст — чтобы узнать нетронутый дефолт и обновить его
+const CRITIC_DEFAULT_PROMPT_MP = CRITIC_DEFAULT_PROMPT.replace(/\{\{user\}\}/g, '{{multi_user}}') + '\n\n'
+  + CRITIC_MULTIPLAYER_BLOCK.replace('{{user}} is not one person: it is a compiled turn of several real people', '{{multi_user}} are not one person: their turn is compiled from several real people');
 const CRITIC_FORMAT = `Reply STRICTLY in this format, in English, nothing else:
 REASON: <1–2 sentences: in character or not and why, with evidence if possible>
 VERDICT: ACCEPT
@@ -7579,6 +8036,7 @@ function buildCriticNode() {
       <div class="crit-hint">Проверяет последний ответ ИИ: не подлиз ли, не безволие, в характере ли. При фальши — заворачивает и перекатывает заново. Ролеплей сам НЕ пишет. Вход ← ножка «Критик» ноды «Чат». Доп. входы (по желанию): «Анти-повтор» ← нода «Программный DRY»; «Цель» ← нода «Цель» (контекст/мотиватор — тумблеры в самой «Цели»).</div>
       <div class="svc-in crit-dry-in" data-in="dry"><span class="port in" data-dir="in" title="← нода «Программный DRY»: список повторов/штампов уходит в проверку критика"></span><span class="svc-lbl">Анти-повтор</span></div>
       <div class="svc-in crit-obj-in" data-in="objective"><span class="port in" data-dir="in" title="← нода «Цель»: текущая задача → в проверку критика (контекст и/или мотиватор — тумблеры в ноде «Цель»)"></span><span class="svc-lbl">Цель</span></div>
+      <div class="svc-in crit-api-in" data-in="api"><span class="port in" data-dir="in" title="← нода «API»: СВОЯ модель для судейства (её «Опции» — сэмплеры проверки). Не подключена — критик берёт API чата, как раньше"></span><span class="svc-lbl">API</span></div>
       <label class="crit-opt crit-wide">Когда проверять<span class="crit-trigger-mount"></span></label>
       <label class="crit-opt crit-wide">Рассуждение критика<span class="crit-reason-mount"></span></label>
       <label class="crit-opt" title="Сколько предыдущих реплик показать критику как ситуацию">реплик в контекст<input class="crit-ctx" value="6"></label>
@@ -7597,7 +8055,7 @@ function buildCriticNode() {
       <div class="crit-sec">
         <div class="crit-sec-hd">Счетовод <span class="crit-sp-hint">(значения «Состояния» — отдельным проходом)</span></div>
         <label class="crit-check"><input type="checkbox" class="crit-tally" checked> 🧮 Считать значения отдельным проходом</label>
-        <div class="crit-odesc">Ведущий пишет сцену и цифр не касается: значения он видит и играет по ним, но тег не пишет. После ответа идёт отдельный короткий запрос — он сравнивает прошлый ход с новым и выдаёт только изменения. Лечит двойное списание (одна рана списывалась каждый ход, пока игрок не «умирал»). Работает и в сетевой игре, и в обычном чате, НЕЗАВИСИМО от того, сработал ли сам критик. Стоит +1 запрос на ход; если переменных нет — запроса не будет.</div>
+        <div class="crit-odesc">Ведущий пишет сцену и цифр не касается: значения он видит и играет по ним, но тег не пишет. После ответа идёт отдельный короткий запрос — он сравнивает прошлый ход с новым и выдаёт только изменения. Лечит двойное списание (одна рана списывалась каждый ход, пока игрок не «умирал»). Работает и в сетевой игре, и в обычном чате, НЕЗАВИСИМО от того, сработал ли сам критик. Стоит +1 запрос на ход; если переменных нет — запроса не будет. Считает моделью критика, если в его вход «API» воткнута своя нода; иначе — моделью чата, и тогда размышления у этого запроса выключены (иначе модель хода думала минуты ради пустого «{}»).</div>
       </div>
       <div class="crit-sec">
         <div class="crit-sec-hd">Блокнот критика <span class="crit-sp-hint">(уроки — правь прямо тут, по одному на строку)</span></div>
@@ -7779,8 +8237,83 @@ function criticNodeForChat(chatEl) {
   const conn = out && connections.find((c) => c.from === out && c.to.closest('.node-critic'));
   return conn ? conn.to.closest('.node-critic') : document.querySelector('.node-critic');
 }
+// СВОЯ модель критика: нода «API», воткнутая в его вход «API». Не подключена — берём API чата
+// (как было раньше). Замер 2026-09-12: судья решает больше, чем промт — на одних и тех же 24
+// нарушениях GLM-5 поймал 12, DeepSeek v4 Pro — 21, и на взрослых сценах GLM в 6 случаях из 10
+// молча отдавал пустоту. Поэтому судью надо уметь ставить отдельно от модели, которая пишет ход.
+function criticApiNode(criticEl) {
+  const inPort = criticEl && findPort(criticEl, 'in:api');
+  const conn = inPort && connections.find((c) => c.to === inPort && c.from.closest('.node-api'));
+  return conn ? conn.from.closest('.node-api') : null;
+}
+// СВОЯ модель Души: нода «API», воткнутая в её вход «API». Не подключена — пишет модель чата, как раньше.
+// Писать память моделью ролевой игры дорого и медленно: на стенде 2026-09-13 Души вела подменённая программно
+// DeepSeek (13–97 с на Душу), а модель игры думала бы минутами. Вход нужен, чтобы это ставилось без подмены.
+function soulApiNode(soul) {
+  const inPort = soul && findPort(soul, 'in:api');
+  const conn = inPort && connections.find((c) => c.to === inPort && c.from.closest('.node-api'));
+  return conn ? conn.from.closest('.node-api') : null;
+}
+function soulApi(soul, chatNode) {
+  const apiEl = soulApiNode(soul);
+  // Без ключа своя нода не годится (пресет мог приехать с DeepSeek, а ключа OpenRouter у человека нет) — тогда пишет модель чата.
+  // Своя — только если база и модель вписаны в САМУ ноду: общие настройки API сюда не подмешиваем (apiCreds их подставлял,
+  // и пустая нода писала общей моделью приложения, а не моделью ведущего — стенд 2026-09-13).
+  if (apiEl) {
+    const f = (sel) => ((apiEl.querySelector(sel) || {}).value || '').trim();
+    const base = f('.f-base'), model = f('.f-model');
+    const key = f('.f-key') || apiKeyFor(((apiEl.querySelector('.dd-current') || {}).textContent || '').trim()) || '';
+    if (base && model && key) return { apiEl, base, key, model, own: true };
+  }
+  const fromChat = chatNode ? chatApi(chatNode) : null;
+  return fromChat ? Object.assign({}, fromChat, { own: false }) : null;
+}
+function criticApi(criticEl, chatNode) {
+  const apiEl = criticApiNode(criticEl);
+  if (apiEl) {
+    const base = ((apiEl.querySelector('.f-base') || {}).value || '').trim();
+    const key = (apiEl.querySelector('.f-key') || {}).value || '';
+    const model = ((apiEl.querySelector('.f-model') || {}).value || '').trim();
+    if (base && model) return { apiEl, base, key, model, own: true };
+  }
+  const fromChat = chatNode ? chatApi(chatNode) : null;
+  return fromChat ? Object.assign({}, fromChat, { own: false }) : null;
+}
+// Сэмплеры критика: «Опции», подключённые к ЕГО API. Нет своего API или опций — null (дефолты как были).
+function criticParams(criticEl) {
+  const apiEl = criticApiNode(criticEl);
+  const opts = apiEl && typeof optionsForApi === 'function' ? optionsForApi(apiEl) : null;
+  if (!opts || typeof readOptionsParams !== 'function') return null;
+  const p = readOptionsParams(opts);
+  // «Ответ, ток.» у критика СВОЙ — считается от длины рассуждения (RMAP), поэтому лимит из «Опций»
+  // не берём: дефолтные 300 обрезали бы разбор на полуслове, и вердикта не было бы вовсе.
+  delete p.max_tokens;
+  return Object.keys(p).length ? p : null;
+}
 // Улики критику из комплитера: карточка персонажа + персона игрока + лорбук/World Info.
 // События Режиссёра (.node-director) НЕ включаем; память идёт своим блоком (её тут пропускаем).
+// Листы игроков сетевой игры для Критика — то же, что уходит ведущему: описание Персоны (с приклеенными к ней
+// записями Души, как Standing) + остальные записи его Души (Inventory, Skills…). Заглушённые игроки — вне суда.
+const CRITIC_PLAYER_SHEETS_HEAD = 'PLAYER SHEETS — who each living player is, what they wear and carry, what they are known for and what they can do (their Persona / Inventory / Standing / Skills). Judge every claim against this: an item not on this list is NOT in their hands, and expertise not listed is NOT theirs:';
+function tgNgPlayerSheetsText(chatNode, ctxText) {
+  const mu = (typeof tgNgMuser === 'function') ? tgNgMuser(chatNode) : null; if (!mu) return '';
+  const sheets = [];
+  [...mu.querySelectorAll('.pm-mu-row')].forEach((row) => {
+    if (typeof tgNgRowMuted === 'function' && tgNgRowMuted(chatNode, row)) return;   // «вне контекста» — не судим
+    const nm = (typeof muRowPersonaName === 'function') ? muRowPersonaName(row) : '';
+    const pTxt = (typeof portContent === 'function') ? String(portContent(row.querySelector('.port.in[data-field="persona"]'), ctxText || []) || '').trim() : '';
+    const soulEl = (typeof muRowSoulNode === 'function') ? muRowSoulNode(row) : null;
+    const parts = ((soulEl && soulEl._memParts) || []).filter((x) => (x.text || '').trim());
+    const repl = parts.filter((p) => p.into === 'replace'), app = parts.filter((p) => p.into === 'append');
+    let body = repl.length ? repl.map((p) => p.text.trim()).join('\n\n') : pTxt;
+    if (app.length) body = [body, ...app.map((p) => p.text.trim())].filter(Boolean).join('\n\n');
+    const docs = parts.filter((p) => p.into !== 'replace' && p.into !== 'append').map((p) => '[' + p.name + '] ' + p.text.trim());
+    const all = [body, ...docs].filter(Boolean).join('\n');
+    if (!nm && !all) return;
+    sheets.push((nm || 'player') + ':\n' + all);
+  });
+  return sheets.join('\n\n');
+}
 function criticEvidence(compEl, ctxText) {
   if (!compEl) return '';
   const seen = new Set(), parts = [];
@@ -7813,7 +8346,7 @@ function criticParse(text) {
   let lesson = '';
   const lm = t.match(/LESSON\s*:?\s*([^\n]+)/i) || t.match(/УРОК\s*:?\s*([^\n]+)/i);
   if (lm) { const l = lm[1].trim(); if (l && !/^(none|нет|-|—|n\/a)\b/i.test(l)) lesson = l; }   // NONE / пусто — урок не пишем
-  return { rejected, reason: reason.slice(0, 400), lesson: lesson.slice(0, 300), raw: t };
+  return { rejected, reason: criticLessonClip(reason, CRITIC_REASON_MAX), lesson: criticLessonClip(lesson), raw: t };
 }
 // ЧИСТЫЙ ответ критика без «мыслей»: новый сервер отдаёт content отдельно от reasoning. Берём content
 // (сняв <think>…</think>), при пустом — хвост после последнего </think> в reasoning; иначе '' = вердикта НЕТ
@@ -7909,8 +8442,8 @@ async function criticJudge(node, critic, opts) {
   if (criticBusy) return;
   critic = critic || criticNodeForChat(node);
   if (!critic) { chatToast(node, 'нет ноды «Критик», подключённой к чату', 'err'); return; }
-  const api = chatApi(node);
-  if (!api) { chatToast(node, 'критику нужен API с ключом/моделью на чате', 'err'); return; }
+  const api = criticApi(critic, node);   // своя нода API у критика → она; иначе API чата (как было)
+  if (!api) { chatToast(node, 'критику нужен API с ключом/моделью — свой (вход «API») или на чате', 'err'); return; }
   const msgs = node._msgs || [];
   let lastIdx = -1;
   for (let i = msgs.length - 1; i >= 0; i--) { if (msgs[i].role === 'char') { lastIdx = i; break; } if (msgs[i].role === 'user') break; }
@@ -7925,35 +8458,24 @@ async function criticJudge(node, critic, opts) {
     const mctx = chatNames(node);
     const ctxN = Math.max(2, parseInt((critic.querySelector('.crit-ctx') || {}).value, 10) || 6);
     const hist = msgs.slice(0, lastIdx).filter((m) => m.role === 'user' || m.role === 'char').slice(-ctxN)
-      .map((m) => (m.role === 'user' ? mctx.user : mctx.char) + ': ' + (m.text || '')).join('\n');
+      .map((m) => (m.role === 'user' ? dlgUserLabel(node, mctx) : mctx.char + ': ') + (m.text || '')).join('\n');
     let mem = '', evidence = '', stateBlk = '', playerSheets = '';
     try {
       await refreshSoulMemory(node);
       if (typeof refreshSemanticLore === 'function') await refreshSemanticLore(node);   // semantic-лорбук успевает посчитаться
+      const isNg = node.classList && node.classList.contains('node-netgame');
+      // Комплитер — ЧАТА, а не API критика: у критика бывает своя нода API, комплитера за ней нет, и улики молча пропадали.
+      const chatA = (typeof chatApi === 'function') ? chatApi(node) : null;
+      const compEl = (typeof completerForApi === 'function') ? completerForApi((chatA && chatA.apiEl) || api.apiEl) : null;
       // Память в блок «что известно»: в группе — активного слота, в СЕТЕВОЙ — только Душа МИРА
       // (души игроков уходят отдельным блоком PLAYER SHEETS; иначе один и тот же лист лёг бы дважды),
       // иначе — первая подключённая Душа.
-      const isNg = node.classList && node.classList.contains('node-netgame');
       const s = (typeof isGroupChat === 'function' && isGroupChat(node)) ? activeSlotSoul(node)
         : (isNg ? ((typeof tgNgWorldSoul === 'function') ? tgNgWorldSoul(node) : null)
                 : (typeof connectedSoulNodes === 'function' ? connectedSoulNodes() : [])[0]);
-      mem = ((s && s._memory) || '').trim(); слота
-      // СЕТЕВАЯ ИГРА: у каждого живого игрока СВОЯ Душа на ряду мультиюзера (Inventory / Standing / Skills).
-      // Критик их не видел — и не мог поймать «достал то, чего нет» или «умею то, чего нет в умениях».
-      const mu = (typeof tgNgMuser === 'function') ? tgNgMuser(node) : null;
-      if (mu) {
-        const sheets = [];
-        [...mu.querySelectorAll('.pm-mu-row')].forEach((row) => {
-          if (typeof tgNgRowMuted === 'function' && tgNgRowMuted(node, row)) return;   // «вне контекста» — не судим
-          const nm = (typeof muRowPersonaName === 'function') ? muRowPersonaName(row) : '';
-          const soulEl = (typeof muRowSoulNode === 'function') ? muRowSoulNode(row) : null;
-          const parts = ((soulEl && soulEl._memParts) || []).filter((x) => (x.text || '').trim());
-          if (!nm && !parts.length) return;
-          sheets.push((nm || 'player') + ':' + String.fromCharCode(10) + parts.map((x) => (x.name ? ('[' + x.name + '] ') : '') + String(x.text).trim()).join(String.fromCharCode(10)));
-        });
-        if (sheets.length) playerSheets = sheets.join(String.fromCharCode(10) + String.fromCharCode(10));
-      }
-      const compEl = (typeof completerForApi === 'function') ? completerForApi(api.apiEl) : null;
+      mem = ((s && s._memory) || '').trim();
+      // СЕТЕВАЯ ИГРА: у каждого живого игрока свой лист — Персона + его Душа (Inventory / Standing / Skills).
+      if (isNg) playerSheets = tgNgPlayerSheetsText(node, node._msgs || []);
       evidence = compEl ? criticEvidence(compEl, node._msgs || []) : '';   // карточка + персона + лорбук/WI (без Режиссёра)
       const st = (typeof stateNodeForChat === 'function') ? stateNodeForChat(node) : null;   // «Состояние» этого чата — Критик следит, что уровни отыграны
       if (st && typeof stateLinesText === 'function') stateBlk = stateLinesText(st, node._msgs || []);
@@ -7966,7 +8488,7 @@ async function criticJudge(node, critic, opts) {
     if (lessons.length) userMsg += 'NOTES YOU FLAGGED BEFORE for this character (watch for these patterns repeating):\n' + lessons.map((s) => '— ' + s).join('\n') + '\n\n';
     if (evidence) userMsg += 'CHARACTER SHEET, USER PERSONA & WORLD INFO (who they are and the world — judge against this):\n' + evidence + '\n\n';
     if (mem) userMsg += 'WHAT IS KNOWN ABOUT THE CHARACTER (memory/facts):\n' + mem + '\n\n';
-    if (playerSheets) userMsg += 'PLAYER SHEETS — what each living player actually wears, carries, is known for and can do (their Inventory / Standing / Skills). Judge every claim against this: an item not on this list is NOT in their hands, and expertise not listed is NOT theirs:' + String.fromCharCode(10) + playerSheets + String.fromCharCode(10) + String.fromCharCode(10);
+    if (playerSheets) userMsg += CRITIC_PLAYER_SHEETS_HEAD + String.fromCharCode(10) + playerSheets + String.fromCharCode(10) + String.fromCharCode(10);
     if (stateBlk) userMsg += 'CURRENT STATE VALUES (the character MUST act consistent with these levels; a value at "MAX"/"near max"/"MIN" whose behaviour is NOT reflected in the reply = OUT OF CHARACTER — reject it):\n' + stateBlk + '\n\n';
     if (hist) userMsg += 'SITUATION (previous lines):\n' + hist + '\n\n';
     const dryD = criticDryData(critic, (typeof chatTurns === 'function') ? chatTurns(node) : []);   // нода DRY на разъёме «Анти-повтор» → в проверку
@@ -7983,7 +8505,10 @@ async function criticJudge(node, critic, opts) {
     // REASON/VERDICT/LESSON нужно оставить место — иначе разбор обрывается на полуслове (баг «не дописал текст»).
     const RMAP = { off: { r: { enabled: false }, max: tokVal('critic.off', 1500) }, low: { r: { effort: 'low' }, max: tokVal('critic.low', 4000) }, medium: { r: { effort: 'medium' }, max: tokVal('critic.medium', 9000) }, high: { r: { effort: 'high' }, max: tokVal('critic.high', 14000) } };
     const rc = RMAP[lvl] || RMAP.low;
-    const params = { max_tokens: rc.max, temperature: 0.4, reasoning: rc.r };
+    const params = Object.assign({ max_tokens: rc.max, temperature: 0.4 }, criticParams(critic) || {}, { reasoning: rc.r });
+    // «Рассуждение» остаётся за селектором ноды, а не за «Опциями»; и если мысли включены, не даём
+    // своему max_tokens опустить потолок ниже рассчитанного — иначе разбор оборвётся до VERDICT.
+    if (lvl !== 'off' && params.max_tokens < rc.max) params.max_tokens = rc.max;
     // Усиление рамки «нет пользователя»: ядерный = text-completion (гасит 1+2); иначе кейс в system + префилл.
     const nuclear = (critic.querySelector('.crit-nuclear') || {}).checked;
     const useSys = !nuclear && ((critic.querySelector('.crit-sys') || {}).checked !== false);
@@ -8021,14 +8546,31 @@ async function criticJudge(node, critic, opts) {
       return;
     }
     const reason = v.reason || 'out of character';   // ЗАВОРОТ — снести реплику и перекатить
-    critic._lessons = critic._lessons || [];   // в блокнот — ОБОБЩЁННЫЙ урок (LESSON), а не разовую причину; NONE не пишем
-    if (v.lesson && critic._lessons[critic._lessons.length - 1] !== v.lesson) { critic._lessons.push(v.lesson); if (critic._lessons.length > 20) critic._lessons = critic._lessons.slice(-20); criticRenderLessons(critic); persistCurrentGraph(); }
+    if (v.lesson) criticAddLesson(critic, v.lesson);   // в блокнот — ОБОБЩЁННЫЙ урок (LESSON), а не разовую причину; NONE не пишем
+    const _cjOld = node._msgs[lastIdx];   // отклонённый ответ останется ВАРИАНТОМ (‹ ›), его фидбеки перейдут на новый
+    const _cjDir = (_cjOld && Array.isArray(_cjOld.fbs) && _cjOld.fbs.length) ? joinFbs(_cjOld.fbs.concat([reason])) : reason;   // вердикт + накопленные замечания пользователя
+    try { allowShrink(chatlogKeyOf(node._chatId)); allowShrink(chatgraphKeyOf(current.chatId)); } catch (_) {}   // заворот — намеренное укорочение, серверу можно
     node._msgs.length = lastIdx;   // снести отклонённый ответ (и всё после — на случай авто-хвостов)
     while (node._msgs.length && node._msgs[node._msgs.length - 1].role === 'sys') node._msgs.pop();
     // «Переписываю…» показывает лента (перекат = генерация); верхняя плашка не нужна
     renderChatLogs(node);
     // Перекат с вердиктом впереди; noCritic — потолок 1 попытка (перекат заново не судим).
-    await generateReply(node, { directive: reason, noCritic: true, rejectedText: replyText, fromCritic: true });   // вердикт критика, а не ручная правка — настройки как у обычного хода
+    await generateReply(node, { directive: _cjDir, noCritic: true, rejectedText: replyText, fromCritic: true });   // вердикт критика, а не ручная правка — настройки как у обычного хода
+    // Перекат не удался (провайдер не ответил, пусто) — ответ НЕ меняется, как в сетевой игре: возвращаем исходный.
+    // Было (стенд 2026-09-13): репликой становилось «⚠ Таймаут: провайдер не ответил», а исходный уходил в варианты ‹ ›.
+    const _cjJ = lastCharIdx(node);
+    const _cjNew = _cjJ >= lastIdx ? node._msgs[_cjJ] : null;   // новая реплика — только на месте снесённой, не прошлый ход
+    const _cjTxt = _cjNew ? String(_cjNew.text || '').trim() : '';
+    if (_cjOld && (!_cjNew || /^⚠/.test(_cjTxt) || _cjTxt === '…' || !_cjTxt.replace(/\((пустой ответ|empty response)\)/gi, '').trim())) {
+      if (_cjNew) node._msgs.splice(_cjJ, 1, _cjOld); else node._msgs.push(_cjOld);
+      _cjOld.pending = false;
+      renderChatLogs(node);
+      maybeAutoSpeak(node, lastCharIdx(node));
+      chatToast(node, 'критик завернул ответ, но перекат не удался' + (/^⚠/.test(_cjTxt) ? ' (' + _cjTxt.replace(/^⚠\s*/, '') + ')' : '') + ' — оставлен исходный ответ', 'err');
+      node._procCancel = null; if (!node._procAbort) chatProc(node, 'idle');
+      return;
+    }
+    carryVariants(node, _cjOld);
     // На НОВОЙ реплике — видимая метка «переписано критиком: причина».
     for (let i = node._msgs.length - 1; i >= 0; i--) {
       if (node._msgs[i].role === 'char') {
@@ -8071,16 +8613,8 @@ async function criticLearnFromFeedback(node, feedback, oldReply, newReply) {
     const v = criticParse(criticCleanOutput(r));   // чистый ответ без «мыслей»
     // Кнопку нажал пользователь — значит правило должно появиться. Модель ослушалась и ответила NONE?
     // Пишем его замечание как есть: сырая формулировка лучше, чем молча потерянное решение.
-    if (!v.lesson) v.lesson = String(feedback || '').trim().slice(0, 300);
-    if (v.lesson) {
-      critic._lessons = critic._lessons || [];
-      if (critic._lessons[critic._lessons.length - 1] !== v.lesson) {
-        critic._lessons.push(v.lesson);
-        if (critic._lessons.length > 20) critic._lessons = critic._lessons.slice(-20);
-        criticRenderLessons(critic); persistCurrentGraph();
-        chatToast(node, 'критик записал урок из фидбека', 'ok');
-      }
-    }
+    if (!v.lesson) v.lesson = criticLessonClip(feedback);
+    if (v.lesson && await criticAddLesson(critic, v.lesson)) chatToast(node, 'критик записал урок из фидбека', 'ok');
   } catch (e) { /* обучение опционально */ }
   finally { chatProc(node, 'idle'); }
 }
@@ -8101,14 +8635,9 @@ async function criticLearnFromApproval(node, feedback, replyText, criticReason) 
     const v = criticParse(criticCleanOutput(r));
     // Кнопку нажал пользователь — значит правило должно появиться. Модель ослушалась и ответила NONE?
     // Пишем его замечание как есть: сырая формулировка лучше, чем молча потерянное решение.
-    if (!v.lesson) v.lesson = String(feedback || '').trim().slice(0, 300);
+    if (!v.lesson) v.lesson = criticLessonClip(feedback);
     if (v.lesson) {
-      critic._lessons = critic._lessons || [];
-      if (critic._lessons[critic._lessons.length - 1] !== v.lesson) {
-        critic._lessons.push(v.lesson);
-        if (critic._lessons.length > 20) critic._lessons = critic._lessons.slice(-20);
-        criticRenderLessons(critic); persistCurrentGraph();
-      }
+      await criticAddLesson(critic, v.lesson);
       chatToast(node, 'критик записал урок: ' + v.lesson.slice(0, 60), 'ok');
     } else {
       chatToast(node, 'критик счёл это разовым — урок не записал', 'ok');
@@ -8137,7 +8666,8 @@ async function criticRunModel(critic, api, sys, caseText) {
   const lvl = (critic.querySelector('.crit-reason') || {}).value || 'low';
   const RMAP = { off: { r: { enabled: false }, max: tokVal('critic.off', 1500) }, low: { r: { effort: 'low' }, max: tokVal('critic.low', 4000) }, medium: { r: { effort: 'medium' }, max: tokVal('critic.medium', 9000) }, high: { r: { effort: 'high' }, max: tokVal('critic.high', 14000) } };
   const rc = RMAP[lvl] || RMAP.low;
-  const params = { max_tokens: rc.max, temperature: 0.4, reasoning: rc.r };
+  const params = Object.assign({ max_tokens: rc.max, temperature: 0.4 }, criticParams(critic) || {}, { reasoning: rc.r });
+  if (lvl !== 'off' && params.max_tokens < rc.max) params.max_tokens = rc.max;   // мыслям нужен потолок
   const nuclear = (critic.querySelector('.crit-nuclear') || {}).checked;
   const useSys = !nuclear && ((critic.querySelector('.crit-sys') || {}).checked !== false);
   const usePref = !nuclear && ((critic.querySelector('.crit-prefill') || {}).checked !== false);
@@ -8165,16 +8695,50 @@ function tgApiCreds(el) {
   if (!base || !model) return null;
   return { base, key, model, apiEl };
 }
-// Записать обобщённый урок в блокнот критика (дедуп по последнему + потолок 20). Общий helper.
+// Записать обобщённый урок в блокнот критика. Общий helper (без ожидания — отсев дублей идёт фоном).
 function tgCriticRecordLesson(critic, lesson) {
   if (!critic || !lesson) return;
-  critic._lessons = critic._lessons || [];
-  if (critic._lessons[critic._lessons.length - 1] !== lesson) {
-    critic._lessons.push(lesson);
-    if (critic._lessons.length > 20) critic._lessons = critic._lessons.slice(-20);
-    if (typeof criticRenderLessons === 'function') criticRenderLessons(critic);
-    if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
+  criticAddLesson(critic, lesson);
+}
+// Урок в блокнот критика — без обрыва на полуслове и без повторов. Похожий по смыслу урок (эмбеддер) заменяется
+// новым: новый обычно точнее и попадает в свежие 8, что уходят в промт. Замер 2026-09-13 на 19 уроках блокнота:
+// дубли 0.84–0.96, разные уроки 0.78–0.886. Порог 0.89 уже склеивал разное («провал стоит» ↔ «успех работает», 0.893),
+// поэтому 0.90: сливаются только явные повторы. Эмбеддер не ответил — пишем как раньше.
+const CRITIC_LESSON_MAX = 600;
+const CRITIC_LESSON_DUP = 0.90;
+// Причина отказа уходит ведущему в ноту переката — целиком (решение Leon 2026-09-13). Раньше резалась на 400 знаках
+// посреди слова: на стенде обрезана в 3 отказах из 8. Длинная — по концу фразы.
+const CRITIC_REASON_MAX = 1500;
+function criticLessonClip(s, max) {
+  const lim = max || CRITIC_LESSON_MAX;
+  const t = String(s || '').replace(/\s+/g, ' ').trim();
+  if (t.length <= lim) return t;
+  const cut = t.slice(0, lim);
+  const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+  return end > lim / 2 ? cut.slice(0, end + 1) : cut.replace(/\s+\S*$/, '') + '…';   // по концу фразы, иначе по целому слову
+}
+
+async function criticAddLesson(critic, lesson) {
+  const l = criticLessonClip(lesson);
+  if (!critic || !l) return false;
+  const snap = (critic._lessons || []).slice();
+  if (snap.includes(l)) return false;
+  let dupText = null;
+  if (snap.length) {
+    try {
+      const r = await rlmApi('/api/rlm/soul/score', { query: l, texts: snap });
+      if (r && Array.isArray(r.scores)) { let best = -1, at = -1; r.scores.forEach((s, i) => { if (s > best) { best = s; at = i; } }); if (best >= CRITIC_LESSON_DUP) dupText = snap[at]; }
+    } catch (_) { dupText = null; }
   }
+  const cur = critic._lessons || [];   // пока ждали эмбеддер, блокнот могли поправить руками — работаем с актуальным
+  if (cur.includes(l)) return false;
+  const di = dupText != null ? cur.indexOf(dupText) : -1;
+  if (di >= 0) cur.splice(di, 1);
+  cur.push(l);
+  critic._lessons = cur.length > 20 ? cur.slice(-20) : cur;
+  if (typeof criticRenderLessons === 'function') criticRenderLessons(critic);
+  if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
+  return true;
 }
 // Суд критика над ответом бота (Telegram). Строит кейс (улики + память + состояние netgame + история беседы +
 // блокнот) и возвращает вердикт {rejected, reason, lesson} — БЕЗ мутаций (перекат делает telegramReply). null — ошибка/нет.
@@ -8183,13 +8747,27 @@ async function tgCriticJudge(el, critic, api, convo, replyText, compEl, mctx) {
     const ctxN = Math.max(2, parseInt((critic.querySelector('.crit-ctx') || {}).value, 10) || 6);
     const msgs = (convo && convo.msgs) || [];
     const dlg = msgs.filter((m) => m.role === 'user' || m.role === 'char');
-    const hist = dlg.slice(-ctxN - 1, -1)   // история ДО проверяемой реплики (последняя = проверяемая)
-      .map((m) => (m.role === 'user' ? (mctx.user || 'User') : (mctx.char || 'Character')) + ': ' + (m.text || '')).join('\n');
-    let mem = '', evidence = '', stateBlk = '';
+    // История ДО проверяемой реплики. Авто-критик Telegram/сетевой игры зовётся ДО того, как ответ лёг в историю:
+    // хвост беседы — это сам ХОД ИГРОКОВ, и старое `slice(-N-1, -1)` отрезало именно его — критик судил ответ,
+    // не видя, на что тот отвечает (замер 2026-09-13: в SITUATION было только приветствие). Отрезаем хвост,
+    // только если он и есть проверяемый ответ.
+    const lastDlg = dlg[dlg.length - 1];
+    const tailIsReply = !!(lastDlg && lastDlg.role === 'char' && String(lastDlg.text || '').trim() === String(replyText || '').trim());
+    // Ход сетевой игры уже подписан построчно («Mia: …», «Ner: …»); подпись {{user}} дала бы «Mia: Mia: … Ner: …»
+    // (в сетевой игре {{user}} = первая Персона) — будто всё написала одна Mia.
+    const ng = el.classList.contains('node-netgame');
+    const hist = (tailIsReply ? dlg.slice(-ctxN - 1, -1) : dlg.slice(-ctxN))
+      .map((m) => (m.role === 'user' ? (ng ? 'PLAYERS (one line per player)' : (mctx.user || 'User')) : (mctx.char || 'Character')) + ': ' + (ng && m.role === 'user' ? '\n' : '') + (m.text || '')).join('\n');
+    let mem = '', evidence = '', stateBlk = '', playerSheets = '';
     try {
-      const s = (typeof connectedSoulNodes === 'function' ? connectedSoulNodes() : [])[0]; mem = ((s && s._memory) || '').trim();
+      // Сетевая игра: «что известно» — Душа мира (та, что на плашке «Память»), а не первая Душа на холсте: при другом порядке
+      // нод первой оказалась бы Душа игрока. Души игроков идут отдельно — листами игроков (решение Leon 2026-09-13).
+      const s = (ng && typeof tgNgWorldSoul === 'function' && tgNgWorldSoul(el)) || (typeof connectedSoulNodes === 'function' ? connectedSoulNodes() : [])[0]; mem = ((s && s._memory) || '').trim();
       evidence = compEl ? criticEvidence(compEl, msgs) : '';
       if (el.classList.contains('node-netgame') && typeof tgNgStateBlock === 'function') stateBlk = tgNgStateBlock(el) || '';
+      // Листы игроков — то же, что видит ведущий. Без них критик заворачивал верное: «у Ner нет такого заклинания»
+      // (магия — в её Персоне), «игрок сказал бензопила» (цеп — в её инвентаре). Замер 2026-09-13.
+      if (ng) playerSheets = tgNgPlayerSheetsText(el, msgs);
     } catch (e) { /* улики опциональны */ }
     const promptText = critPromptApplyMode((trSafeVal(critic.querySelector('.crit-prompt')) || CRITIC_DEFAULT_PROMPT).trim(), !!((critic.querySelector('.crit-checklist') || {}).checked));   // галочка «проверка по списку» меняет вступление
     const ngExtra = el.classList.contains('node-netgame') ? ('\n\n' + substituteMacros(NETGAME_CRITIC_DIRECTIVES, mctx)) : '';   // директивы «игрок не всесилен» — ТОЛЬКО в сетевой игре
@@ -8204,6 +8782,7 @@ async function tgCriticJudge(el, critic, api, convo, replyText, compEl, mctx) {
       const roster = tgNgNames(el).filter((n) => n !== (mctx.char || ''));
       if (roster.length) userMsg += 'PLAYERS AT THE TABLE RIGHT NOW (each is a SEPARATE living person with their own sheet, state and memory — never merge them, never let one act for another, never leave one without a consequence):\n' + roster.map((n, k) => (k + 1) + '. ' + n).join('\n') + '\n\n';
     }
+    if (playerSheets) userMsg += CRITIC_PLAYER_SHEETS_HEAD + '\n' + playerSheets + '\n\n';
     if (stateBlk) userMsg += 'CURRENT STATE VALUES (the character MUST act consistent with these levels; a value at "MAX"/"near max"/"MIN" whose behaviour is NOT reflected in the reply = OUT OF CHARACTER — reject it):\n' + stateBlk + '\n\n';
     if (hist) userMsg += 'SITUATION (previous lines):\n' + hist + '\n\n';
     userMsg += 'REPLY UNDER REVIEW (latest line by ' + (mctx.char || 'the character') + '):\n' + replyText;
@@ -8227,7 +8806,7 @@ async function tgCriticLearn(el, feedback, oldReply, newReply) {
     if (!(r && r.ok)) return;
     const v = criticParse(criticCleanOutput(r));
     // Кнопку нажал пользователь — правило должно появиться; модель промолчала → пишем само замечание.
-    tgCriticRecordLesson(critic, v.lesson || String(feedback || '').trim().slice(0, 300));
+    tgCriticRecordLesson(critic, v.lesson || criticLessonClip(feedback));
   } catch (e) { /* обучение опционально */ }
 }
 // Ручной фидбек из панели ноды Telegram: переписать ПОСЛЕДНИЙ ответ бота по замечанию.
@@ -8739,7 +9318,7 @@ async function chronicleWrite(chrEl, opts) {
     const scene = msgs.slice(from, to);
     if (scene.length < 2) { note('Сцена слишком короткая — нечего сжимать (отметь ►◄ или напиши больше).'); chatToast(chatNode, 'сцена коротка — нечего сжимать', 'err'); return; }
     const mctx = chatNames(chatNode);
-    const convo = scene.map((m) => (m.role === 'user' ? mctx.user : mctx.char) + ': ' + (m.text || '')).join('\n');
+    const convo = scene.map((m) => (m.role === 'user' ? dlgUserLabel(chatNode, mctx) : mctx.char + ': ') + (m.text || '')).join('\n');
     const style = (chrEl.querySelector('.chr-style') || {}).value || 'summary';
     const nKeys = Math.max(3, parseInt((chrEl.querySelector('.chr-keys') || {}).value, 10) || 20);
     const maxtok = Math.max(200, parseInt((chrEl.querySelector('.chr-maxtok') || {}).value, 10) || 4000);
@@ -8815,6 +9394,8 @@ async function chronicleWrite(chrEl, opts) {
     note(`✓ Записано в «${(lore.querySelector('.node-head .label') || {}).textContent || 'лорбук'}»: «${finalTitle}» (${trigNote}).`);
     chatToast(chatNode, `записана сцена ${num} · «${finalTitle}»`, 'ok');
     chatNode._procCancel = null; if (!chatNode._procAbort) chatProc(chatNode, 'done', 'Сцена записана');
+    // Сетевая игра: сцена свёрнута → Душа мира дописывает World по ВСЕЙ сцене (раз на сцену, а не каждый ход). Фоном.
+    if (chatNode.classList && chatNode.classList.contains('node-netgame')) tgNgWorldSceneUpdate(chatNode, convo).catch(() => {});
   } catch (e) { note('⚠ ' + String(e && e.message || e)); chatNode._procCancel = null; chatProc(chatNode, 'idle'); }
   finally { chronicleBusy = false; }
   // После записи сцены — авто-консолидация (если включена): busy уже снят в finally.
@@ -9055,6 +9636,7 @@ function closeChatVision() {
   if (master && view) {
     // Досинхронить крутилки ноды (не в общем _entries): дальность сканирования и область — чтобы вид и нода не расходились.
     const ms = master.querySelector('.lb-scan'), vs = view.querySelector('.lb-scan'); if (ms && vs) ms.value = vs.value;
+    const mk = master.querySelector('.lb-semk'), vk = view.querySelector('.lb-semk'); if (mk && vk) mk.value = vk.value;   // «По смыслу — не больше» — туда же
     const msc = master.querySelector('.lb-scope-dd'), vsc = view.querySelector('.lb-scope-dd');
     if (msc && vsc && msc.value !== vsc.value) { msc.value = vsc.value; const l = master.querySelector('.node-head .label'); if (l) l.textContent = loreTitleOf(vsc.value); }
     master._sel = view._sel;
@@ -9178,11 +9760,15 @@ function apiRoleLabel(apiEl) {
     if (conn.from.closest('.node-prompt, .node-mprompt')) return 'Комплитер · API';
     if (conn.from.closest('.node-translator')) return 'Переводчик · API';
   }
+  // Судья: у критика связь идёт в ДРУГУЮ сторону — выход API воткнут в его вход «API».
+  const outPort = apiEl.querySelector(':scope > .port.out');
+  if (outPort && connections.some((c) => c.from === outPort && c.to.closest && c.to.closest('.node-critic'))) return 'Критик · API';
+  if (outPort && connections.some((c) => c.from === outPort && c.to.closest && c.to.closest('.node-soul'))) return 'Души · API';   // писарь памяти — тоже вход «API» у самой Души
   return 'API';
 }
 // Роль ноды сэмплеров («Опции» / «Локал-сэмплеры») = роль API, который она настраивает:
 // «Опции · Комплитер» (движок ответа) или «Опции · Перевод». Не подключена — просто «Опции».
-const API_ROLE_SUFFIX = { 'Комплитер · API': 'Комплитер', 'Переводчик · API': 'Перевод' };
+const API_ROLE_SUFFIX = { 'Комплитер · API': 'Комплитер', 'Переводчик · API': 'Перевод', 'Критик · API': 'Критик', 'Души · API': 'Души' };
 function optsRoleLabel(optsEl, base) {
   const outPort = optsEl.querySelector(':scope > .port.out');
   const conn = outPort && connections.find((c) => c.from === outPort && c.to.closest && c.to.closest('.node-api'));
@@ -9342,6 +9928,85 @@ function openClipDialog(chatNode, selected) {
   });
   текст.focus();
 }
+// ── ✂ Clip в ЛЕНТЕ ноды («Телеграм» и «Телеграм сетевая игра») ────────────────────────────────
+// В одиночном чате ножницы живут внутри кадра ST (moonlit/chat.html). Здесь ленты кадра нет — реплики
+// рисуются прямо в ноде, поэтому кнопка своя, но окно ОДНО И ТО ЖЕ (openClipDialog → «Лорбук чата»).
+// Правила те же, что в чате: нет выделения — нет кнопки; кнопка встаёт ПОД концом выделения; палец
+// ловится отдельно (выделение пальцем не даёт mouseup).
+(function wireFeedClip() {
+  let fab = null, curText = '', curNode = null, armed = false, selT = null;
+  const hide = () => { if (!armed && fab) { fab.style.display = 'none'; curText = ''; curNode = null; } };
+  function ensureFab() {
+    if (fab) return fab;
+    fab = document.createElement('button');
+    fab.type = 'button'; fab.id = 'rlm-feed-clip-fab';
+    fab.innerHTML = '<span class="cic">✂</span>Clip';
+    document.body.appendChild(fab);
+    const fire = () => {
+      armed = false;
+      const t = curText, n = curNode;
+      fab.style.display = 'none'; curText = ''; curNode = null;
+      const s = window.getSelection(); if (s) s.removeAllRanges();
+      if (t && n) openClipDialog(n, t);
+    };
+    fab.addEventListener('pointerdown', (e) => e.stopPropagation());            // не тащить холст/ноду за кнопку
+    fab.addEventListener('mousedown', (e) => e.preventDefault());               // не сбрасывать выделение до клика
+    fab.addEventListener('touchstart', () => { armed = true; }, { passive: true });
+    fab.addEventListener('touchcancel', () => { armed = false; });
+    fab.addEventListener('touchend', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const t = e.changedTouches && e.changedTouches[0], b = fab.getBoundingClientRect();
+      const on = !t || (t.clientX >= b.left - 8 && t.clientX <= b.right + 8 && t.clientY >= b.top - 8 && t.clientY <= b.bottom + 8);
+      if (!on) { armed = false; hide(); return; }                               // палец увели с кнопки — это не нажатие
+      fire();
+    });
+    fab.addEventListener('click', (e) => { e.stopPropagation(); fire(); });
+    return fab;
+  }
+  // Выделение внутри ТЕКСТА реплики ленты (не в поле правки) → {text, конец выделения, нода}.
+  function selInFeed() {
+    const sel = window.getSelection && window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+    const text = (sel.toString() || '').trim();
+    if (!text) return null;
+    const anc = sel.anchorNode && (sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement);
+    if (!anc) return null;
+    const txt = anc.closest('.tg-txt');
+    if (!txt || txt.querySelector('textarea, input') || !txt.closest('.tg-feed')) return null;
+    if (!txt.closest('.tg-feed').contains(sel.focusNode)) return null;
+    const node = txt.closest('.node');
+    if (!node) return null;
+    const range = sel.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) return null;
+    const rs = range.getClientRects();
+    return { text, rect, last: (rs && rs.length) ? rs[rs.length - 1] : rect, node };
+  }
+  function update() {
+    const st = selInFeed();
+    if (!st) { hide(); return; }
+    const f = ensureFab();
+    curText = st.text; curNode = st.node;
+    f.style.display = 'flex';
+    const bw = f.offsetWidth || 62, bh = f.offsetHeight || 26;
+    let x = Math.min(st.last.right + 6, window.innerWidth - bw - 6); x = Math.max(6, x);
+    let y = st.last.bottom + 6;
+    if (y + bh > window.innerHeight - 4) y = Math.max(4, st.rect.top - bh - 4);   // внизу не влезло — над выделением
+    f.style.left = x + 'px'; f.style.top = y + 'px';
+  }
+  const later = () => setTimeout(update, 0);
+  document.addEventListener('mouseup', later);
+  document.addEventListener('touchend', later);
+  document.addEventListener('touchcancel', later);
+  document.addEventListener('pointerup', later);
+  document.addEventListener('selectionchange', () => {
+    const s = window.getSelection();
+    if (!s || s.isCollapsed) { hide(); return; }
+    clearTimeout(selT); selT = setTimeout(update, 250);   // маркеры выделения на телефоне: событий пачка
+  });
+  document.addEventListener('scroll', () => { armed = false; hide(); }, true);   // лента/холст поехали — координаты кнопки уже не те
+  window.addEventListener('wheel', () => { armed = false; hide(); }, { passive: true });
+})();
 // ── Меню «Инструменты» (🔧) в чате: вижны нод, у которых нет своей кнопки внизу (Персонаж/карточка,
 //    Пользователь/персона, Промт комплитер, ноды API — подписаны ролью, Хроника, Озвучка, Программный DRY —
 //    если подключён, Транслитер). Клик → вижн ноды в чате. ──
@@ -9538,8 +10203,8 @@ function buildEmbedderNode() {
     <div class="node-body emb-body">
       <label class="emb-f">Модель
         <select class="emb-model">
-          <option value="multilingual-e5-small">multilingual-e5-small · RU · дефолт</option>
-          <option value="all-MiniLM-L6-v2">all-MiniLM-L6-v2 · EN</option>
+          <option value="multilingual-e5-small">multilingual-e5-small · RU</option>
+          <option value="all-MiniLM-L6-v2" selected>all-MiniLM-L6-v2 · EN · дефолт</option>
           <option value="jina-embeddings-v2-base-en">jina-embeddings-v2-base-en · EN</option>
         </select>
       </label>
@@ -10816,6 +11481,9 @@ function tgVisNodes(el) {
     const port = findPort(el, pk);
     if (port) connections.forEach((c) => { if (c.from === port && c.to && c.to.closest) add(c.to.closest('.node')); });
   });
+  // Своя модель судьи: нода API критика (её «Опции» откроются вместе с ней) — иначе настройки
+  // проверки из чата недоступны, хотя сам критик в полосе есть.
+  out.slice().forEach((n) => { if (n.classList.contains('node-critic') && typeof criticApiNode === 'function') add(criticApiNode(n)); });
   // Перевод — часть игры (входящие/исходящие реплики через него), поэтому в полосе есть и он:
   // «Транслитер» и «Переводчик · API» (его «Опции» откроются вместе с API, отдельной кнопкой не идут).
   document.querySelectorAll('.node-translator').forEach(add);
@@ -11194,7 +11862,8 @@ function tgStatusRender(el) {
   if (fill) fill.style.width = (p && (p.state === 'fill' || p.state === 'grow')) ? (Math.round(Math.max(0, Math.min(1, p.frac || 0)) * 100) + '%') : '';
   if (x) {
     x.style.display = (p && p.cancelable) ? '' : 'none';
-    if (!x._wired) { x._wired = true; x.addEventListener('pointerdown', (e) => e.stopPropagation()); x.addEventListener('click', (e) => { e.stopPropagation(); if (typeof el._procCancel === 'function') el._procCancel(); }); }
+    // Крестик ленты Telegram / сетевой игры — как крестик чата: рвёт ВСЕ идущие генерации, включая запрос у провайдера.
+    if (!x._wired) { x._wired = true; x.addEventListener('pointerdown', (e) => e.stopPropagation()); x.addEventListener('click', (e) => { e.stopPropagation(); try { rlmStopEverything(); } catch (_) { if (typeof el._procCancel === 'function') el._procCancel(); } }); }
   }
 }
 // Процесс ноды — то же, что лента над вводом в чате (`chatProc` для безэкранного чата приходит сюда).
@@ -11469,10 +12138,38 @@ async function tgHandleUpdate(el, token, u) {
 function tgAutoTr(el) { return !!(el.querySelector('.tg-auto-tr') || {}).checked; }
 // Перевод для бота с ОДНИМ ретраем: переводчик (нейро/сервис) при лимите/затыке молча отдаёт null,
 // а бот тогда шлёт оригинал — «не переводится». Пауза + повтор ловит транзиентные сбои. null — не вышло и после повтора.
-async function tgTranslateRetry(text, to, mode) {
-  let t = await trTranslate(text, to, mode);
-  if (t == null) { await tgSleep(700); t = await trTranslate(text, to, mode); }
+async function tgTranslateRetry(text, to, mode, opts) {
+  let t = await trTranslate(text, to, mode, opts);
+  if (t == null) { await tgSleep(700); t = await trTranslate(text, to, mode, opts); }
   return t;
+}
+// Словарь входному переводчику сетевой игры: снаряжение ЭТОГО игрока (его Inventory — он и так по-английски) и
+// имена мира из лорбуков. Переводчик видит одну строку игрока: без словаря «цеп» уходил в «chainsaw», Критик заворачивал
+// верный ответ с «flail» из листа, а Души вписывали бензопилу в инвентарь (замер 2026-09-13).
+async function tgNgTranslateGlossary(el, persona) {
+  const out = [];
+  try {
+    const mu = tgNgMuser(el);
+    const row = mu ? [...mu.querySelectorAll('.pm-mu-row')].find((r) => muRowPersonaName(r) === persona) : null;
+    if (row && row.dataset.player && typeof memPath === 'function') {
+      const all = await rlmApi('/api/rlm/soul/all', { chat: memPath(partyChatId(el), row.dataset.player) });
+      const inv = ((all && all.docs) || []).find((d) => /^inventory(\.md)?$/i.test(String(d.name || '')));
+      const txt = String((inv && inv.text) || '').replace(/\s+/g, ' ').trim();
+      if (txt) out.push("The player's own gear: " + txt.slice(0, 700));
+    }
+  } catch (_) { /* без снаряжения — только имена */ }
+  const names = new Set();
+  document.querySelectorAll('.node-lore:not(.nvis):not(.node-director)').forEach((lore) => (lore._entries || []).forEach((e) => {
+    if (e.mm || e.hiddenBy) return;                                      // главы Хроники — не имена
+    let nm = String(e.name || '').trim(); if (!nm) return;
+    const parts = nm.split(' — '); if (parts.length > 1) nm = /^\d+$/.test(parts[0].trim()) ? parts[1].trim() : parts[0].trim();
+    nm.split(' / ').map((s) => s.trim()).filter(Boolean).forEach((n) => {
+      const words = n.split(/\s+/);
+      if (words.length === 1 ? /^\p{Lu}/u.test(n) : words.slice(1).some((w) => /^\p{Lu}/u.test(w))) names.add(n);   // имя собственное, а не «The dwarven beer»
+    });
+  }));
+  if (names.size) out.push('Names in this world (keep exactly as written, never translate): ' + [...names].join(', '));
+  return out.join('\n');
 }
 
 // Адресовано ли сообщение боту: reply на его сообщение ИЛИ @упоминание его username в тексте.
@@ -11584,7 +12281,7 @@ async function tgNgSendTurn(el, token, chatId, threadId) {
   if (!cid) { el._setStatus('нет чата — сначала кто-то должен написать боту', 'err'); return; }
   // Перевод RU→EN — ТОЛЬКО здесь (на «Собрать ход»), построчно, чтобы имена персон НЕ переводились.
   let lines = turn;
-  if (tgAutoTr(el)) { lines = []; let trFail = false; for (const t of turn) { const tr = await tgTranslateRetry(t.text, 'en', 'replace'); if (tr == null) trFail = true; lines.push({ ...t, text: (tr != null ? tr : t.text) }); } if (trFail) el._setStatus('⚠ часть реплик хода не перевелась — ушёл оригинал', 'err'); }
+  if (tgAutoTr(el)) { lines = []; let trFail = false; for (const t of turn) { const glossary = await tgNgTranslateGlossary(el, t.persona); const tr = await tgTranslateRetry(t.text, 'en', 'replace', { glossary }); if (tr == null) trFail = true; lines.push({ ...t, text: (tr != null ? tr : t.text) }); } if (trFail) el._setStatus('⚠ часть реплик хода не перевелась — ушёл оригинал', 'err'); }
   // Ход уходит ОДНИМ сообщением, а игроков в нём может быть трое. Заявки одного игрока склеиваем в ОДНУ
   // реплику: у игрока всегда одна заявка за ход — сколько бы действий он в неё ни написал.
   const byPersona = [];
@@ -11617,8 +12314,9 @@ async function tgNgSendTurn(el, token, chatId, threadId) {
   await telegramReply(el, token, cid, compiled, threadId);
   // Пачка-обновление Душ мультиперсоны: раз в N ходов (настройка ноды). Фоном, ход не блокируем.
   el._ngTurnCount = (el._ngTurnCount || 0) + 1;
-  const nb = Math.max(1, parseInt((el.querySelector('.tg-ng-batch') || {}).value, 10) || 1);
-  if (el._ngTurnCount % nb === 0) tgNgUpdateSouls(el).catch(() => {});
+  const nbRaw = parseInt((el.querySelector('.tg-ng-batch') || {}).value, 10);
+  const nb = Number.isFinite(nbRaw) ? nbRaw : 1;   // пусто/мусор → 1; ЯВНЫЙ 0 доходит нулём (`|| 1` раньше превращал его в 1 — ноль не выключал)
+  if (nb > 0 && el._ngTurnCount % nb === 0) tgNgUpdateSouls(el).catch(() => {});
 }
 // Старт игры: у игроков ещё нет ни одной записи — сформировать ПЕРВУЮ версию их трекеров (Inventory, Standing
 // и любых других включённых) ИЗ ОПИСАНИЯ ПЕРСОНЫ: истории нет, опора только на неё. Уже написанные документы
@@ -11627,11 +12325,11 @@ async function tgNgSeedPlayerDocs(el) {
   const say = (t, k) => { if (el._setStatus) el._setStatus(t, k || 'err'); };
   const mu = (typeof tgNgMuser === 'function') ? tgNgMuser(el) : null; if (!mu) { say('нет слота мультипользователя — документы игроков не заполнить'); return; }
   const base = partyChatId(el); if (!base) { say('нет истории партии — документы игроков не заполнить'); return; }
-  const api = chatApi(el); if (!api) { say('нет API с ключом у ноды — документы игроков не заполнить'); return; }
   for (const row of [...mu.querySelectorAll('.pm-mu-row')]) {
     if (typeof tgNgRowMuted === 'function' && tgNgRowMuted(el, row)) continue;   // заглушённый — не игрок
     const nmRow = (typeof muRowPersonaName === 'function') ? muRowPersonaName(row) : '';
     const soul = muRowSoulNode(row); if (!soul) { say('к ряду «' + (nmRow || row.dataset.player) + '» не подключена нода «Душа»'); continue; }
+    const api = soulApi(soul, el); if (!api) { say('нет API с ключом — ни своего у Души, ни у ноды: документы игроков не заполнить'); return; }
     const sheet = (typeof soulPersonaBaseline === 'function') ? soulPersonaBaseline(soul) : '';
     if (!sheet) { say('у «' + (nmRow || row.dataset.player) + '» пустое описание Персоны — из чего писать документы?'); continue; }
     const chat = memPath(base, row.dataset.player);              // личная папка памяти этого игрока
@@ -11641,7 +12339,7 @@ async function tgNgSeedPlayerDocs(el) {
     const tRaw = parseFloat((soul.querySelector('.soul-temp') || {}).value); const temp = isFinite(tRaw) ? tRaw : 0.3;
     if (el._setStatus) el._setStatus('готовлю документы · ' + (charName || 'игрок') + '…', 'ok');
     let wrote = await updateMemoryBatch(el, soul, charName, { seed: true });   // ВСЕ трекеры игрока — одним запросом
-    if (!wrote) {   // пачка не отработала — пишем документы по одному, чтобы окно не осталось пустым
+    if (!wrote || !wrote.size) {   // пачка не отработала — пишем документы по одному, чтобы окно не осталось пустым
       for (const d of (soul._docs || []).filter((x) => x.enabled && x.kind === 'tracker' && String(x.prompt || '').trim())) {
         const instr = substituteMacros(String(d.prompt || ''), mctx).trim();
         const user = sheet + 'Write "' + d.name + '" for ' + (charName || 'this character')
@@ -11698,6 +12396,34 @@ async function tgNgStartGame(el, token, chatId, threadId) {
 // Обновить Души ВСЕХ персон слота за один проход. Каждая пишет в СВОЮ папку памяти (baseChat:playerId) —
 // личные каналы не смешиваются. Движок памяти (updateMemory) переиспользуем как есть, доки по одному.
 // Душа МИРА сетевой игры: та, что подключена к плашке «Память» комплитера (не к ряду игрока).
+// Записи Души мира, которые пишутся РАЗ НА СЦЕНУ (когда Хроника сворачивает сцену), а не каждый ход. Решение Leon
+// 2026-09-13: факты о мире меняются редко, а переписывание на каждом ходу копило ошибки писаря («Taeven — он»,
+// «граф Йоптабурга») и дубли сцены (World 453 слова при лимите 220). Status и Threads остаются каждый ход.
+// Как часто пишется док: 'scene' — раз на сцену (при свёртке Хроникой), иначе — с пачкой после хода. Задаёт НАБОР доков
+// (переключатель наборов в Душе): в сетевом наборе «ведущий» у World — 'scene', в наборах сингла такого свойства нет.
+function soulDocCadence(soul, d) {
+  if (d && d.cadence) return d.cadence;
+  const set = (soul && typeof soulPresetSet === 'function') ? soulPresetSet(soul._promptMode) : null;
+  const nm = String((d && d.name) || '').trim().toLowerCase();
+  const def = Array.isArray(set) ? set.find((x) => String(x.name).toLowerCase() === nm) : null;
+  return (def && def.cadence) || '';
+}
+// Док «раз на сцену» пачка после хода не пишет: он пишется только после суммаризации сцены (свёртка Хроникой — вручную
+// или авто-сводкой, как решит пользователь).
+function ngSceneDoc(el, soul, d) { return soulDocCadence(soul, d) === 'scene'; }
+async function tgNgWorldSceneUpdate(el, convo) {
+  const world = tgNgWorldSoul(el); if (!world || !String(convo || '').trim()) return;
+  const docs = (world._docs || []).filter((d) => d.enabled && d.kind !== 'manual' && soulDocCadence(world, d) === 'scene');
+  const base = partyChatId(el); if (!docs.length || !base) return;
+  while (el._ngSoulBusy) await tgSleep(1000);   // не пересекаться с пачкой Душ после хода
+  const saved = el._chatId;
+  el._ngSoulBusy = true;
+  try {
+    el._chatId = base;
+    const wsheet = ngWorldSheet(el);
+    for (const d of docs) await updateMemory(el, { soul: world, docId: d.id, sheet: wsheet, convo });   // транскрипт ВСЕЙ свёрнутой сцены
+  } finally { el._chatId = saved; el._ngSoulBusy = false; }
+}
 function tgNgWorldSoul(el) {
   const comp = (typeof tgNgCompleter === 'function') ? tgNgCompleter(el) : null; if (!comp) return null;
   const plate = comp.querySelector('.pm-item[data-id="memory"]'); if (!plate) return null;
@@ -11722,8 +12448,9 @@ async function tgNgUpdateSouls(el) {
       touched++;
       el._chatId = baseChat;
       const wsheet = ngWorldSheet(el);                     // сеттинг из карточки — чтобы `World` не пересказывал её
-      const wb = await updateMemoryBatch(el, world, '', { sheet: wsheet });
-      const wdocs = (world._docs || []).filter((d) => d.enabled && d.kind !== 'manual' && !(wb && d.kind === 'tracker'));
+      const sceneDoc = (d) => ngSceneDoc(el, world, d);   // «раз на сцену» (World) — не каждый ход, а при свёртке (tgNgWorldSceneUpdate)
+      const wb = await updateMemoryBatch(el, world, '', { sheet: wsheet, skip: sceneDoc });
+      const wdocs = (world._docs || []).filter((d) => d.enabled && d.kind !== 'manual' && !(wb && wb.has(d.id)) && !sceneDoc(d));   // что пачка не записала — по одному
       for (const d of wdocs) { await updateMemory(el, { soul: world, docId: d.id, sheet: wsheet }); }
       // свежая «сцена сейчас» → пойдёт игрокам как КОНТЕКСТ (не для переписывания)
       const sc = (world._docs || []).find((d) => d.enabled && /^status$/i.test(String(d.name || '').trim()));
@@ -11743,7 +12470,7 @@ async function tgNgUpdateSouls(el) {
       el._chatId = baseChat;                              // пачка сама вычислит папку игрока (иначе вышло бы «чат:игрок:игрок»)
       const batched = await updateMemoryBatch(el, soul, charName, { scene, state: nums });   // все трекеры ЭТОЙ Души — одним запросом
       el._chatId = memPath(baseChat, row.dataset.player);   // память ЭТОЙ персоны — своя папка (для остальных доков)
-      const docs = (soul._docs || []).filter((d) => d.enabled && d.kind !== 'manual' && !(batched && d.kind === 'tracker'));
+      const docs = (soul._docs || []).filter((d) => d.enabled && d.kind !== 'manual' && !(batched && batched.has(d.id)));   // что пачка не записала — по одному
       for (const d of docs) { await updateMemory(el, { soul, docId: d.id, charName, scene, state: nums }); }
     }
   } finally {
@@ -11850,11 +12577,21 @@ function tallyUserPrompt(blocks, prevScene, lastAct, sceneText) {
     + '{"CharacterName": {"Var": "-5"}}';
 }
 // Спросить модель и вынуть JSON (температура 0 — это арифметика, не сочинение).
+// Модель счетовода: СВОЯ нода API у Критика (галочка «Счетовод» живёт в Критике) — иначе модель хода.
+// Счетовод раньше всегда занимал модель хода: на Featherless это один запрос за раз, и сцена ждала бухгалтерию.
+function tallyApi(chatNode) {
+  const cr = (typeof criticNodeForChat === 'function') ? criticNodeForChat(chatNode) : null;
+  return (cr && typeof criticApi === 'function') ? criticApi(cr, chatNode) : ((typeof chatApi === 'function') ? chatApi(chatNode) : null);
+}
 async function tallyAsk(api, user, stNode) {
   try {
+    // На МОДЕЛИ ХОДА размышления ВЫКЛ: ответ — одна строка JSON, а модель хода занята сценой. Замер 2026-09-13
+    // (GLM-4.7, Featherless): без этого поля она думала 1248–2140 токенов (148–266 с) ради «{}» — дольше самой
+    // сцены (28–33 с). У своей модели Критика (api.own) — как настроено (решение Leon: DeepSeek думать может).
+    const params = { max_tokens: tokVal('state.tally', 400) + tokVal('soul.think', MEM_THINK_BUDGET_DEF), temperature: 0 };
+    if (!api.own) params.reasoning = { enabled: false };
     const r = await rlmApi('/api/rlm/generate', { _ctxKey: 'state.tally', _ctxNode: stNode, base: api.base, key: api.key, model: api.model,
-      messages: [{ role: 'system', content: NG_TALLY_SYS }, { role: 'user', content: user }],
-      params: { max_tokens: tokVal('state.tally', 400) + tokVal('soul.think', MEM_THINK_BUDGET_DEF), temperature: 0 } });
+      messages: [{ role: 'system', content: NG_TALLY_SYS }, { role: 'user', content: user }], params });
     const raw = (typeof memCleanReply === 'function') ? memCleanReply(r) : String((r && r.content) || '');
     const m = String(raw).match(/\{[\s\S]*\}/);
     if (!m) return null;
@@ -11873,7 +12610,7 @@ function tallyVarLines(defs, cur) {
 async function tallyChatStates(chatNode, sceneText) {
   const st = stateNodeForChat(chatNode); if (!st) return null;
   const defs = stateVarDefs(st); if (!defs.length) return null;
-  const api = (typeof chatApi === 'function') ? chatApi(chatNode) : null; if (!api) return null;
+  const api = tallyApi(chatNode); if (!api) return null;   // своя модель Критика, иначе модель хода
   const msgs = chatNode._msgs || [];
   const prev = stateCurrentValues(defs, msgs);
   const names = (typeof chatNames === 'function') ? chatNames(chatNode) : { char: 'the character' };
@@ -11892,7 +12629,7 @@ const NG_TALLY_SYS = 'You are the bookkeeper of a roleplay game. You never write
   + 'You are given each character\'s tracked values and the latest turn of play. You decide ONLY what those values became, and answer with JSON and nothing else.';
 async function tgNgTally(el, sceneText) {
   const mu = tgNgMuser(el); if (!mu) return null;
-  const api = (typeof chatApi === 'function') ? chatApi(el) : null; if (!api) return null;
+  const api = tallyApi(el); if (!api) return null;   // своя модель Критика, иначе модель хода
   const rows = [...mu.querySelectorAll('.pm-mu-row')].filter((r) => !tgNgRowMuted(el, r));
   const blocks = [];
   rows.forEach((row) => {
@@ -12031,7 +12768,9 @@ function tgNgStateHud(el) {
     const cols = rows[0].defs;
     const out = ['| Персонаж | ' + cols.map((v) => v.name).join(' | ') + ' |',
                  '|:--|' + cols.map(() => ':--|').join('')];
-    rows.forEach((r) => { out.push('| **' + r.name + '** | ' + cols.map((v) => tgStateVarValue(v, r.cur[v.id])).join(' | ') + ' |'); });
+    // Столбцы — по ИМЕНИ показателя, но значение каждый игрок берёт из СВОЕЙ переменной: у каждого своя нода
+    // «Состояние» со своими id. Раньше брался id первого игрока — у второго и третьего стоял прочерк «—».
+    rows.forEach((r) => { out.push('| **' + r.name + '** | ' + cols.map((v) => { const own = r.defs.find((d) => d.name === v.name) || v; return tgStateVarValue(own, r.cur[own.id]); }).join(' | ') + ' |'); });
     return '\n**Состояния**\n\n' + out.join('\n');   // пустая строка между заголовком и таблицей — обязательна
   }
   const lines = rows.map((r) => '▸ **' + r.name + '** — ' + r.defs.map((v) => tgFormatStateVar(v, r.cur[v.id])).join(' · '));
@@ -12697,6 +13436,8 @@ async function tgHandleCallback(el, token, q) {
 // Ответ персонажа боту в Telegram — та же оркестровка, что generateReply у Чата, но БЕЗ окна:
 // история ведётся на каждый chat_id (свой _chatId = своя память), вывод — sendMessage, а не iframe.
 // Ноду Чат и generateReply не трогаем; тяжёлую часть (промт/память/сэмплеры) переиспользуем как есть.
+// Ответ модели годен? («(пустой ответ)» — наша же заглушка на пустой content.)
+function tgTextOk(t) { const x = String(t || '').trim(); return !!x && x !== '(пустой ответ)'; }
 async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
   opts = opts || {};   // opts.directive — перекат по фидбеку (вердикт впереди); opts.editLast — править прошлое сообщение бота; opts.rejectedText — что переписываем
   // Беседа этого chat_id: своя история и своя папка памяти (заводится при первом сообщении).
@@ -12704,6 +13445,16 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
   if (incomingText != null) tgAddMsg(el, convo, { role: 'user', text: incomingText });   // дальше есть выходы (нет API/модели, пустой ответ) — реплика уже сохранена
   // Нода Telegram играет роль чат-ноды для общих функций: подставляем активную беседу в _msgs/_chatId.
   el._msgs = tgApplyMute(el, convo.msgs);   // группа: реплики замьюченных участников не идут в контекст модели
+  // ПЕРЕКАТ (⚖ Править / ✎ Точечно / вердикт критика): отклонённый ответ УБИРАЕМ из истории, что уходит
+  // модели — он и так подан цитатой внутри «Редактуры». Иначе массив кончался на assistant + system, и
+  // модель возвращала ПУСТОЙ ответ (та же ловушка, что описана у группового чата). Замер на живой GLM-5:
+  // с отклонённым ответом в истории — 0 знаков, без него — 3056. В `convo.msgs` реплика остаётся: её
+  // заменит новый ответ ниже, а при ошибке история не потеряется.
+  if (opts.directive || opts.editLast) {
+    const cut = el._msgs.slice();
+    while (cut.length && cut[cut.length - 1].role !== 'user') cut.pop();   // снять хвостовые реплики ведущего (и служебные)
+    if (cut.length) el._msgs = cut;
+  }
   el._chatId = convo.chatId;
   const thread = tgOutThread(el, threadId);   // ответ/«печатает…» уходят в ту же тему форума; замок сильнее входящего
   // Найти API, подключённый ко входу ноды (как generateReply у Чата: API.выход → вход ноды).
@@ -12755,7 +13506,7 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
   const prefill = prefillOf(compEl, sysEl);
   // Единый генератор одного захода. directive != null → перекат: вердикт/фидбек впереди как приказ переписать
   // (вне-ролевая заметка, как в generateReply Чата). Префилл добавляется здесь, чтобы перекат тоже его учитывал.
-  const genText = async (directive, prevReply) => {
+  const genText = async (directive, prevReply, anti) => {
     const msgs = messages.slice();
     if (directive) {
       const prev = prevReply ? ('The reply to rewrite was:\n"' + substituteMacros(String(prevReply).trim(), mctx) + '"\n\n') : '';
@@ -12766,7 +13517,15 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
         ? ('Fix ONLY this in the reply: ' + substituteMacros(String(directive).trim(), mctx) + '\n\nThis is a SURGICAL edit, not a rewrite. Return the SAME reply with the minimum change needed to satisfy the note: keep every other sentence word for word, keep the same events, the same outcome, the same order of beats, the same tone, style and length. Do NOT re-style, expand, shorten or "improve" anything the note does not touch. Stay in character and true to the character sheet. Output only the corrected in-character reply.')
         : ('The rejected reply fails on this: ' + substituteMacros(String(directive).trim(), mctx) + '\n\nRewrite ' + who + "'s reply so that flaw is fully gone. The new reply MUST be substantially different from the rejected one — actually change what " + who + ' does, decides or feels as the note demands; do NOT merely reword it, soften it, or land on the same outcome or beats. Stay in character and true to the character sheet, and continue the scene from the last user message. Output only the rewritten in-character reply.');
       const standing = opts.fromCritic ? '' : criticLessonsBlock(el);   // правила блокнота — как в Чате
-      msgs.push({ role: 'system', _src: 'Редактура', content: head + body + standing });   // жёсткий вариант — 1:1 как в generateReply Чата
+      // Повтор после «вернула то же слово в слово» — как в Чате: без прямого упрёка модель отдаёт ту же копию.
+      const copyGuard = anti
+        ? ('\n\n[RETRY — your previous attempt returned the rejected reply UNCHANGED, word for word. That is a failed edit. '
+          + (opts.softEdit
+            ? 'Apply the requested change this time: the new reply must differ from the rejected one exactly where the note asks, and only there.'
+            : 'Write a genuinely different reply this time — different wording AND a different beat or outcome, as the note demands.')
+          + ' Never output the rejected text verbatim.]')
+        : '';
+      msgs.push({ role: 'system', _src: 'Редактура', content: head + body + standing + copyGuard });   // жёсткий вариант — 1:1 как в generateReply Чата
     }
     if (prefill) msgs.push({ role: 'assistant', content: substituteMacros(prefill, mctx), _src: 'Префилл' });
     // Перекат по фидбеку (⚖ Править / ✎ Точечно) — своя строка настроек chat.rewrite: ответ, контекст,
@@ -12774,7 +13533,7 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
     const kk = (directive && !opts.fromCritic) ? 'chat.rewrite' : 'chat.reply';   // критик — обычный ход
     const pp = (directive && tokHas('chat.rewrite')) ? Object.assign({}, params, { max_tokens: tokVal('chat.rewrite', 512) }) : params;   // не вписано своё — лимит как у обычного хода
     const rr = await sendTurn(apiEl, { _ctxKey: kk, base, key, model, messages: msgs, params: pp }, mctx);
-    let t = (rr && rr.ok) ? (rr.text || '(пустой ответ)') : ('⚠ ' + ((rr && rr.error) || 'ошибка'));
+    let t = (rr && rr.ok) ? (chatReplyText(rr) || '(пустой ответ)') : ('⚠ ' + ((rr && rr.error) || 'ошибка'));   // мысли модели репликой не бывают
     if (rr && rr.ok && prefill) { const pf = String(prefill).trim(); const ot = t.replace(/^\s+/, ''); if (pf && ot.startsWith(pf)) t = ot.slice(pf.length).replace(/^\s+/, ''); }   // префилл — только запуск, вырезаем из ответа
     return { rr, t };
   };
@@ -12783,19 +13542,45 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
   await tgWaitStart(el, token, chatId, thread);                            // и живое сообщение «кручу текстуры…» — чтобы игроки видели, что бот не уснул
   let genR = await genText(opts.directive || null, opts.directive ? (opts.rejectedText || null) : null);
   let r = genR.rr, text = genR.t;
+  // Ловушка «переписал, а всё как было» (1:1 как в Чате): отклонённый ответ уходит модели цитатой, и она
+  // иногда возвращает его слово в слово — игроки видят прежний ход. Ловим копию, один повтор с прямым
+  // запретом копировать; не помогло — говорим в статусе ноды, а не молчим.
+  if (r && r.ok && opts.directive && opts.rejectedText) {
+    const copiedTg = (t) => sameReplyText(t, opts.rejectedText) || (!opts.softEdit && nearCopyReply(t, opts.rejectedText));
+    if (copiedTg(text)) {
+      if (el._setStatus) el._setStatus('⚖ модель вернула тот же текст — переписываю ещё раз', '');
+      const g2 = await genText(opts.directive, opts.rejectedText, true);
+      if (g2.rr && g2.rr.ok && tgTextOk(g2.t)) { r = g2.rr; text = g2.t; }   // пустой повтор НЕ затирает нормальный первый ответ
+      if (copiedTg(text) && el._setStatus) el._setStatus('✗ ответ снова тот же — переформулируй замечание конкретнее или подними температуру', 'err');
+    }
+  }
+  // Правка вернулась пустой — прежний ход НЕ трогаем: игрокам не должно прилететь «(пустой ответ)»
+  // вместо сцены, а ведущий должен понять, что произошло.
+  if ((opts.directive || opts.editLast) && !(r && r.ok && tgTextOk(text))) {
+    if (el._setStatus) el._setStatus('✗ правка: модель вернула пустой ответ — прежний ход оставлен', 'err');
+    if (typeof tgProc === 'function') tgProc(el, 'idle');
+    return;
+  }
   // Авто-критик: перед отправкой судим ответ; заворот → снести и перекатить (потолок 1 попытка, как в Чате).
   // При ручном фидбеке (opts.directive) критика НЕ зовём — правка уже пришла от человека.
+  // Критик промолчал (мысли съели лимит, ошибка модели) — ход уходит без проверки; говорим об этом в самом конце хода,
+  // иначе строку статуса перебивают счетовод и отправка. Раньше молчание было полным (стенд 2026-09-13, ходы 5–6 GLM).
+  let critSilent = false;
   if (r && r.ok && !opts.directive && (el.querySelector('.tg-critic') || {}).checked) {
     const critic = criticNodeForChat(el);
     if (critic) {
       if (!el._localMode) await tgSendTyping(token, chatId, thread);
       await tgWaitStep(el, token);   // этап сменился — обновляем фразу на месте (без уведомления)
-      const verdict = await tgCriticJudge(el, critic, { base, key, model }, convo, text, compEl, mctx);
+      const cApi = criticApi(critic, null) || { base, key, model };   // своя нода API у критика → она; иначе креды бота
+      const verdict = await tgCriticJudge(el, critic, cApi, convo, text, compEl, mctx);
+      if (!verdict) critSilent = true;
       if (verdict && verdict.rejected) {
         tgCriticRecordLesson(critic, verdict.lesson);   // урок в блокнот (как в Чате)
         if (!el._localMode) await tgSendTyping(token, chatId, thread);
         const re = await genText(verdict.reason || 'out of character', text);
-        if (re.rr && re.rr.ok) { r = re.rr; text = re.t; el._setStatus('⚖ критик переписал ответ', 'ok'); }
+        // Пустой перекат (мысли съели лимит) НЕ затирает исходный ответ: он был, его и отправляем.
+        if (re.rr && re.rr.ok && tgTextOk(re.t)) { r = re.rr; text = re.t; el._setStatus('⚖ критик переписал ответ', 'ok'); }
+        else el._setStatus('⚠ критик завернул ответ, но перекат не удался (' + ((re.rr && !re.rr.ok && re.rr.error) || 'пустой ответ') + ') — оставлен исходный ответ', 'err');   // настоящая причина: «перекат вернулся пустым» писалось и при «провайдер не ответил» (стенд, ход 9)
       }
     }
   }
@@ -12867,6 +13652,8 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
     const atmL = el.classList.contains('node-netgame') ? tgAtmTake(el) : { img: null, aud: null };
     tgFeed(el, outText, 'out', cn, { kb: tgNgKeyboard(el), img: atmL.img, aud: atmL.aud, doc: atmL.doc, ctx: tgLastCtx(convo) });
     if (hudText) tgFeed(el, hudText, 'out', '📊 Состояния', {});   // локально: кнопки тоже видны — лента показывает то же, что увидели бы игроки
+    // Карточки участников: в Telegram их обновляет tgSendHud, а локально он не зовётся — у Rosling висело 100 при 30 (2026-09-13).
+    if (el.classList.contains('node-netgame')) tgNgSyncPartStates(el);
     convo.lastSent = { messageId: null, thread, voice: false, local: true };
   }
   // Режим правки (ручной фидбек): переписать ПРОШЛОЕ сообщение бота на месте (editMessageText). Голос править нельзя.
@@ -12899,7 +13686,7 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
           if (vres) convo.lastSent.voiceId = (vres && vres.messageId) || null;
         }
       } else el._setStatus('✗ правка на месте: ' + ((edR && edR.description) || 'ошибка'), 'err');
-      if (r && r.ok) { noteTick(); if (!ngMd) maybeUpdateMemory(el); maybeUpdateChronicle(el); }
+      if (r && r.ok) { noteTick(); if (!ngMd) maybeUpdateMemory(el, { replaced: true }); maybeUpdateChronicle(el); }   // это ЗАМЕНА прежнего хода — Душа его уже посчитала
       if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
       return;
     }
@@ -12952,6 +13739,7 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
           await tgSendHud(el, token, chatId, thread, hudText);   // данные — своим сообщением
           el._setStatus('@' + (el._botName || 'бот') + ' · слушаю…', 'ok');
           if (r && r.ok) { if (!el.classList.contains('node-netgame')) maybeUpdateMemory(el); maybeUpdateChronicle(el); }
+          if (critSilent) el._setStatus('⚠ критик не вынес вердикт — ход ушёл без проверки', 'err');
           if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
           return;
         }
@@ -12970,7 +13758,8 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
       else el._setStatus('✗ отправка: ' + ((sent && sent.description) || 'ошибка'), 'err');
     }
   }
-  if (r && r.ok) { noteTick(); if (!el.classList.contains('node-netgame')) maybeUpdateMemory(el); maybeUpdateChronicle(el); }   // память: сингл/групп — авто; сетевая игра ведёт Души сама (tgNgUpdateSouls). Хроника — всем
+  if (r && r.ok) { noteTick(); if (!el.classList.contains('node-netgame')) maybeUpdateMemory(el, { replaced: !!opts.editLast }); maybeUpdateChronicle(el); }   // память: сингл/групп — авто (замена хода 🔄/⚖ не считается новой репликой); сетевая игра ведёт Души сама (tgNgUpdateSouls). Хроника — всем
+  if (critSilent) el._setStatus('⚠ критик не вынес вердикт — ход ушёл без проверки', 'err');
   if (typeof persistCurrentGraph === 'function') persistCurrentGraph();   // сохранить историю беседы (_convos), чтобы пережила перезаход
 }
 
@@ -13566,11 +14355,12 @@ function buildNetgameNode() {
     const row = document.createElement('div');
     row.className = 'tg-ng-cfg';
     row.innerHTML = '<div class="tg-adm-t2">Обновлять Души</div>'
-      + '<label class="tg-ng-batch-lbl" title="Через сколько собранных ходов пачкой перечитать диалог и обновить Души всех персон">каждые '
-      + '<input class="field num tg-ng-batch" type="number" min="1" value="1" spellcheck="false"> ходов</label>'
+      + '<label class="tg-ng-batch-lbl" title="Через сколько собранных ходов пачкой перечитать диалог и обновить Души всех персон. 0 — авто-обновление выключено (только вручную, кнопкой ⟳ в ноде «Душа»)">каждые '
+      + '<input class="field num tg-ng-batch" type="number" min="0" value="1" spellcheck="false"> ходов <span class="tg-ng-batch-hint">(0 — выкл.)</span></label>'
       + '<label class="tg-opt tg-ng-tally-lbl" title="Значения считает ОТДЕЛЬНЫЙ проход после ответа: ведущий пишет сцену и цифры не трогает. Лечит двойное списание одной и той же раны/траты. +1 запрос к модели на ход">'
       + '<input type="checkbox" class="tg-ng-tally" checked> 🧮 Счетовод (значения — отдельным проходом)</label>';
     row.querySelector('.tg-ng-batch').addEventListener('pointerdown', (e) => e.stopPropagation());
+    row.querySelector('.tg-ng-batch').addEventListener('change', () => { if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); });   // введённое значение попадает в снимок СРАЗУ
     row.querySelector('.tg-ng-tally').addEventListener('pointerdown', (e) => e.stopPropagation());
     row.querySelector('.tg-ng-tally').addEventListener('change', (e) => {   // зеркало: настоящая галочка — в ноде «Критик»
       const cr = (typeof criticNodeForChat === 'function') ? criticNodeForChat(el) : null;
@@ -14206,15 +14996,23 @@ function trProvider(mode) {
   return (s && s.value) || 'google';
 }
 // «Нейро»: перевод делает LLM через ЕДИНЫЙ API, подключённый к коннектору ноды (одна машина = обе стороны).
-async function trNeuroTranslate(text, to) {
+async function trNeuroTranslate(text, to, trOpts) {
   const n = document.querySelector('.node-translator'); if (!n) return null;
   // Транслитер втыкается СВОИМ выходом в «Промт» ноды API — по этому проводу и находим движок.
   const outPort = findPort(n, 'out');
   const conn = outPort && connections.find((c) => c.from === outPort && c.to.closest('.node-api'));
-  const apiEl = conn && conn.to.closest('.node-api');
-  if (!apiEl) return null;
-  const val = (sel) => { const e = apiEl.querySelector(sel); return e && e.value ? e.value.trim() : ''; };
-  const base = val('.f-base'), key = val('.f-key'), model = val('.f-model');
+  let apiEl = conn && conn.to.closest('.node-api');
+  const val = (el, sel) => { const e = el && el.querySelector(sel); return e && e.value ? e.value.trim() : ''; };
+  let base = val(apiEl, '.f-base'), key = val(apiEl, '.f-key'), model = val(apiEl, '.f-model');
+  const ownApi = !!(base && model);   // свои правила переводчика: своя модель и свои «Опции» под перевод
+  // Своя API переводчика пустая — переводит модель ведущего (как Души, критик и счетовод без своей API).
+  // Раньше перевод молча не работал, и в сетевой игре заявки игроков не доходили до двигателя.
+  if (!ownApi) {
+    const game = document.querySelector('#world .node-netgame:not(.nvis)') || document.querySelector('#world .node-telegram:not(.nvis)') || document.querySelector('#world .node-chat:not(.nvis)');
+    const ga = game ? (game.classList.contains('node-chat') ? (typeof chatApi === 'function' ? chatApi(game) : null) : (typeof tgApiCreds === 'function' ? tgApiCreds(game) : null)) : null;
+    if (!ga) return null;
+    apiEl = ga.apiEl; base = ga.base; key = ga.key; model = ga.model;
+  }
   if (!base || !model) return null;
   // Инструкция и префилл — ПОЛЯ самой ноды «Транслитер» (не нужна отдельная нода «Систем промт»).
   // Поле-инструкция направление-агностична; язык направления подставляем в сообщение user.
@@ -14222,15 +15020,20 @@ async function trNeuroTranslate(text, to) {
   const prefillOn = !!((n.querySelector('.tr-prefill-on') || {}).checked);   // префилл — только по галочке
   const prefill = prefillOn ? ((n.querySelector('.tr-prefill') || {}).value || '').trim() : '';
   const langEn = to === 'ru' ? 'Russian' : 'English';
+  // Словарь (сетевая игра, вход игрока): снаряжение игрока и имена мира по-английски — переводчик видит одну строку,
+  // и без словаря «цеп» уходил в «chainsaw» (4 из 5 замеров, 2026-09-13). В двигатель словарь не попадает.
+  const gloss = String((trOpts && trOpts.glossary) || '').trim();
   const messages = [
     { role: 'system', content: sysPrompt },
-    { role: 'user', content: `Translate the following text to ${langEn}:\n\n${text}` },
+    { role: 'user', content: gloss
+      ? `Translate the text below to ${langEn}. It comes from a role-playing game. When the text refers to anything in the glossary, use exactly those English words and names.\n\nGLOSSARY:\n${gloss}\n\nTEXT:\n${text}`
+      : `Translate the following text to ${langEn}:\n\n${text}` },
   ];
   if (prefill) messages.push({ role: 'assistant', content: prefill });   // префилл — начало ответа модели (ломает отказы)
   // Сэмплеры — из подключённой к этому API ноды «Опции · перевод» (та же логика, что у чата и «Теста ответа»).
   // Ноды нет — свои дефолты ПОД ПЕРЕВОД: низкая температура (точность) + лимит ответа (иначе без предела
   // модель может молоть очень долго). Не «голая» температура — чтобы перевод работал и без ноды «Опции».
-  const opts = optionsForApi(apiEl);
+  const opts = ownApi ? optionsForApi(apiEl) : null;   // на модели ведущего «Опции» хода (8000 ток., своя температура) переводу не подходят
   const params = opts ? readOptionsParams(opts) : { ...TR_DEFAULT_PARAMS };
   // Перевод НЕ должен «думать вслух»: рассуждающие модели (glm/Qwen/…) по OpenRouter иначе вываливают
   // свои размышления (literal/drafts…), а при обрыве по лимиту сервер отдаёт их ВМЕСТО перевода (пустой
@@ -14242,16 +15045,17 @@ async function trNeuroTranslate(text, to) {
   if (prefill) { const pf = String(prefill).trim(); if (pf && out.startsWith(pf)) out = out.slice(pf.length).replace(/^\s+/, ''); }   // префилл — только запуск, вырезаем из перевода
   return out;
 }
-async function trTranslate(text, to, mode) {
+async function trTranslate(text, to, mode, opts) {
   // {{user}}/{{char}} и прочие макросы разворачиваем В ИМЕНА ДО перевода (переводчик не должен
   // видеть голый шаблон {{user}} — он уходит уже с подменой; имена берутся из Персонаж/Пользователь).
   const src = substituteMacros(String(text == null ? '' : text));
   if (!src.trim()) return src;
   const provider = trProvider(mode);
-  const ck = provider + '|' + to + '|' + src;
+  const gloss = (provider === 'neuro') ? String((opts && opts.glossary) || '').trim() : '';   // словарь понимает только нейро-перевод
+  const ck = provider + '|' + to + '|' + (gloss ? gloss + '|' : '') + src;
   if (_trCache.has(ck)) return _trCache.get(ck);              // кэш — не переводим повторно
   let out = null;
-  if (provider === 'neuro') out = await trNeuroTranslate(src, to);
+  if (provider === 'neuro') out = await trNeuroTranslate(src, to, gloss ? { glossary: gloss } : null);
   else { const r = await rlmApi('/api/rlm/translate', { provider, text: src, to }); out = (r && r.ok) ? r.text : null; }
   if (out == null) return null;
   _trCache.set(ck, out);
@@ -15079,6 +15883,11 @@ function chatNames(node) {
   if (personaEl && nodeHasWire(personaEl)) { const n = (personaEl.querySelector('.ch-name-input') || {}).value; if (n && n.trim()) userName = n.trim(); }
   return { char: charName, user: userName };
 }
+// Подпись хода игрока в транскриптах служебных моделей (Души, Хроника, Критик, Режиссёр). В сетевой игре ход уже
+// подписан построчно («Mia: …», «Ner: …») — ставим общую подпись, иначе выходило «Mia: Mia: … Ner: …».
+function dlgUserLabel(node, names) {
+  return (node && node.classList && node.classList.contains('node-netgame')) ? 'PLAYERS (one line per player):\n' : (((names && names.user) || 'User') + ': ');
+}
 // ST-макросы промта: {{char}}/{{user}} + пара базовых. Регистронезависимо; неизвестные — как есть.
 // Разворачиваются в момент сборки запроса (как в ST), значения — из подключённых Персонаж/Персона.
 // Имена игроков мультиперсоны (сетевая игра) по позиции ряда. [] если плашки «Мультипользователь» нет
@@ -15268,10 +16077,10 @@ function chatProc(node, state, text, opts) {
 }
 // Команды из интерфейса чата (iframe): send / newchat / regen / edit. Находим ноду по источнику.
 // Мутирующие историю команды (перед ними — синхрон лога с сервером, чтобы не затереть другое устройство).
-const MUTATES_LOG = ['send', 'regen', 'feedback', 'feedback-learn', 'critic-run', 'critic-approve-feedback', 'critic-approve-rewrite', 'edit', 'delete-mes', 'delete-from', 'branch', 'group-start', 'group-next', 'group-auto', 'translate-mes', 'mes-tr-toggle'];
+const MUTATES_LOG = ['send', 'regen', 'swipe', 'fb-del', 'feedback', 'feedback-learn', 'critic-run', 'critic-approve-feedback', 'critic-approve-rewrite', 'edit', 'delete-mes', 'delete-from', 'branch', 'group-start', 'group-next', 'group-auto', 'translate-mes', 'mes-tr-toggle'];
 window.addEventListener('message', async (e) => {
   const m = e.data || {};
-  if (!m.type || !['send', 'newchat', 'regen', 'feedback', 'feedback-learn', 'critic-run', 'critic-approve-feedback', 'critic-approve-rewrite', 'edit', 'delete-mes', 'delete-from', 'scene', 'branch', 'chronicle-toc', 'chronicle-build', 'lore-open', 'director-open', 'tools-menu', 'soul-open', 'state-open', 'objective-open', 'random-open', 'random-peek', 'clip', 'translate-mes', 'mes-tr-toggle', 'translate-input', 'translate-review', 'translate-approve', 'translate-fb', 'translate-st', 'tts', 'tts-stop', 'proc-cancel', 'group-start', 'group-next', 'group-auto', 'translate-entry', 'ranker-open', 'ranker-set', 'party-soul', 'guests-open', 'greet-swipe'].includes(m.type)) return;
+  if (!m.type || !['send', 'newchat', 'regen', 'feedback', 'feedback-learn', 'critic-run', 'critic-approve-feedback', 'critic-approve-rewrite', 'edit', 'delete-mes', 'delete-from', 'scene', 'branch', 'chronicle-toc', 'chronicle-build', 'lore-open', 'director-open', 'tools-menu', 'soul-open', 'state-open', 'objective-open', 'random-open', 'random-peek', 'clip', 'translate-mes', 'mes-tr-toggle', 'translate-input', 'translate-review', 'translate-approve', 'translate-fb', 'translate-st', 'tts', 'tts-stop', 'proc-cancel', 'group-start', 'group-next', 'group-auto', 'translate-entry', 'ranker-open', 'ranker-set', 'party-soul', 'guests-open', 'greet-swipe', 'swipe', 'fb-del', 'soul-confirm'].includes(m.type)) return;
   const frame = [...document.querySelectorAll('.node-chat .chat-frame')].find((f) => f.contentWindow === e.source);
   let node = frame && frame.closest('.node-chat');
   if (!node) { const sf = document.getElementById('st-frame'); if (sf && sf.contentWindow === e.source) node = immersiveNode; } // из разворота
@@ -15299,6 +16108,9 @@ window.addEventListener('message', async (e) => {
   else if (m.type === 'group-auto') groupAutoToggle(node);  // «▶ Авто/⏸ Пауза» — авто-ходы до хода игрока
   else if (m.type === 'regen') regenerate(node);
   else if (m.type === 'greet-swipe') greetSwipe(node, m.dir);   // ‹ › на приветствии до начала ролки → выбрать первое сообщение
+  else if (m.type === 'swipe') swipeLast(node, m.dir);           // ‹ › у последнего ответа: листать варианты; › на последнем — новая генерация со всеми фидбеками
+  else if (m.type === 'fb-del') deleteFeedback(node, m.idx, m.k); // ✕ в табличке фидбеков — убрать одно замечание из следующих генераций этого ответа
+  else if (m.type === 'soul-confirm') soulConfirm(node, !!m.yes);  // лента «Душа: обновить память?» → ✓ пишем / ✕ не сейчас
   else if (m.type === 'feedback') {                                              // 💬 «Переписать» → перекат с замечанием впереди, БЕЗ авто-урока (урок — отдельная кнопка «Записать в блокнот»)
     const fb = String(m.text || '').trim(); if (!fb || !fbLastOnly(m.idx)) return;
     feedbackRegen(node, m.idx, fb, { noLesson: true, reason: m.reason, soft: m.mode === 'soft' });   // рассуждение при переписи (селектор в окне фидбека; node = как в «Опциях»)
@@ -15446,12 +16258,15 @@ window.addEventListener('message', async (e) => {
     speakFromChat(node, m.idx, e.source, m.text);
   } else if (m.type === 'tts-stop') {                                            // ⏹ стоп: и чтение, и генерация
     stopTts(e.source);
-  } else if (m.type === 'proc-cancel') {                                         // крестик в ленте статуса → остановить текущий процесс
-    // Отмена могла быть выставлена на ДРУГОМ экземпляре ноды чата (граф пересобирался) — ищем того, у кого она есть,
-    // иначе крестик молча не работал и процесс продолжался.
-    let cn = node;
-    if (!cn._procCancel) cn = [...document.querySelectorAll('.node-chat')].find((n) => typeof n._procCancel === 'function') || node;
-    if (cn._procCancel) { try { cn._procCancel(); } catch (err) { /* игнор */ } } else stopTts(e.source);
+  } else if (m.type === 'proc-cancel') {                                         // крестик в ленте статуса → рвёт ВСЕ идущие генерации
+    // ТЗ Leon (2026-09-13): «нужно чтобы крестик тоже рвал все генерации» — как «⏹ Стоп»: все запросы к модели
+    // (ход, память, критик, Хроника, перевод…) обрываются, в том числе у провайдера (сервер, POST /abort).
+    // Раньше крестик только ставил флаг «выбросить ответ» у одного процесса, а запрос дорабатывал до конца.
+    // Вопрос Души (✓/✕) и подсказка сцены сюда не приходят — их крестик разбирает сам кадр чата.
+    const busyTts = !!(_ttsCurrentAudio || _ttsChat || [...document.querySelectorAll('.node-tts')].some((t) => t._ttsBusy));
+    try { rlmStopEverything(); } catch (err) { /* игнор */ }
+    if (busyTts) { try { stopTts(e.source); } catch (err) { /* игнор */ } }   // озвучка — тоже генерация (своя служба, не rlmApi)
+    try { chatProc(node, 'cancel', 'Прервано'); } catch (err) { /* игнор */ }     // «Стоп» гасит ленты в idle — показать, что нажатие сработало
   }
 });
 // ---- Рантайм чата: собрать промт из графа → склеить с Опциями в API → позвать модель ----
@@ -15558,6 +16373,7 @@ function loreText(loreEl, ctx) {
   const firedNow = {};
   // Собираем ВСЕ сработавшие записи как кандидатов; приоритет (order) и бюджет применяем ПОСЛЕ — как в ST.
   const candidates = [];
+  const semPass = [];   // смысловые записи, прошедшие порог: {score, emit} — в кандидаты попадут лучшие N
   // Режиссёр: динамически сгенерированное событие (одноразово на этот ход) — как приоритетный кандидат, мимо бюджета.
   if (loreEl._genEvent && loreEl._genEvent.text) candidates.push({ content: String(loreEl._genEvent.text).trim(), name: '🎬 Событие сцены', order: 1000, ignore: true, mm: false });
   (loreEl._entries || []).forEach((e) => {
@@ -15611,19 +16427,41 @@ function loreText(loreEl, ctx) {
     }
     if (t === 'semantic') {                                             // SW: смысл сцены ≈ фраза-эталон
       if (!hasEmbedder) return;                                         // нет «Эмбеддера» → выкл (как ST)
-      const score = semanticScore(loreEl, e.semTrigger, raw);
+      const key = String(e.semTrigger || '').trim();
+      const score = semanticScore(loreEl, key, raw);
       const thr = parseFloat(e.semThreshold);
-      if (score != null && score >= (isFinite(thr) ? thr : 0.72) && passProb()) emit();
+      if (score != null && score >= (isFinite(thr) ? thr : SEM_THR_DEF) && passProb()) semPass.push({ score, key, emit });   // в промт — только лучшие N (ниже)
       return;
     }
     if (t === 'vectorized') {                                           // ST: смысл сцены ≈ ТЕКСТ самой записи
       if (!hasEmbedder) return;                                         // нет «Эмбеддера» → выкл
       const score = semanticScore(loreEl, content, raw);               // эталон — содержимое записи, без фразы
       const thr = parseFloat(e.vecThreshold);
-      if (score != null && score >= (isFinite(thr) ? thr : 0.6) && passProb()) emit();
+      if (score != null && score >= (isFinite(thr) ? thr : SEM_THR_DEF) && passProb()) semPass.push({ score, key: content, emit });
       return;
     }
   });
+  // Смысловые записи соревнуются БАЛЛОМ: порог лишь отсекает совсем далёкое, а в промт идут N самых близких.
+  // Иначе (замер 2026-09-13) эмбеддер давал всем почти одинаковый балл, порог пропускал 40 из 40, и бюджет
+  // набирал записи по приоритету — в сцену в Гильдии уезжали вождиха гоблинов и ведьма.
+  const semK = Math.max(0, parseInt((loreEl.querySelector('.lb-semk') || {}).value, 10));
+  const semN = Number.isFinite(semK) ? semK : LORE_SEM_TOPK_DEF;
+  const semByPlayer = Array.isArray(loreEl._semByPlayer) && loreEl._semByPlayer.length ? loreEl._semByPlayer : null;
+  if (semByPlayer) {
+    // Сетевая игра: N делится между игроками по кругу — каждому самая близкая к ЕГО заявке запись, которую ещё не взяли.
+    const lists = semByPlayer.map((p) => semPass.filter((x) => typeof p.scores[x.key] === 'number').sort((a, b) => p.scores[b.key] - p.scores[a.key]));
+    const picked = [];
+    while (picked.length < semN) {
+      let added = false;
+      for (const list of lists) {
+        if (picked.length >= semN) break;
+        const next = list.find((x) => !picked.includes(x));
+        if (next) { picked.push(next); added = true; }
+      }
+      if (!added) break;
+    }
+    picked.forEach((x) => x.emit());
+  } else semPass.sort((a, b) => b.score - a.score).slice(0, semN).forEach((x) => x.emit());
   Object.assign(fired, firedNow);                                       // зафиксировать первые срабатывания
   // Бюджет как в ST: приоритет по order (по убыванию), лимит в токенах (оценка), ignoreBudget всегда влезает.
   // Ручные записи (не Хроника) ВСЕГДА важнее авто-глав Хроники: сначала не-mm, потом mm; внутри группы — по order.
@@ -16324,6 +17162,7 @@ async function groupStartGame(node, sceneText, gopts) {
 async function chatSend(node, text) {
   const t = (text || '').trim();
   if (!t) return;
+  sealVariants(node);   // игрок ответил — выбранный вариант закрепляется, остальные варианты и фидбеки стираются, вернуть нельзя
   node._msgs.push({ role: 'user', text: t });
   renderChatLogs(node);
   // Группа с включённым ранжиратором: ход ведёт коробка передач (выбор говорящего → передача → ответ → …).
@@ -16446,13 +17285,118 @@ function branchChat(node, idx) {
   });
 }
 // Перегенерировать: убрать хвостовые служебные и последний ответ ИИ, ответить заново по истории.
-async function regenerate(node) {
-  if (typeof stopTts === 'function') stopTts();   // старый ответ уходит — отменить его озвучку (звук уже не к чему) и освободить _ttsBusy, чтобы авто-озвучка нового ответа не заблокировалась
-  while (node._msgs.length && node._msgs[node._msgs.length - 1].role === 'sys') node._msgs.pop();
-  if (node._msgs.length && node._msgs[node._msgs.length - 1].role === 'char') node._msgs.pop();
-  renderChatLogs(node);
-  await generateReply(node);
+// ── Варианты ПОСЛЕДНЕГО ответа (‹ n/N ›) и память фидбеков ──────────────────────────────────────
+// Раньше 🔄, ⚖ и вердикт критика СНОСИЛИ последний ответ и писали новый поверх, а замечание жило только в
+// одном вызове: правишь одну ошибку — всплывает прежняя. Теперь у последнего ответа:
+//   m.swipes[]  — варианты (текст + источники + вердикт критика + снимок Состояния + перевод), m.swipeIdx — текущий;
+//                 🔄, ⚖, вердикт критика и › на последнем варианте ДОБАВЛЯЮТ вариант, старые остаются — листаются ‹ ›;
+//   m.fbs[]     — накопленные замечания: каждый ⚖ дописывается, и КАЖДАЯ новая генерация уходит модели со всеми
+//                 разом (в блокнот критика они записаны или нет — без разницы); ✕ в табличке убирает одно.
+// Ход игрока (chatSend) закрепляет выбранный вариант и стирает остальные варианты и фидбеки — «вернуть уже нельзя».
+// Удаление сообщения стирает всё вместе с ним. Telegram/сетевая игра этим не пользуются — там свой перекат на месте.
+function lastCharIdx(node) {
+  const a = (node && node._msgs) || [];
+  for (let i = a.length - 1; i >= 0; i--) { if (a[i].role === 'char') return i; if (a[i].role === 'user') return -1; }   // sys-хвост пропускаем
+  return -1;
 }
+const VARIANT_KEYS = ['text', 'sources', 'critic', '_state', '_stateR', '_tr', '_showTr'];
+function variantOf(m) { const v = {}; VARIANT_KEYS.forEach((k) => { if (m[k] !== undefined) v[k] = m[k]; }); return v; }
+function applyVariant(m, v) { VARIANT_KEYS.forEach((k) => { if (v && v[k] !== undefined) m[k] = v[k]; else delete m[k]; }); }
+// Все замечания одной директивой: одно — как есть; несколько — нумерованный список, каждое прежнее в силе.
+function joinFbs(fbs) {
+  const a = (fbs || []).map((s) => String(s || '').trim()).filter(Boolean);
+  if (!a.length) return '';
+  if (a.length === 1) return a[0];
+  return 'Apply ALL of these notes together — every earlier note still stands:\n' + a.map((s, i) => (i + 1) + '. ' + s).join('\n');
+}
+// Ход игрока: выбранный вариант становится единственным, остальное стирается.
+function sealVariants(node) {
+  const i = lastCharIdx(node); if (i < 0) return;
+  const m = node._msgs[i]; if (m.greeting) return;
+  ['swipes', 'swipeIdx', 'swipeTr', 'fbs', 'fbMode', 'fbReason'].forEach((k) => { delete m[k]; });
+}
+// Ответ заменён кем-то снаружи (вердикт критика): старый — в варианты, фидбеки — переносим на новый.
+function carryVariants(node, oldMsg) {
+  if (!oldMsg || oldMsg.greeting) return;
+  const j = lastCharIdx(node); if (j < 0) return;
+  const nm = node._msgs[j]; if (nm === oldMsg) return;
+  const swipes = (Array.isArray(oldMsg.swipes) && oldMsg.swipes.length) ? oldMsg.swipes.slice() : [variantOf(oldMsg)];
+  swipes[oldMsg.swipeIdx || 0] = variantOf(oldMsg);
+  nm.swipes = swipes.concat([variantOf(nm)]); nm.swipeIdx = nm.swipes.length - 1;
+  if (Array.isArray(oldMsg.fbs) && oldMsg.fbs.length) nm.fbs = oldMsg.fbs.slice();
+  if (oldMsg.fbMode) nm.fbMode = oldMsg.fbMode;
+  if (oldMsg.fbReason != null) nm.fbReason = oldMsg.fbReason;
+}
+// ‹ › у последнего ответа: назад/вперёд по вариантам; › на последнем — сгенерировать ещё один.
+async function swipeLast(node, dir) {
+  const i = lastCharIdx(node); if (i < 0) return;
+  const m = node._msgs[i];
+  if (m.greeting || m.pending || m.text === '…') return;   // приветствие — свой выбор (greetSwipe); генерация идёт / критик держит — не листаем
+  if (!Array.isArray(m.swipes) || !m.swipes.length) { m.swipes = [variantOf(m)]; m.swipeIdx = 0; }
+  const cur = m.swipeIdx || 0;
+  m.swipes[cur] = variantOf(m);   // текущий — как он есть сейчас (правки, перевод)
+  const go = (k) => { m.swipeIdx = k; applyVariant(m, m.swipes[k]); renderChatLogs(node); if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); };
+  if (dir < 0) { if (cur > 0) go(cur - 1); return; }
+  if (cur + 1 < m.swipes.length) { go(cur + 1); return; }
+  await regenVariant(node, {});
+}
+// ✕ в табличке фидбеков: убрать одно замечание из памяти этого ответа (следующие генерации его не увидят).
+function deleteFeedback(node, idx, k) {
+  const m = node._msgs[Number(idx)]; if (!m || !Array.isArray(m.fbs)) return;
+  m.fbs.splice(Number(k), 1); if (!m.fbs.length) delete m.fbs;
+  renderChatLogs(node); if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
+}
+// Новый вариант последнего ответа: 🔄 / › / ⚖ (opts.feedback дописывается к накопленным). Старый вариант остаётся,
+// все замечания уходят в генерацию разом; «переписал, а всё как было» ловим как и раньше — одним повтором.
+async function regenVariant(node, opts) {
+  opts = opts || {};
+  if (typeof stopTts === 'function') stopTts();   // старый ответ уходит с экрана — отменить его озвучку и освободить _ttsBusy для авто-озвучки нового
+  const i = lastCharIdx(node);
+  if (i < 0) { while (node._msgs.length && node._msgs[node._msgs.length - 1].role === 'sys') node._msgs.pop(); renderChatLogs(node); await generateReply(node, { regen: true }); return null; }
+  const m = node._msgs[i];
+  if (m.greeting) { node._msgs.length = i; renderChatLogs(node); await generateReply(node, { regen: true }); return null; }   // у приветствия вариантов ответа нет — как раньше
+  const swipes = (Array.isArray(m.swipes) && m.swipes.length) ? m.swipes.slice() : [variantOf(m)];
+  swipes[m.swipeIdx || 0] = variantOf(m);
+  const fbs = (Array.isArray(m.fbs) ? m.fbs : []).slice();
+  if (opts.feedback && String(opts.feedback).trim()) {
+    const nf = String(opts.feedback).trim();
+    if (!fbs.some((x) => sameReplyText(x, nf))) fbs.push(nf);   // то же замечание второй раз — не двоим (у Leon оно повторилось трижды)
+  }
+  const fbMode = (opts.soft != null) ? (opts.soft ? 'soft' : 'hard') : (m.fbMode || 'hard');
+  const fbReason = (opts.reason != null) ? opts.reason : m.fbReason;
+  const rejectedText = m.text || '';
+  // Снятие ответа — НАМЕРЕННОЕ укорочение истории. Без разрешения сервер отбивает запись как «отставший
+  // клиент» (13 → 12), `_saveTo` дописывает новый ответ к НЕукороченному логу, клиент принимает «сервер
+  // длиннее» — и снятый ответ возвращается, а новый встаёт под ним. Ровно это и увидел Leon: табличка
+  // фидбеков оказалась на 14-м сообщении, под старым.
+  try { allowShrink(chatlogKeyOf(node._chatId)); allowShrink(chatgraphKeyOf(current.chatId)); } catch (_) {}
+  node._msgs.length = i;   // снять ответ и sys-хвост после него
+  renderChatLogs(node);
+  const directive = joinFbs(fbs);
+  if (directive) {
+    // reason — рассуждение из окна фидбека (node/off/low/medium/high); noCritic — ручной фидбек = приказ пользователя, авто-критик не пересуживает
+    const g = { directive, rejectedText, reason: fbReason, softEdit: fbMode === 'soft', noCritic: true, regen: true };
+    await generateReply(node, g);
+    const copied = (t) => sameReplyText(t, rejectedText) || (fbMode !== 'soft' && nearCopyReply(t, rejectedText));
+    if (copied(lastCharText(node))) {
+      chatToast(node, 'модель вернула тот же текст — переписываю ещё раз', 'warn');
+      node._msgs.length = i; renderChatLogs(node);
+      await generateReply(node, { ...g, antiCopy: true });
+      if (copied(lastCharText(node))) chatToast(node, 'ответ снова тот же — переформулируй замечание конкретнее или подними температуру в «Опциях»', 'err');
+    }
+  } else {
+    await generateReply(node, { regen: true });   // не новый ход, а замена прежнего — Душа его уже посчитала
+  }
+  const j = lastCharIdx(node);
+  if (j >= 0) {
+    const nm = node._msgs[j];
+    nm.swipes = swipes.concat([variantOf(nm)]); nm.swipeIdx = nm.swipes.length - 1;
+    if (fbs.length) nm.fbs = fbs; nm.fbMode = fbMode; if (fbReason != null) nm.fbReason = fbReason;
+    renderChatLogs(node); if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
+  }
+  return { fbs, rejectedText };
+}
+async function regenerate(node) { await regenVariant(node, {}); }   // 🔄 — новый вариант, прежний остаётся в ‹ ›
 // Выбор первого сообщения свайпом ‹ › ДО начала ролки: переключить приветствие среди заготовок
 // (first_mes + alternate_greetings). Ничего не генерит — просто меняет, с какой заготовки стартуем.
 function greetSwipe(node, dir) {
@@ -16471,6 +17415,26 @@ function greetSwipe(node, dir) {
   renderChatLogs(node);                                          // перерисовать + сохранить лог чата
   if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
 }
+// Один ли это текст? Сравниваем по сути: разница в пробелах, кавычках и регистре для игрока не разница —
+// «ничего не изменилось» он видит и тогда, когда модель вернула копию с другой типографикой.
+function sameReplyText(a, b) {
+  const norm = (t) => String(t || '')
+    .replace(/[«»“”„‟]/g, '"').replace(/[‘’`´]/g, "'")
+    .replace(/[\s ]+/g, ' ')
+    .trim().toLowerCase();
+  const x = norm(a), y = norm(b);
+  return !!x && x === y;
+}
+// «Почти копия» — для режима ПЕРЕПИСИ (не точечной правки): модель отдала прежний ответ, поменяв
+// хвост в пару фраз. Живая проверка на GLM-5: настоящая перепись расходится с 10-го знака, копия —
+// после 2487 из 2509. Порог 90% общего начала при близкой длине. В точечном режиме такое совпадение
+// как раз НОРМА (там и просят минимальную правку), поэтому там мерим только точное равенство.
+function nearCopyReply(a, b) {
+  const x = String(a || '').trim(), y = String(b || '').trim();
+  if (!x || !y || y.length < 200) return false;
+  let i = 0; while (i < x.length && i < y.length && x[i] === y[i]) i++;
+  return i >= y.length * 0.9 && Math.abs(x.length - y.length) <= y.length * 0.15;
+}
 // Перекат с фидбеком (ручной режим Критика): снести ответ ИИ #idx и ВСЁ после него (перемотка),
 // сгенерить заново с замечанием впереди. На последнем ответе «после него» пусто — обычный перекат.
 async function feedbackRegen(node, idx, feedback, opts) {
@@ -16478,10 +17442,31 @@ async function feedbackRegen(node, idx, feedback, opts) {
   const i = Number(idx);
   if (!(i >= 0) || i >= node._msgs.length) return;
   const rejectedText = (node._msgs[i] && node._msgs[i].text) || '';   // отклонённый ответ — снимаем ДО сноса, отдаём в директиву
+  // ПОСЛЕДНИЙ ответ: не сносим, а добавляем вариант; замечание — в память ответа, уходит вместе с прежними.
+  if (i === lastCharIdx(node) && !node._msgs[i].greeting) {
+    await regenVariant(node, { feedback, soft: !!opts.soft, reason: opts.reason });
+    if (!opts.noLesson) criticLearnFromFeedback(node, feedback, rejectedText, lastCharText(node)).catch(() => {});   // урок в блокнот — как и раньше, только по «Записать в блокнот»
+    return;
+  }
+  try { allowShrink(chatlogKeyOf(node._chatId)); allowShrink(chatgraphKeyOf(current.chatId)); } catch (_) {}   // перемотка — намеренное укорочение, серверу можно
   node._msgs.length = i;                 // убрать ответ ИИ #i и всё, что шло после
   while (node._msgs.length && node._msgs[node._msgs.length - 1].role === 'sys') node._msgs.pop();
   renderChatLogs(node);
-  await generateReply(node, { directive: feedback, rejectedText, reason: opts.reason, softEdit: !!opts.soft, noCritic: true });   // reason — переопределение рассуждения из окна фидбека (node/off/low/medium/high). noCritic — ручной фидбек = приказ пользователя: авто-критик НЕ пересуживает и не затирает его своей причиной (как и свой перекат критик не судит заново)
+  // reason — переопределение рассуждения из окна фидбека (node/off/low/medium/high). noCritic — ручной фидбек = приказ
+  // пользователя: авто-критик НЕ пересуживает и не затирает его своей причиной (как и свой перекат критик не судит заново).
+  await generateReply(node, { directive: feedback, rejectedText, reason: opts.reason, softEdit: !!opts.soft, noCritic: true });
+  // Ловушка «переписал, а всё как было»: отклонённый ответ уходит модели цитатой («вот что правим»), и она
+  // иногда возвращает его СЛОВО В СЛОВО — снаружи это выглядит как «фидбек не сработал». Ловим точную копию,
+  // делаем ОДИН повтор с прямым запретом копировать; не помогло — говорим вслух, а не молчим.
+  const copied = (t) => sameReplyText(t, rejectedText) || (!opts.soft && nearCopyReply(t, rejectedText));
+  if (copied(lastCharText(node))) {
+    chatToast(node, 'модель вернула тот же текст — переписываю ещё раз', 'warn');
+    while (node._msgs.length && node._msgs[node._msgs.length - 1].role === 'sys') node._msgs.pop();
+    if (node._msgs.length && node._msgs[node._msgs.length - 1].role === 'char') node._msgs.pop();
+    renderChatLogs(node);
+    await generateReply(node, { directive: feedback, rejectedText, reason: opts.reason, softEdit: !!opts.soft, noCritic: true, antiCopy: true });
+    if (copied(lastCharText(node))) chatToast(node, 'ответ снова тот же — переформулируй замечание конкретнее или подними температуру в «Опциях»', 'err');
+  }
   // Итерация 2: критик учится на ТВОЁМ фидбеке — формулирует урок и решает, писать ли в блокнот (фоном).
   // «Не записывать · переписать» (opts.noLesson) — правка мелкой разовой ошибки: урок в блокнот НЕ пишем.
   if (!opts.noLesson) criticLearnFromFeedback(node, feedback, rejectedText, lastCharText(node)).catch(() => {});
@@ -16645,7 +17630,12 @@ async function generateReply(node, opts) {
   // (последней директивой на глубине 0), перед префиллом. Провода нет → ничего не добавляем.
   const lastInP = node.querySelector('.svc-in[data-in="lastmes"] .port.in');
   const lastConn = lastInP && connections.find((c) => c.to === lastInP);
-  if (lastConn) { const lt = (sourceText(lastConn.from, node._msgs || []) || '').trim(); if (lt) messages.push({ role: 'system', content: substituteMacros(lt, mctx), _src: 'Последнее сообщение' }); }
+  // Утечка приветствия (2026-09-10): в снимках чатов Leon к этой ножке оказался протянут провод от ПОЛЯ
+  // «Первое сообщение» карточки — first_mes уходил в самый конец промта каждый ход, и модель посреди игры
+  // воспроизводила первое приветствие («Три недели спустя. Тёмная тойота…»), хотя свайпом выбрано другое.
+  // Приветствие в конец промта не нужно никогда: такой провод в сборке игнорируем (и вычищаем при загрузке).
+  const lastFromGreeting = !!(lastConn && lastConn.from && lastConn.from.closest('.ch-item[data-field="first_mes"]'));
+  if (lastConn && !lastFromGreeting) { const lt = (sourceText(lastConn.from, node._msgs || []) || '').trim(); if (lt) messages.push({ role: 'system', content: substituteMacros(lt, mctx), _src: 'Последнее сообщение' }); }
   // Директива редактуры (ручной фидбек / вердикт Критика): переписать реплику. ЯВНО вне-ролевая — модель
   // НЕ должна на неё отвечать, только выполнить. Даём отклонённый текст, чтобы модель знала, ЧТО правит
   // (иначе воспринимает замечание как новую реплику пользователя и «отвечает» на него).
@@ -16659,7 +17649,19 @@ async function generateReply(node, opts) {
       ? ('Fix ONLY this in the reply: ' + d + '\n\nThis is a SURGICAL edit, not a rewrite. Return the SAME reply with the minimum change needed to satisfy the note: keep every other sentence word for word, keep the same events, the same outcome, the same order of beats, the same tone, style and length. Do NOT re-style, expand, shorten or \"improve\" anything the note does not touch. Stay in character and true to the character sheet. Output only the corrected in-character reply.')
       : ('The rejected reply fails on this: ' + d + '\n\nRewrite ' + who + "'s reply so that flaw is fully gone. The new reply MUST be substantially different from the rejected one — actually change what " + who + ' does, decides or feels as the note demands; do NOT merely reword it, soften it, or land on the same outcome or beats. Stay in character and true to the character sheet, and continue the scene from the last user message. Output only the rewritten in-character reply.');
     const standing = opts.fromCritic ? '' : criticLessonsBlock(node);   // накопленные правила — вместе с замечанием
-    messages.push({ role: 'system', content: '[EDITOR NOTE — out of character, NOT part of the story. Do NOT answer, quote or mention this note; just obey it.]\n' + prev + rwBody + standing, _src: 'Редактура' });
+    // Повтор после «вернула то же слово в слово» (см. feedbackRegen): без прямого упрёка модель отдаёт ту же копию.
+    const copyGuard = opts.antiCopy
+      ? ('\n\n[RETRY — your previous attempt returned the rejected reply UNCHANGED, word for word. That is a failed edit. '
+        + (opts.softEdit
+          ? 'Apply the requested change this time: the new reply must differ from the rejected one exactly where the note asks, and only there.'
+          : 'Write a genuinely different reply this time — different wording AND a different beat or outcome, as the note demands.')
+        + ' Never output the rejected text verbatim.]')
+      : '';
+    // Нота идёт ПОСЛЕДНИМ USER-сообщением, а не system. Живой замер 2026-09-10 на копии чата Leon (GLM-5,
+    // замечание «щелчок должен вернуть её в транс»): как system в конце — 0 из 4 (модель в мыслях ноту не
+    // упоминала вовсе, рассуждала только по лорбуку и возвращала почти тот же текст); как user — 2 из 2
+    // («The user wants me to rewrite…», ответ по замечанию). Полная цитата отклонённого текста оставлена.
+    messages.push({ role: 'user', content: '[EDITOR NOTE — out of character, NOT part of the story. Do NOT answer, quote or mention this note; just obey it.]\n' + prev + rwBody + standing + copyGuard, _src: 'Редактура' });
   }
   const prefill = prefillOf(compEl, sysEl);
   if (prefill) messages.push({ role: 'assistant', content: substituteMacros(prefill, mctx), _src: 'Префилл' });
@@ -16680,13 +17682,19 @@ async function generateReply(node, opts) {
   const grp = (typeof isGroupChat === 'function' && isGroupChat(node));
   // Группа: пустой ответ модели (частый огрех окончания массива) — НЕ засоряем историю «(пустой ответ)»:
   // убираем плейсхолдер и мягко сообщаем; ход просто пропускается (ранжиратор не считает его состоявшимся).
-  if (grp && r && r.ok && !String(r.text || '').trim()) {
+  if (grp && r && r.ok && !chatReplyText(r)) {
     node._msgs.splice(idx, 1); renderChatLogs(node); node._procCancel = null; chatProc(node, 'idle');
     if (typeof chatToast === 'function') chatToast(node, 'модель вернула пустой ответ — ход пропущен', 'warn');
     node._grpEmpty = true;                                    // сигнал вызывающему (groupNextTurn/groupPlay), что хода не было
     return;
   }
-  let outText = (r && r.ok) ? (r.text || '(пустой ответ)') : ('⚠ ' + ((r && r.error) || 'ошибка'));
+  let outText = (r && r.ok) ? (chatReplyText(r) || '(пустой ответ)') : ('⚠ ' + ((r && r.error) || 'ошибка'));   // мысли модели репликой не бывают (chatReplyText)
+  // Перекат по замечанию вернулся пустым — реплику пустышкой НЕ подменяем: возвращаем отклонённый
+  // текст (он у нас есть) и говорим вслух, что правка не вышла.
+  if (r && r.ok && opts.directive && opts.rejectedText) {
+    const ot = String(outText || '').trim();
+    if (!ot || ot === '(пустой ответ)') { outText = String(opts.rejectedText); chatToast(node, 'правка: модель вернула пустой ответ — прежняя реплика оставлена', 'err'); }
+  }
   // Префилл — только чтобы ЗАПУСТИТЬ генерацию; из ответа вырезаем, чтобы не лип в чат/историю/критик/др. системы.
   if (r && r.ok && typeof prefill !== 'undefined' && prefill) { const pf = String(prefill).trim(); const ot = outText.replace(/^\s+/, ''); if (pf && ot.startsWith(pf)) outText = ot.slice(pf.length).replace(/^\s+/, ''); }
   // Группа: модель часто повторяет «Имя:» в начале (мы даём атрибуцию в истории) — срезаем дубль-подпись.
@@ -16710,7 +17718,10 @@ async function generateReply(node, opts) {
   renderChatLogs(node);
   node._procCancel = null; chatProc(node, 'idle');           // генерация завершена (реплика на экране); дальше свои ленты у Души/Хроники/Критика
   if (stateSnap) stateSyncNodes(node);                       // обновить HUD в ноде «Состояние» и в чате
-  if (r && r.ok) { noteTick(); maybeUpdateMemory(node); maybeUpdateChronicle(node); maybeCheckObjective(node); if (!opts.noCritic) maybeRunCritic(node).catch(() => {}); }   // движок памяти (Душа) + авто-сводка (Хроника) + проверка «Цели» + авто-критик, фоном
+  // Замена ТОГО ЖЕ хода (🔄 перегенерация, перекат по фидбеку, вердикт критика) — не новая реплика:
+  // счётчик Души не двигаем, иначе перегенерил 4 раза — и память обновилась «по расписанию» на пустом месте.
+  const replaced = !!(opts.regen || opts.directive);
+  if (r && r.ok) { noteTick(); maybeUpdateMemory(node, { replaced }); maybeUpdateChronicle(node); maybeCheckObjective(node, { replaced }); if (!opts.noCritic) maybeRunCritic(node).catch(() => {}); }   // движок памяти (Душа) + авто-сводка (Хроника) + проверка «Цели» + авто-критик, фоном
   if (r && r.ok && !charMsg.pending) maybeAutoSpeak(node, idx);   // авто-озвучка (перевод → голос); pending держит критик — озвучим на его апрув/перекат
 }
 
@@ -16938,6 +17949,16 @@ function addConnection(outP, inP, wps) {
   const apiInWrap = inP.closest('.api-in');
   if (apiInWrap && apiInWrap.dataset.in === 'options') {
     const apiEl = inP.closest('.node-api'); if (apiEl) applyLocalCaps(apiEl);
+  }
+  // Провод «Персонаж · Лорбук → Лорбук»: записи карточки заезжают в него СРАЗУ по факту соединения.
+  // Раньше коннект ничего не переносил — лорбук оставался пустым, записи приходили только при загрузке
+  // карточки. Перетянул провод от другой карточки — её записи встают вместо прежних (вход держит один
+  // провод, старый снимается выше).
+  {
+    const srcItem = outP.closest && outP.closest('.ch-item');
+    const charSrc = outP.closest && outP.closest('.node-char');
+    const loreDst = inP.closest && inP.closest('.node-lore');
+    if (charSrc && loreDst && srcItem && srcItem.dataset.field === 'book') pushCardBookToLore(charSrc, loreDst);
   }
   // Граф изменился — если Персонаж теперь в графе, пустые чаты стартуют с его приветствия.
   document.querySelectorAll('.node-chat').forEach((chatEl) => seedGreeting(chatEl));
@@ -17811,6 +18832,8 @@ function nodeValues(el, type) {
     base: el.querySelector('.f-base').value,
     model: el.querySelector('.f-model').value,
     instruct: (el.querySelector('.api-instruct') || {}).value || '',   // разметка ролей для текстового режима
+    provList: ((el.querySelector('.f-provider') || {}).value || '').trim(),                 // «Хостеры»: список провайдеров OpenRouter через запятую
+    provStrict: ((el.querySelector('.f-provider-strict') || {}).checked !== false),         // только они, без замен
     mode: el.dataset.mode || 'chat',
     label: ((el.querySelector('.node-head .label') || {}).textContent || '').trim(),
   };
@@ -17849,7 +18872,7 @@ function nodeValues(el, type) {
     avatar: el.querySelector('.persona-ava').style.backgroundImage || '',
     desc: trSafeVal(el.querySelector('.pa-desc')),
   };
-  if (type === 'lorebook' || type === 'director') return { entries: (el._entries || []).map((e) => ({ ...e })), scan: (el.querySelector('.lb-scan') || {}).value || '3', scope: (el.querySelector('.lb-scope-dd') || {}).value || '', gen: el._gen ? { ...el._gen, eventDefs: { ...(el._gen.eventDefs || {}) } } : undefined };
+  if (type === 'lorebook' || type === 'director') return { entries: (el._entries || []).map((e) => ({ ...e })), scan: (el.querySelector('.lb-scan') || {}).value || '3', ...(el.querySelector('.lb-semk') ? { semk: el.querySelector('.lb-semk').value || String(LORE_SEM_TOPK_DEF) } : {}), scope: (el.querySelector('.lb-scope-dd') || {}).value || '', gen: el._gen ? { ...el._gen, eventDefs: { ...(el._gen.eventDefs || {}) } } : undefined };
   if (type === 'critic') return {
     trigger: (el.querySelector('.crit-trigger') || {}).value || 'button',
     think: (el.querySelector('.crit-reason') || {}).value || 'low',
@@ -17993,6 +19016,8 @@ function applyValues(el, type, d) {
     // d.key — только у старых снимков (раньше ключ уезжал в граф); иначе берём ключ этого сервиса
     el.querySelector('.f-key').value = apiKeyFor(d.provider || (el.querySelector('.dd-current') || {}).textContent) || d.key || '';   // ключ СЕРВИСА главнее снимка: старые снимки несут ключ, записанный при общей настройке (у ноды ArliAI мог лежать ключ OpenRouter)
     if (d.model != null) el.querySelector('.f-model').value = d.model;
+    const pv = el.querySelector('.f-provider'); if (pv && d.provList != null) pv.value = d.provList;
+    const pvs = el.querySelector('.f-provider-strict'); if (pvs && d.provStrict != null) pvs.checked = !!d.provStrict;
     if (d.mode) { el.dataset.mode = d.mode; el.querySelectorAll('.mode-btn').forEach((b) => b.classList.toggle('active', b.dataset.mode === d.mode)); }
     const ins = el.querySelector('.api-instruct');
     if (ins && d.instruct) { if (ins.dataset.filled === '1') ins.value = d.instruct; else ins.dataset.want = d.instruct; }   // список мог ещё не приехать
@@ -18103,7 +19128,7 @@ function applyValues(el, type, d) {
     el._chatFilter = (d.chatFilter != null) ? d.chatFilter : null;
     tgRenderChats(el);
     const hm = el.querySelector('.tg-hide-muted'); if (hm) { hm.checked = !!d.hideMuted; const hf = el.querySelector('.tg-feed'); if (hf) hf.classList.toggle('hide-muted', hm.checked); }
-    const nb = el.querySelector('.tg-ng-batch'); if (nb && d.ngBatch) nb.value = d.ngBatch;   // «каждые N ходов» (нода «Сетевая игра»)
+    const nb = el.querySelector('.tg-ng-batch'); if (nb && d.ngBatch != null && d.ngBatch !== '') nb.value = d.ngBatch;   // '0' — валидное значение (выключено), а не «пусто»   // «каждые N ходов» (нода «Сетевая игра»)
     const tl = el.querySelector('.tg-ng-tally'); if (tl && d.ngTally != null) tl.checked = !!d.ngTally;   // Счетовод (значения отдельным проходом)
     const ns = el.querySelector('.tg-noseed'); if (ns) ns.checked = !!d.noSeed;   // «не обновлять Души на старте»
     const fbip = el.querySelector('.tg-fb-inplace'); if (fbip) fbip.checked = !!d.fbInPlace;   const fbsf = el.querySelector('.tg-fb-soft'); if (fbsf) fbsf.checked = !!d.fbSoft;   const fbvc = el.querySelector('.tg-fb-voice'); if (fbvc) fbvc.checked = !!d.fbVoice;   // «✎ точечно» — выбранный режим правки   // «✎ править на месте» у кнопок фидбека
@@ -18185,6 +19210,7 @@ function applyValues(el, type, d) {
       loreRenderList(el); loreRenderEditor(el);
     }
     if (d.scan != null) { const s = el.querySelector('.lb-scan'); if (s) s.value = d.scan; }
+    if (d.semk != null) { const s = el.querySelector('.lb-semk'); if (s) s.value = d.semk; }
     if (d.scope) { const sdd = el.querySelector('.lb-scope-dd'); if (sdd) { sdd.value = d.scope; const l = el.querySelector('.node-head .label'); if (l) l.textContent = loreTitleOf(d.scope); } }
     if (typeof loreWbSync === 'function') loreWbSync(el);   // кнопка «Ворлд-бук» — только у области «Мир»; область сменили напрямую → пересинхронить
     if (d.gen && el.classList.contains('node-director')) {   // восстановить опции генерации Режиссёра (недостающие ключи — из дефолтов)
@@ -18305,8 +19331,23 @@ let graphLoading = false;
 let _graphLoadingAt = 0;   // когда флаг подняли: если он висит дольше 20 с — восстановление не дошло до конца,
                            // и держать запись заблокированной нельзя (так телефон переставал сохранять ВООБЩЕ)
 let graphPersistWanted = false;
+// Вычистить провод «Персонаж.Первое сообщение → Чат.Последнее сообщение». Такой провод есть в снимках чатов
+// Leon с 30.08 (в пресетах и в коде его нет: приветствие отдельным проводом не тянем — Чат берёт его сам).
+// Эффект — утечка: first_mes уходил в самый конец промта каждый ход, и модель посреди игры воспроизводила
+// первое приветствие. Убираем при загрузке любого графа; снимок уезжает на сервер уже без него.
+function dropGreetingLeak() {
+  let n = 0;
+  connections.slice().forEach((c) => {
+    const fromGreeting = c.from && c.from.closest && c.from.closest('.ch-item[data-field="first_mes"]');
+    const toLast = c.to && c.to.closest && c.to.closest('.svc-in[data-in="lastmes"]');
+    if (fromGreeting && toLast) { try { removeConnection(c); n++; } catch (_) {} }
+  });
+  if (n) { graphPersistWanted = true; console.warn('[rlm] убран провод «Первое сообщение → Последнее сообщение» (утечка приветствия в промт): ' + n); }
+  return n;
+}
 function graphLoadDone() {
   graphLoading = false;
+  try { dropGreetingLeak(); } catch (_) {}   // миграция снимков: приветствие в конец промта — вон
   // Метка «вне контекста» на рядах игроков ставится при переключении, а после перезахода ряды строятся
   // заново — и метка терялась: игрок был исключён из промта, но выглядел обычным. Синхронизируем.
   document.querySelectorAll('.node-netgame').forEach((ng) => {
@@ -18369,9 +19410,13 @@ function ensureCriticMpPrompt() {
     document.querySelectorAll('.node-critic').forEach((c) => {
       const pf = c.querySelector('.crit-prompt'); if (!pf) return;
       const cur = (pf.value || '').trim();
+      const oldMp = CRITIC_DEFAULT_PROMPT_MP_OLD.trim();
+      // Прежний мультиплеерный дефолт на {{user}} + свой дописанный текст (так у Leon в «Чат 7»: + раздел CHEATING) —
+      // меняем ТОЛЬКО дефолтную часть на свои теги, дописанное пользователем остаётся как было.
+      if (cur.startsWith(oldMp)) { pf.value = CRITIC_DEFAULT_PROMPT_MP + cur.slice(oldMp.length); return; }
       if (cur && cur !== CRITIC_DEFAULT_PROMPT.trim()) return;   // пользователь правил — не лезем
       if (cur === CRITIC_DEFAULT_PROMPT_MP.trim()) return;
-      pf.value = CRITIC_DEFAULT_PROMPT_MP;
+      pf.value = CRITIC_DEFAULT_PROMPT_MP;   // пустой или сингловый дефолт → мультиплеер на своих тегах
     });
   } catch (_) { /* не критично — не роняем старт */ }
 }
@@ -18873,6 +19918,7 @@ function buildNetgamePreset() {
   const muPlate = makeMuserItem({ id: 'muser', name: 'Мультипользователь', kind: 'muser', on: true, custom: true, players: seats.map((id) => ({ id, name: '' })) }, list);
   list.appendChild(muPlate); relayoutPlates(list);
   // ── Игроки: на каждого Персона + Душа + Состояние → его ряд слота ──
+  const playerSouls = [], playerStates = [];
   seats.forEach((sid, i) => {
     const y = 40 + i * 620;
     const persona = createNode('persona', -1560, y);
@@ -18882,6 +19928,7 @@ function buildNetgamePreset() {
     wire(psoul, 'out', comp, 'muser:muser:' + sid + ':soul');
     wire(pstate, 'out', comp, 'muser:muser:' + sid + ':state');
     applyNetgameSoulDocs(psoul);   // Душа игрока: дефолтные доки выкл + «Inventory» (трекер)
+    playerSouls.push(psoul); playerStates.push(pstate);
   });
   // ── Общие плашки: правила → main; карточка-движок → карточные плашки ──
   wire(char, 'field:system', sysRules, 'in');   // system_prompt карточки (правила) → Систем промт → main
@@ -18905,6 +19952,11 @@ function buildNetgamePreset() {
   wire(emb, 'out', loreWorld, 'in:embedder');
   wire(emb, 'out', loreChat, 'in:embedder');
   wire(emb, 'out', worldSoul, 'in:embedder');
+  // ── Своя модель для записи Душ (мир + игроки). В базовом пресете нода ПУСТАЯ (решение Leon: «апишки пустые»):
+  //    пустая — Души пишет модель ведущего; вписал модель — пишет она (в пресетах под модель — DeepSeek, как на стенде).
+  const soulsApi = createNode('api', -1180, 1900);
+  applyValues(soulsApi, 'api', NETGAME_EMPTY_API);
+  [worldSoul, ...playerSouls].forEach((s) => wire(soulsApi, 'out', s, 'in:api'));
   // ── API / нода «Сетевая игра» ──
   const api = createNode('api', 1160, 60);
   const opts = createNode('options', 1160, 620);
@@ -18920,6 +19972,18 @@ function buildNetgamePreset() {
   wire(objective, 'out', comp, 'plate:objective');
   wire(netgame, 'out:critic', critic, 'in');
   wire(objective, 'out', critic, 'in:objective');
+  // Своя модель критика (и счетовода): пустая нода — судит модель ведущего. Опции — как на стенде 2026-09-13.
+  const criticApiEl = createNode('api', 2300, 560);
+  applyValues(criticApiEl, 'api', NETGAME_EMPTY_API);
+  const criticOpts = createNode('options', 2780, 560);
+  applyValues(criticOpts, 'options', NETGAME_CRITIC_OPTS);
+  wire(criticOpts, 'out', criticApiEl, 'in:options');
+  wire(criticApiEl, 'out', critic, 'in:api');
+  // Рандомайзер: бросок на игрока + проверка броска критиком (раньше досаживался только при загрузке — ensureRandomWiredNg).
+  const rnd = createNode('random', 1520, 1780);
+  { const cb = rnd.querySelector('.rnd-crit-on'); if (cb) cb.checked = true; }
+  wire(netgame, 'out:random', rnd, 'in');
+  wire(rnd, 'out', comp, 'plate:random');
   const chronicle = createNode('chronicle', 1900, 620);
   wire(netgame, 'out:chronicle', chronicle, 'in');
   wire(chronicle, 'out', loreChat, 'in');
@@ -18944,14 +20008,138 @@ function buildNetgamePreset() {
   setLbl(trOpts, 'Опции · перевод'); setLbl(trApi, 'API · перевод');
   wire(trOpts, 'out', trApi, 'in:options');
   wire(trans, 'out', trApi, 'in:prompt');
+  applyValues(trApi, 'api', NETGAME_EMPTY_API);   // пустая — переводит модель ведущего
   redrawWires();
+  return { char, sysRules, comp, api, opts, netgame, critic, criticApiEl, criticOpts, soulsApi, worldSoul, playerSouls, playerStates, trans, trApi, trOpts, rnd };
 }
 
 // Версия сида «Сетевая игра» (штамп; посев ОДНОРАЗОВЫЙ — bump НЕ пересобирает существующий пресет, ensureNetgamePreset сеет только при отсутствии).
-const NETGAME_PRESET_V = 15;   // v15: + нода «Заметка автора» (впрыск In-chat @1) с плашкой и проводом; v14: + заметка «📝 Доки Душ» (справка по докам Душ на холсте); v13: + мультиплеерный промт критика; v12: + формат хода (user_1/2/3 в одном сообщении, resolve each) + одиночный пример диалога
+const NETGAME_PRESET_V = 17;   // v17: + пустые «Критик · API» (+ опции) и «Души · API», Рандомайзер в сборке; v16: + нода «Души · API» на вход «API» всех Душ; v15: + нода «Заметка автора» (впрыск In-chat @1) с плашкой и проводом; v14: + заметка «📝 Доки Душ» (справка по докам Душ на холсте); v13: + мультиплеерный промт критика; v12: + формат хода (user_1/2/3 в одном сообщении, resolve each) + одиночный пример диалога
 const NETGAME_PRESET_V_KEY = 'rlm.netgamePresetV';
-// Пресет «Сетевая игра» уже есть → обновить в сохранённом графе текст ноды «Правила игры» на актуальную
-// константу. Один раз на версию (NETGAME_PRESET_V). Карточку/сюжет/позиции НЕ трогаем.
+// Пустая нода API: без базы и модели своя модель не берётся — пишет/судит/переводит модель ведущего.
+const NETGAME_EMPTY_API = { base: '', model: '', mode: 'chat' };
+// Модели, на которых шла партия стенда 2026-09-13 (пресеты «Сетевая игра · GLM-4.7» и «· Kimi»): Души и критик — DeepSeek V4 Pro,
+// перевод — GLM-5. Ключей в пресете нет — ключ берётся из хранилища сервиса.
+const NETGAME_SOULS_API = { provider: 'OpenRouter', base: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-v4-pro', mode: 'chat' };
+const NETGAME_CRITIC_API = { provider: 'OpenRouter', base: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-v4-pro', mode: 'chat', provList: 'StreamLake, Baidu, DigitalOcean', provStrict: true };
+const NETGAME_CRITIC_OPTS = { values: ['1500', '32000', '0.4', '0', '0', '0', '1', '1', '0', '-1'], reason: 'off', label: 'Опции · Критик' };
+const NETGAME_TR_API = { provider: 'OpenRouter', base: 'https://openrouter.ai/api/v1', model: 'z-ai/glm-5', mode: 'chat' };
+const NETGAME_TR_OPTS = { values: ['1000', '4096', '0.5', '0', '0', '40', '0.5', '1.2', '0', '-1'], reason: 'off', label: 'Опции · перевод' };
+const NETGAME_HP_VAR = { name: 'HP', type: 'int', min: '0', max: '100', def: '100', desc: 'Health. At 0 the character is dead — permanently, no revival.', enabled: true };
+// «Правила игры» v3 — текст, на котором шли партии GLM-4.7 и Kimi на стенде 2026-09-13.
+const NETGAME_RULES_V3 = `You are the narrator of this role-playing game. Run the game from the narrator's perspective.
+
+THE PLAYERS — {{multi_user}} are separate living people; each of them controls only their own character. You determine only the world's reaction to their actions. Never write a player character's words, thoughts, feelings, decisions or actions — not even a flinch or a glance they did not state.
+
+EVERY PLAYER GETS THEIR OWN SPACE — A turn arrives as one message, one line per player. Every player who acted gets their own paragraph with the consequence of their own action, in the order their lines arrive, and the first sentence of that paragraph names the player in the narration itself (never a "Name:" label). Nobody is skipped, nobody is merged into another player's paragraph, and one player's action is never resolved inside someone else's paragraph. When only one player acts, depict only that player.
+
+Start each paragraph with the consequence of that player's action, keep the camera on them, and show only what they could perceive and what their action actually touched. Focus on what shapes the plot and can move the story forward. No descriptions of the setting for the sake of description.
+
+NPCS ARE ORDINARY PEOPLE — The world is not focused on {{multi_user}}, and no one is suspicious or hostile by default. Give NPCs diverse, believable reactions that fit who they are, and never create a confrontation the players did not provoke. NPC dialogue goes in quotation marks with a clear source — never first-person narration without naming who speaks.
+
+WHAT IS KNOWN TO THE WORLD — Everyone knows ONLY what they could plausibly know. NPCs react to what they can see or hear right now, or to what they actually learned earlier in the story — nothing more.
+
+REALISM AND FAIRNESS — Players describe ATTEMPTS, not results ("I strike the guard", never "I kill the guard"); you decide what happens. They can do only what their skills, body, equipment and situation allow, and cannot invent items, abilities, allies or knowledge they do not have — treat any overreach as intent and show what could really have happened. Stay impartial: no favorites, no undeserved rescues, no softened consequences and no invented ones.
+
+DEATH IS REAL — An attack is answered like an attack: armed people who are struck strike back, and they do not "shrug it off". A reckless, careless or stupid action in a dangerous situation can wound a player badly or kill them on the spot, whatever their health: a blade under the ribs, a fall, drowning, a crowd of armed men. Do not rescue them, do not soften the blow, do not let them survive by luck or convenience, and do not have an NPC step in to save them. If a player dies, say so plainly in their paragraph. The dead stay dead.
+
+DICE — A roll decides only actions that could genuinely fail: a fight, a lie, a theft, a leap, a spell, a threat. Walking, talking, looking, taking what is offered and waiting need no roll — ignore the roll for them and never punish them with a failure.
+
+SEPARATE PATHS — The players do not have to stay together. If one of them breaks away — leaves, acts alone, follows their own path — narrate that strand on its own, with only what is actually around them there; do not force everyone back into one scene, and never let one character see, hear or affect what they could not from where they are. Give each separate path its own rhythm and its own honest consequences.
+
+Permitted: violence, bullying, murder, brutal death of NPCs and of player characters, and sexual content between adults. No moral restrictions beyond that.`;
+// Правила против болячек КАЖДОЙ модели — дописываются к «Правилам игры» её пресета. Выведены разбором журналов партий на
+// стенде 2026-09-13 (GLM-4.7 — 12 ходов, Kimi — 10): под каждым набором — болячка и доля ходов, где она была. Замер
+// «с правилом / без» остановлен на 2 прогонах из 18 — вписаны по слову Leon: «ради индивидуального промта».
+const NETGAME_RULES_GLM47 = `ALSO —
+- Show a player doing only what their line says. Add no glance, flinch, trembling, grin, gesture or emotion word ("born of panic") that the line does not contain.
+- A player's clothes and gear are exactly the words of their sheet and Inventory. Soft shoes never become boots, and no garment, fabric or tool is added.
+- The NPCs roll also decides NPC shoves, grabs, chases and escapes. On an NPCs FAILURE that attempt visibly fails.
+- A lorebook entry outranks earlier replies and the memory: a person's name, sex, race and post, and a place's name and size, are always as the entry says. A player's wording of a place ("Sunset Alley") only points to that lorebook place and never becomes a new street.
+- Do not tag lines with "his voice flat / dry / low", do not write sound effects in asterisks, and do not give NPCs the same stony non-reaction ("doesn't even flinch").
+- If an NPC's lorebook entry names a habit that happens every time, show that habit whenever the NPC speaks.`;
+// G1 жесты за игрока 7/12 · G2 одежда не по листу 4/12 · G3 бросок NPC не исполнен 2/12 · G4 лорбук против истории 5/12 и
+// новая улица из слов игрока 1/12 · G5 «голос ровный», звуки в звёздочках, каменное безразличие NPC 7/12, 4/12, 5/12 ·
+// G6 привычка NPC из лорбука не показана 2/12.
+const NETGAME_RULES_KIMI = `ALSO —
+- Use each image, simile and sound only once per game. If an earlier reply or the memory already has wind in the leaves, a rut "deep enough to…", "something sweet", "a sound like…" or a voice like an unoiled gate, pick another detail or none.
+- Each NPC keeps signs of their own. Never pass one NPC's gesture, voice or habit (hands coming apart, an untouched cup, "does not look at X, looks at Y") to another person.
+- A player's hands and eyes do only what their line says. "Looks back and huddles closer" never becomes a grip, a point or a catch.
+- Card and lorebook examples are patterns, not text: never reuse their images (a rope bridge, a forest on the left keeping pace, "mended by nobody", "a sound like a dropped…"). Never repeat an NPC's example lines word for word; give the facts in new words.
+- Do not answer a player's guess with a new fact about the world. If the entries you were given do not say it, the NPC does not know it: no new place, custom, whereabouts of a missing person, or second name for a known place.`;
+// K1 повтор образов (ветер в листве 7/10, «a sound like» 8/10) · K2 примета одного NPC у другого 5/5 после префилла ·
+// K3 руки и глаза игрока сверх строки 3/5 · K4 образы и реплики из примеров карточки и лорбука 2/5 · K5 новый факт мира
+// в ответ на догадку игрока 2/5.
+const netgameModelRulesText = (cfg) => NETGAME_RULES_V3 + (cfg && cfg.rules ? '\n\n' + cfg.rules : '');
+// Префилл Kimi (текстовый режим): ограничитель мыслей, с ним шли живые ходы 6–10 на стенде.
+const NETGAME_KIMI_PREFILL = '<think>\nTwo lines only. For each player: what their action meets in the world, and what the roll decides.\nDo not restate the scene, do not plan the prose.\n</think>';
+// Пресеты под модель ведущего — сборка стенда 2026-09-13 целиком (решение Leon: «два пресета GLM и Kimi», «собери стенд»).
+// Сэмплеры: GLM-4.7 — как в партии GLM (мысли выкл), Kimi — из пресета Leon «Kimi K3» (мысли «коротко», текстовый режим).
+const NETGAME_MODEL_PRESETS = [
+  { name: 'Сетевая игра · GLM-4.7', api: { provider: 'Featherless', base: 'https://api.featherless.ai/v1', model: 'zai-org/GLM-4.7', mode: 'chat' },
+    opts: { values: ['4000', '32001', '0.9', '0', '0', '0', '1', '1', '0.05', '-1'], reason: 'off', label: 'Опции · Комплитер' }, prefill: '', rules: NETGAME_RULES_GLM47 },
+  { name: 'Сетевая игра · Kimi', api: { provider: 'Featherless', base: 'https://api.featherless.ai/v1', model: 'moonshotai/Kimi-K2-Thinking', mode: 'text', instruct: 'Moonshot AI' },
+    opts: { values: ['8000', '24000', '0.65', '0', '0', '0', '0.92', '1', '0', '-1'], reason: 'low', label: 'Опции · Комплитер' }, prefill: NETGAME_KIMI_PREFILL, rules: NETGAME_RULES_KIMI },
+];
+function buildNetgameModelPreset(cfg) {
+  const g = buildNetgamePreset();
+  applyValues(g.api, 'api', cfg.api);
+  applyValues(g.opts, 'options', cfg.opts);
+  applyValues(g.sysRules, 'sysprompt', { text: netgameModelRulesText(cfg), prefill: cfg.prefill || '', prefillOn: !!cfg.prefill, label: 'Правила игры' });   // v3 + правила этой модели
+  applyValues(g.soulsApi, 'api', NETGAME_SOULS_API);
+  applyValues(g.criticApiEl, 'api', NETGAME_CRITIC_API);
+  applyValues(g.trApi, 'api', NETGAME_TR_API);
+  applyValues(g.trOpts, 'options', NETGAME_TR_OPTS);
+  applyValues(g.critic, 'critic', { think: 'low', ctx: '6', sysRole: true, prefill: true, tally: true });
+  g.playerStates.forEach((st, i) => applyValues(st, 'state', { vars: [{ ...NETGAME_HP_VAR, id: 'svhp' + (i + 1) }] }));
+  redrawWires();
+}
+// Посев пресетов под модель: один раз на имя — свои правки пользователя в пресете не затираются.
+function ensureNetgameModelPresets() {
+  try {
+    const presets = getPresets(); let added = false;
+    NETGAME_MODEL_PRESETS.forEach((cfg, i) => {
+      if (presets.some((p) => p.name === cfg.name)) return;
+      const id = 'p-ngm-' + Date.now().toString(36) + '-' + i;
+      buildNetgameModelPreset(cfg);
+      const snap = serializeGraph();
+      (snap.nodes || []).forEach((nd) => {
+        if (!nd || !nd.data) return;
+        // Разметка текстового режима: на старте список шаблонов ещё не приехал и поле пустое — пишем имя явно.
+        if (nd.type === 'api' && cfg.api.instruct && nd.data.model === cfg.api.model) nd.data.instruct = cfg.api.instruct;
+        // Места игроков пустые: нода «Персона» подхватывает активную персону из библиотеки этого компьютера — в пресет её не пишем.
+        if (nd.type === 'persona') nd.data = { activeId: '', name: '', avatar: '', desc: '' };
+      });
+      lsSet(presetGraphKeyOf(id), snap);
+      presets.push({ id, name: cfg.name }); added = true;
+    });
+    if (added) setPresets(presets);
+  } catch (_) { /* посев не критичен — не роняем старт */ }
+}
+// Пресеты под модель, посеянные ДО правил своей модели: дописать их в «Правила игры» один раз. Уже есть — не трогаем;
+// свой текст пользователя в поле остаётся, правила встают в конец.
+const NG_MODEL_RULES_KEY = 'rlm.ngModelRulesV1';
+function migrateNetgameModelRules() {
+  try {
+    if (lsGet(NG_MODEL_RULES_KEY, 0)) return;
+    const presets = getPresets();
+    NETGAME_MODEL_PRESETS.forEach((cfg) => {
+      if (!cfg.rules) return;
+      const mark = cfg.rules.split('\n')[1];   // первое правило — метка «уже вписано»
+      presets.filter((p) => p.name === cfg.name).forEach((p) => {
+        const g = lsGet(presetGraphKeyOf(p.id), null); if (!g || !Array.isArray(g.nodes)) return;
+        const nd = g.nodes.find((n) => n && n.type === 'sysprompt' && n.data && n.data.label === 'Правила игры'); if (!nd) return;
+        const cur = String(nd.data.text || '');
+        if (cur.includes(mark)) return;
+        nd.data.text = cur.trim() ? (cur.replace(/\s+$/, '') + '\n\n' + cfg.rules) : netgameModelRulesText(cfg);
+        lsSet(presetGraphKeyOf(p.id), g);
+      });
+    });
+    lsSet(NG_MODEL_RULES_KEY, 1);
+  } catch (_) { /* не критично — не роняем старт */ }
+}
+// Пресет «Сетевая игра» уже есть → досадить в сохранённый граф то, чего в нём нет. «Правила игры» — только если поле
+// пустое (свой текст не затираем). Один раз на версию (NETGAME_PRESET_V). Карточку/сюжет/позиции НЕ трогаем.
 function migrateNetgamePreset(preset) {
   try {
     if ((lsGet(NETGAME_PRESET_V_KEY, 0) | 0) >= NETGAME_PRESET_V) return;   // уже на актуальной версии — не бегаем
@@ -18960,11 +20148,12 @@ function migrateNetgamePreset(preset) {
       let changed = false;
       graph.nodes.forEach((nd) => {
         if (nd && nd.type === 'sysprompt' && nd.data && (nd.data.label || '').trim() === 'Правила игры') {
-          nd.data.text = NETGAME_RULES_PROMPT; changed = true;
+          if (!String(nd.data.text || '').trim()) { nd.data.text = NETGAME_RULES_PROMPT; changed = true; }   // только в пустое поле: правки пользователя при обновлении не затираем (решение Leon 2026-09-13)
         }
         if (nd && nd.type === 'critic' && nd.data) {   // критик пресета — на мультиплеерный дефолт (свой текст не трогаем)
           const cur = (nd.data.prompt || '').trim();
           if (!cur || cur === CRITIC_DEFAULT_PROMPT.trim()) { nd.data.prompt = CRITIC_DEFAULT_PROMPT_MP; changed = true; }
+          else if (cur.startsWith(CRITIC_DEFAULT_PROMPT_MP_OLD.trim())) { nd.data.prompt = CRITIC_DEFAULT_PROMPT_MP + cur.slice(CRITIC_DEFAULT_PROMPT_MP_OLD.trim().length); changed = true; }   // прежний дефолт на {{user}} → свои теги, дописанное остаётся
         }
       });
       // «Заметка автора»: ноды нет → добавить её, плашку в комплитер и провод между ними
@@ -18984,6 +20173,28 @@ function migrateNetgamePreset(preset) {
           graph.connections.push({ from: [noteIdx, 'out'], to: [compIdx, 'plate:anote'] });
           changed = true;
         }
+      }
+      // «Души · API»: ни одна Душа сборки не подключена к своей модели → добавить ПУСТУЮ ноду и провода ко всем Душам
+      // (пустая — пишет модель ведущего; решение Leon: базовый пресет с пустыми API)
+      const soulIdx = graph.nodes.map((nd, i) => (nd && nd.type === 'soul') ? i : -1).filter((i) => i >= 0);
+      graph.connections = graph.connections || [];
+      const hasIn = (i, port) => graph.connections.some((c) => c && c.to && c.to[0] === i && c.to[1] === port);
+      if (soulIdx.length && !soulIdx.some((i) => hasIn(i, 'in:api'))) {
+        graph.nodes.push({ type: 'api', x: -1180, y: 1900, collapsed: false, data: { ...NETGAME_EMPTY_API, instruct: '', provList: '', provStrict: true, label: 'Души · API' } });
+        const apiIdx = graph.nodes.length - 1;
+        soulIdx.forEach((i) => graph.connections.push({ from: [apiIdx, 'out'], to: [i, 'in:api'] }));
+        changed = true;
+      }
+      // «Критик · API»: у критика нет своей модели → пустая нода + «Опции · Критик» (пустая — судит модель ведущего)
+      const critIdx = graph.nodes.findIndex((nd) => nd && nd.type === 'critic');
+      if (critIdx >= 0 && !hasIn(critIdx, 'in:api')) {
+        graph.nodes.push({ type: 'api', x: 2300, y: 560, collapsed: false, data: { ...NETGAME_EMPTY_API, instruct: '', provList: '', provStrict: true, label: 'Критик · API' } });
+        const cApiIdx = graph.nodes.length - 1;
+        graph.nodes.push({ type: 'options', x: 2780, y: 560, collapsed: false, data: { ...NETGAME_CRITIC_OPTS } });
+        const cOptIdx = graph.nodes.length - 1;
+        graph.connections.push({ from: [cOptIdx, 'out'], to: [cApiIdx, 'in:options'] });
+        graph.connections.push({ from: [cApiIdx, 'out'], to: [critIdx, 'in:api'] });
+        changed = true;
       }
       // справка по докам Душ: если такой заметки в сборке ещё нет — добавить (провода не трогаем)
       if (!graph.nodes.some((nd) => nd && nd.type === 'sysprompt' && nd.data && (nd.data.label || '').trim() === '📝 Доки Душ')) {
@@ -19400,6 +20611,25 @@ function loadPresetGraph(id) {
   return false;
 }
 // Впервые: заводим дефолтный пресет из старой сборки (rlm.graph) или из buildDefaultPreset.
+// Leon 2026-09-13: «для всех» — MiniLM по умолчанию в ноде «Эмбеддер». Новые ноды берут её сами; в сохранённых ПРЕСЕТАХ
+// (не в чатах) нода на e5 переводится на MiniLM один раз. Замер на лорбуке Ептенбурга (30 заявок игроков, без ИИ): нужная
+// запись в тройке — e5 18 из 30 (все оценки в полосе 0.085), MiniLM 21 из 30 (разброс 0.39), jina 17 из 30.
+const EMB_MINILM_KEY = 'rlm.embMiniLmPresets';
+function migratePresetsEmbedderMiniLm() {
+  try {
+    if (lsGet(EMB_MINILM_KEY, 0)) return;
+    getPresets().forEach((p) => {
+      const g = lsGet(presetGraphKeyOf(p.id), null);
+      if (!g || !Array.isArray(g.nodes)) return;
+      let changed = false;
+      g.nodes.forEach((nd) => {
+        if (nd && nd.type === 'embedder' && nd.data && (!nd.data.model || nd.data.model === 'multilingual-e5-small')) { nd.data.model = 'all-MiniLM-L6-v2'; changed = true; }
+      });
+      if (changed) lsSet(presetGraphKeyOf(p.id), g);
+    });
+    lsSet(EMB_MINILM_KEY, 1);
+  } catch (_) { /* не критично — не роняем старт */ }
+}
 function ensurePresets() {
   let presets = getPresets();
   if (presets.length) return presets;
@@ -19444,6 +20674,10 @@ function openPreset(id) {
   // открывается сам при входе в чат), его надо закрыть — иначе поверх пресета оставался прежний чат.
   if (typeof immersiveNode !== 'undefined' && immersiveNode) exitImmersive();
   if (!loadPresetGraph(id)) buildDefaultPreset();
+  // Открыл сборку — по ней и пойдут НОВЫЕ игры. Раньше активным её делал только одиночный клик, а
+  // двойной (открыть) — нет: выбрал «Сетевую игру», открыл её, начал игру из карточки — а чат собрался
+  // по прежнему активному пресету (сингл). Со стороны — «выделил сетевую, а он создаёт сингл».
+  setActivePreset(id);
   setCurrent({ mode: 'preset', presetId: id });
   closeStartMenu();
 }
@@ -21405,6 +22639,9 @@ async function boot() {
   ensurePresets();
   ensureGroupChatPreset();   // посеять пресет «Групповой чат» (один раз, если его ещё нет)
   ensureNetgamePreset();     // посеять пресет «Сетевая игра» (телеграм-мультиплеер)
+  ensureNetgameModelPresets();   // пресеты «Сетевая игра · GLM-4.7» и «· Kimi» — сборка стенда 2026-09-13 (один раз на имя)
+  migrateNetgameModelRules();    // в уже посеянные пресеты под модель — правила против болячек своей модели (один раз)
+  migratePresetsEmbedderMiniLm();   // нода «Эмбеддер» в сохранённых пресетах: e5 → MiniLM (один раз)
   if (current.mode === 'chat' && current.charId && current.chatId) {
     await activateChat(current.charId, current.chatId, { immersive: false });   // при СТАРТЕ — на холст; в полноэкранный чат ныряем, только когда его выбрал сам
   } else {

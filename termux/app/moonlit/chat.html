@@ -72,6 +72,21 @@
       border: 1px solid rgba(127,127,127,.32); border-radius: 4px; padding: 1px 11px; cursor: pointer; opacity: .8; transition: opacity .12s, background .12s; }
     .rlm-greet-arrow:hover { opacity: 1; background: rgba(127,127,127,.24); }
     .rlm-greet-count { font-size: 12px; opacity: .7; min-width: 42px; text-align: center; }
+    /* Варианты последнего ответа ‹ n/N › (те же стили, что у выбора приветствия) */
+    .rlm-swipe-nav { display: flex; align-items: center; gap: 8px; margin: 8px 2px 0; }
+    .rlm-swipe-arrow { font-size: 15px; line-height: 1; color: inherit; background: rgba(127,127,127,.12);
+      border: 1px solid rgba(127,127,127,.32); border-radius: 4px; padding: 1px 11px; cursor: pointer; opacity: .8; transition: opacity .12s, background .12s; }
+    .rlm-swipe-arrow:hover { opacity: 1; background: rgba(127,127,127,.24); }
+    .rlm-swipe-arrow[disabled] { opacity: .25; cursor: default; background: transparent; }
+    .rlm-swipe-count { font-size: 12px; opacity: .7; min-width: 42px; text-align: center; }
+    /* Табличка фидбеков В НАЧАЛЕ сообщения: все замечания к этому ответу, ✕ убирает одно */
+    .rlm-fbs { margin: 4px 0 8px; padding: 5px 8px; border: 1px dashed rgba(127,127,127,.45); border-radius: 6px; font-size: 12px; line-height: 1.35; }
+    .rlm-fbs-h { opacity: .6; margin-bottom: 3px; font-size: 11px; }
+    .rlm-fb-row { display: flex; align-items: flex-start; gap: 6px; padding: 2px 0; }
+    .rlm-fb-n { opacity: .6; min-width: 14px; }
+    .rlm-fb-t { flex: 1; white-space: pre-wrap; word-break: break-word; }
+    .rlm-fb-del { background: none; border: 0; color: inherit; opacity: .55; cursor: pointer; padding: 0 4px; font-size: 13px; line-height: 1; }
+    .rlm-fb-del:hover { opacity: 1; color: #e77; }
     /* Текст сообщения использует больше ширины справа — уменьшенный правый паддинг блока (было 15px). */
     body.ripplestyle #chat .mes .mes_block { padding-right: 5px !important; }
     /* RLM: СКРИМ-затенение — тёмный слой ПОВЕРХ низа чата (сообщения + фон), с РАЗМЫТЫМ верхним краем.
@@ -131,6 +146,11 @@
     .rlm-proc-x { margin-left: 8px; font-size: 13px; line-height: 1; cursor: pointer;
       color: color-mix(in srgb, var(--SmartThemeBodyColor, #889) 55%, transparent); }
     .rlm-proc-x:hover { color: #e0645a; }
+    /* Вопрос ленты «Душа: обновить память?»: ✓ (да) рядом с крестиком (нет) */
+    .rlm-proc-text.ask { color: var(--customThemeColor, #66c0f4); }
+    .rlm-proc-ok { margin-left: 10px; font-size: 14px; line-height: 1; cursor: pointer; opacity: .85; pointer-events: auto; }
+    .rlm-proc-ok:hover { color: #6ee87a; opacity: 1; }
+    .rlm-proc-ok[hidden] { display: none; }
     .rlm-proc-x[hidden] { display: none; }
     /* полоса процесса — анимируется из JS (реально движется в любом рендере) */
     #rlm-proc-bar { position: relative; z-index: 1; height: 3px; margin: 5px 10px 0; border-radius: 3px;
@@ -542,6 +562,29 @@
         + '<button class="rlm-greet-arrow" type="button" data-greet-dir="1" title="Следующее">›</button>'
         + '</div>';
     }
+    // Варианты ПОСЛЕДНЕГО ответа модели: ‹ n/N ›. ‹ › листают уже сгенерированные, › на последнем — новая
+    // генерация (с накопленными фидбеками). Ход игрока закрепляет выбранный вариант — стрелки исчезают.
+    function swipeNavHtml(m, i){
+      if (m.role === 'user' || i !== currentMsgs.length - 1) return '';
+      if (m.greeting && currentMsgs.length === 1) return '';        // приветствие — свой выбор (greetNavHtml)
+      if (m.pending || m.text === '…') return '';                     // генерация идёт / критик держит реплику
+      const n = (Array.isArray(m.swipes) && m.swipes.length) ? m.swipes.length : 1;
+      const cur = Number.isInteger(m.swipeIdx) ? m.swipeIdx : 0;
+      return '<div class="rlm-swipe-nav" title="Варианты этого ответа: листай ‹ ›; › на последнем — сгенерировать ещё один (с учётом фидбеков сверху)">'
+        + '<button class="rlm-swipe-arrow interactable" type="button" data-swipe-dir="-1" title="Предыдущий вариант"' + (cur <= 0 ? ' disabled' : '') + '>‹</button>'
+        + '<span class="rlm-swipe-count">' + (cur + 1) + ' / ' + n + '</span>'
+        + '<button class="rlm-swipe-arrow interactable" type="button" data-swipe-dir="1" title="' + (cur + 1 < n ? 'Следующий вариант' : 'Сгенерировать новый вариант') + '">›</button>'
+        + '</div>';
+    }
+    // Табличка фидбеков В НАЧАЛЕ сообщения: все замечания к этому ответу (в блокнот или разовые — без разницы),
+    // ✕ убирает одно из последующих генераций именно этого ответа.
+    function fbTableHtml(m, i){
+      if (!Array.isArray(m.fbs) || !m.fbs.length) return '';
+      return '<div class="rlm-fbs"><div class="rlm-fbs-h">фидбек к этому ответу — уйдёт в каждую новую генерацию</div>'
+        + m.fbs.map((t, k) => '<div class="rlm-fb-row"><span class="rlm-fb-n">' + (k + 1) + '.</span><span class="rlm-fb-t">' + esc(String(t || '')) + '</span>'
+          + '<button class="rlm-fb-del interactable" type="button" data-fb-del="' + k + '" data-fb-mes="' + i + '" title="Убрать это замечание из следующих генераций">✕</button></div>').join('')
+        + '</div>';
+    }
     // Одно сообщение → разметка ST (.mes). role: 'char' | 'user'.
     function mesHtml(m, i){
       const isUser = m.role === 'user';
@@ -595,8 +638,10 @@
         + '<div class="mes_button fa-solid fa-pencil interactable" title="Редактировать" data-edit="' + i + '"></div>'
         + '<div class="mes_button mes-del fa-solid fa-xmark interactable" title="Удалить это сообщение" data-del="' + i + '"></div>'
         + '</div></div>'
+        + fbTableHtml(m, i)
         + '<div class="mes_text">' + fmt(shownText) + '</div>'
         + greetNavHtml(m, i)
+        + swipeNavHtml(m, i)
         + ttsPlayerHtml(i)
         + sourcesHtml(m)
         + criticHtml(m, i === currentMsgs.length - 1)
@@ -879,10 +924,19 @@
       const fill  = bar && bar.querySelector('i');
       if (!proc || !bar || !fill) return;
       const ACC = 'var(--customThemeColor,#51a0de)';
-      let anim = null, hideT = null, mode = null, pendingScene = null;   // mode: 'proc' | 'scene'; pendingScene — подсказка сцены ждёт, пока процесс освободит ленту
+      let anim = null, hideT = null, mode = null, pendingScene = null;   // mode: 'proc' | 'scene' | 'ask'; pendingScene — подсказка сцены ждёт, пока процесс освободит ленту
+      let pendingAsk = null;   // вопрос «Душа: обновить память?» ждёт, пока лента занята процессом (критик/озвучка), и покажется на idle
+      // Кнопка ✓ для вопроса — создаём один раз рядом с крестиком; вне режима 'ask' скрыта.
+      let pok = null;
+      function okBtn(){ if (pok) return pok; pok = document.createElement('span'); pok.className = 'rlm-proc-ok'; pok.textContent = '✓'; pok.title = 'Да — обновить память по этому ответу'; pok.hidden = true; px.parentNode.insertBefore(pok, px);
+        pok.addEventListener('click', () => { if (mode !== 'ask') return; parent.postMessage({ type: 'soul-confirm', yes: true }, '*'); pendingAsk = null; toIdle(); }); return pok; }
+      function showAsk(text){ mode = 'ask'; if (hideT) { clearTimeout(hideT); hideT = null; } stop(); bar.classList.add('on'); fill.style.transition='none'; fill.style.opacity='0.5'; fill.style.left='0'; fill.style.width='100%'; fill.style.background='linear-gradient(90deg,transparent,'+ACC+' 50%,transparent)';
+        proc.hidden = false; if (zoneActions) zoneActions.style.visibility = 'hidden'; ptext.className = 'rlm-proc-text ask'; ptext.textContent = text || 'Душа: обновить память?'; okBtn().hidden = false; px.hidden = false; px.title = 'Нет — не сейчас (спрошу после следующего ответа)'; }
       const stop = () => { if (anim) { clearInterval(anim); anim = null; } };
       function barOff(){ stop(); fill.style.transition='none'; fill.style.opacity='0'; fill.style.left='0'; fill.style.width='0'; bar.classList.remove('on'); }
-      function toIdle(){ barOff(); proc.hidden = true; if (zoneActions) zoneActions.style.visibility = ''; mode = null; if (pendingScene) showScene(pendingScene); }
+      function toIdle(){ barOff(); proc.hidden = true; if (zoneActions) zoneActions.style.visibility = ''; mode = null; if (pok) pok.hidden = true; px.title = 'Отменить';
+        if (pendingAsk) { const t = pendingAsk; pendingAsk = null; showAsk(t); return; }   // лента освободилась — задать отложенный вопрос Души
+        if (pendingScene) showScene(pendingScene); }
       // Подсказка разметки сцены (не процесс): спокойная статичная полоса + текст + ✕ (сброс разметки).
       function barScene(){ stop(); bar.classList.add('on'); fill.style.transition='none'; fill.style.opacity='0.5'; fill.style.left='0'; fill.style.width='100%'; fill.style.background='linear-gradient(90deg,transparent,'+ACC+' 50%,transparent)'; }
       function showScene(text){ mode='scene'; if(hideT){clearTimeout(hideT);hideT=null;} proc.hidden=false; if(zoneActions) zoneActions.style.visibility='hidden'; ptext.className='rlm-proc-text scene'; ptext.textContent=text; px.hidden=false; barScene(); }
@@ -910,8 +964,14 @@
         const st = m.state;
         if (st === 'error' || st === 'cancel' || st === 'idle') trBusyClear();   // перевод оборвался — кнопки снова живые
 
+        // Вопрос «Душа: обновить память?» — не процесс: ✓ пишем / ✕ не сейчас. Проверяем ДО того, как mode станет 'proc'.
+        // Если лента занята процессом (критик, озвучка) — вопрос ждёт и покажется, когда она освободится, а не пропадает.
+        if (st === 'ask')   { if (mode === 'proc') { pendingAsk = m.text || 'Душа: обновить память?'; return; } showAsk(m.text); return; }
+        // Вопрос уже висел, а тут пришёл процесс/финал (Цель, Хроника, озвучка…) — вопрос не теряем: отложим и вернём на idle.
+        if (mode === 'ask' && st !== 'idle') pendingAsk = ptext.textContent || 'Душа: обновить память?';
         if (st !== 'idle') mode = 'proc';   // реальный процесс перекрывает подсказку сцены (вернётся из pendingScene, когда лента освободится)
         if (st === 'idle')  { toIdle(); return; }
+        if (pok) pok.hidden = true;   // любой процесс — кнопка ✓ вопроса не видна
         if (st === 'done')  { proc.hidden=false; if(zoneActions) zoneActions.style.visibility='hidden'; ptext.className='rlm-proc-text ok';  ptext.textContent=m.text||'Готово';  px.hidden=true; barDone(); hideT=setTimeout(toIdle,1500); return; }
         if (st === 'error' || st === 'cancel') { proc.hidden=false; if(zoneActions) zoneActions.style.visibility='hidden'; ptext.className='rlm-proc-text err'; ptext.textContent=m.text||(st==='cancel'?'Прервано':'Ошибка'); px.hidden=true; barFail(); hideT=setTimeout(toIdle,1500); return; }
         show(m.text, m.cancelable !== false);
@@ -920,7 +980,9 @@
         else if (st === 'fill' || st === 'grow') barDet(m.frac);
       };
       // крестик: процесс → отмена процесса (наружу); подсказка сцены → сброс разметки.
-      px.addEventListener('click', () => { if (mode === 'scene') { if (window.rlmSceneCancel) window.rlmSceneCancel(); } else parent.postMessage({ type: 'proc-cancel' }, '*'); });
+      px.addEventListener('click', () => {
+        if (mode === 'ask') { parent.postMessage({ type: 'soul-confirm', yes: false }, '*'); pendingAsk = null; toIdle(); return; }   // ✕ на вопросе — «не сейчас»
+        if (mode === 'scene') { if (window.rlmSceneCancel) window.rlmSceneCancel(); } else parent.postMessage({ type: 'proc-cancel' }, '*'); });
       // Подсказка «отметь конец/начало сцены»: text=null убирает. Идёт процесс → ждёт в pendingScene, покажется, когда лента освободится.
       window.rlmSceneHint = function(text){ if (!text) { pendingScene = null; if (mode === 'scene') toIdle(); return; } pendingScene = text; if (mode === 'proc') return; showScene(text); };
     })();
@@ -1031,6 +1093,18 @@
       const ga = e.target.closest('.rlm-greet-arrow'); if (!ga) return;
       e.stopPropagation();
       parent.postMessage({ type: 'greet-swipe', dir: Number(ga.dataset.greetDir) || 1 }, '*');
+    });
+    // ---- Варианты последнего ответа: ‹ › → наружу (листать / › на последнем — сгенерировать новый) ----
+    if (chatEl) chatEl.addEventListener('click', (e) => {
+      const sa = e.target.closest('.rlm-swipe-arrow'); if (!sa || sa.disabled) return;
+      e.stopPropagation();
+      parent.postMessage({ type: 'swipe', dir: Number(sa.dataset.swipeDir) || 1 }, '*');
+    });
+    // ---- ✕ у строки фидбека → убрать это замечание из памяти ответа ----
+    if (chatEl) chatEl.addEventListener('click', (e) => {
+      const fd = e.target.closest('.rlm-fb-del'); if (!fd) return;
+      e.stopPropagation();
+      parent.postMessage({ type: 'fb-del', idx: Number(fd.dataset.fbMes), k: Number(fd.dataset.fbDel) }, '*');
     });
 
     // ---- Окно разбора критика: клик по тегу под сообщением → окошко (как окно правки), но ТОЛЬКО просмотр ----
@@ -1315,7 +1389,9 @@
       fab.innerHTML = '<span class="cic">✂</span>Clip';
       document.body.appendChild(fab);
       let curText = '';
-      // Состояние выделения: непустой текст ВНУТРИ .mes (не в поле правки) → вернуть {text, rect}.
+      let armed = false;     // палец/мышь уже на кнопке — выделение может схлопнуться, текст держим
+      // Состояние выделения: непустой текст ВНУТРИ .mes (не в поле правки) → вернуть {text, rect, last}.
+      // last — прямоугольник ПОСЛЕДНЕЙ строки выделения (его конец): у него и встаёт кнопка.
       function selInMes(){
         const sel = window.getSelection && window.getSelection();
         if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
@@ -1325,33 +1401,62 @@
         if (!chat || !chat.contains(sel.anchorNode) || !chat.contains(sel.focusNode)) return null;
         const anc = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
         if (!anc || !anc.closest('.mes') || anc.closest('.mes-edit')) return null;
-        const rect = sel.getRangeAt(0).getBoundingClientRect();
+        const range = sel.getRangeAt(0);
+        const rect = range.getBoundingClientRect();
         if (!rect || (rect.width === 0 && rect.height === 0)) return null;
-        return { text, rect };
+        const rs = range.getClientRects();
+        const last = (rs && rs.length) ? rs[rs.length - 1] : rect;
+        return { text, rect, last };
       }
       function updateFab(){
         const st = selInMes();
-        if (!st) { fab.style.display = 'none'; curText = ''; return; }
+        if (!st) { if (!armed) { fab.style.display = 'none'; curText = ''; } return; }
         curText = st.text;
         fab.style.display = 'flex';
         const bw = fab.offsetWidth || 62, bh = fab.offsetHeight || 26;
-        let x = Math.min(st.rect.right + 6, window.innerWidth - bw - 6); x = Math.max(6, x);
-        let y = st.rect.top - bh - 4; if (y < 4) y = st.rect.bottom + 6;   // не влезло сверху — снизу выделения
+        // Кнопка встаёт ПОД концом выделения: на телефоне системное меню («Копировать») всплывает
+        // НАД выделением и накрыло бы её. Внизу не влезло — тогда над выделением.
+        let x = Math.min(st.last.right + 6, window.innerWidth - bw - 6); x = Math.max(6, x);
+        let y = st.last.bottom + 6;
+        if (y + bh > window.innerHeight - 4) y = Math.max(4, st.rect.top - bh - 4);
         fab.style.left = x + 'px'; fab.style.top = y + 'px';
       }
-      document.addEventListener('mouseup', () => setTimeout(updateFab, 0));
-      document.addEventListener('selectionchange', () => { const s = window.getSelection(); if (!s || s.isCollapsed) { fab.style.display = 'none'; curText = ''; } });
+      // Мышь — по mouseup; палец — по touchend/pointerup (эмуляции mouseup при выделении пальцем НЕТ,
+      // из-за этого на телефоне кнопка не появлялась). Задержка: выделение доформировывается после события.
+      const later = () => setTimeout(updateFab, 0);
+      document.addEventListener('mouseup', later);
+      document.addEventListener('touchend', later);
+      document.addEventListener('touchcancel', later);
+      document.addEventListener('pointerup', later);
+      // Тянут маркеры выделения (телефон) — selectionchange сыплется пачкой: перерисовываем с паузой.
+      let selT = null;
+      document.addEventListener('selectionchange', () => {
+        const s = window.getSelection();
+        if (!s || s.isCollapsed) { if (!armed) { fab.style.display = 'none'; curText = ''; } return; }
+        clearTimeout(selT); selT = setTimeout(updateFab, 250);
+      });
       const chatSc = document.getElementById('chat');
-      if (chatSc) chatSc.addEventListener('scroll', () => { fab.style.display = 'none'; });
-      fab.addEventListener('mousedown', (e) => e.preventDefault());   // не сбрасывать выделение до клика
-      fab.addEventListener('click', (e) => {
-        e.stopPropagation();
+      if (chatSc) chatSc.addEventListener('scroll', () => { if (!armed) fab.style.display = 'none'; });
+      function fireClip(){
+        armed = false;
         if (!curText) return;
         parent.postMessage({ type: 'clip', text: curText }, '*');
         fab.style.display = 'none'; curText = '';
         const s = window.getSelection(); if (s) s.removeAllRanges();
+      }
+      fab.addEventListener('mousedown', (e) => e.preventDefault());   // не сбрасывать выделение до клика
+      fab.addEventListener('touchstart', () => { armed = true; }, { passive: true });   // палец на кнопке — выделение схлопнется, но текст уже наш
+      fab.addEventListener('touchcancel', () => { armed = false; });
+      fab.addEventListener('touchend', (e) => {
+        e.preventDefault(); e.stopPropagation();   // preventDefault — чтобы следом не пришёл ещё и click (двойной клип)
+        // Палец увели с кнопки (потянули страницу) — это не нажатие: клип не шлём, кнопку просто убираем.
+        const t = e.changedTouches && e.changedTouches[0], b = fab.getBoundingClientRect();
+        const on = !t || (t.clientX >= b.left - 8 && t.clientX <= b.right + 8 && t.clientY >= b.top - 8 && t.clientY <= b.bottom + 8);
+        if (!on) { armed = false; fab.style.display = 'none'; curText = ''; return; }
+        fireClip();
       });
-      window.__stmbHideClip = () => { fab.style.display = 'none'; curText = ''; };
+      fab.addEventListener('click', (e) => { e.stopPropagation(); fireClip(); });
+      window.__stmbHideClip = () => { armed = false; fab.style.display = 'none'; curText = ''; };
     })();
   </script>
 </body>

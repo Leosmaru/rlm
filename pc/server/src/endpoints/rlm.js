@@ -26,16 +26,67 @@ export const router = express.Router();
 // base может прийти со слэшем на конце или без — приводим к единому виду.
 const trimBase = (base) => String(base || '').trim().replace(/\/+$/, '');
 
+// «Размышления: Выкл» у разных хостеров называются по-разному. Наша нода «Опции» шлёт
+// `reasoning: { enabled: false }` — так понимает OpenRouter. ArliAI это поле ИГНОРИРУЕТ:
+// живой замер 2026-09-12 на DeepSeek-V4-Flash — с `reasoning:{enabled:false}` мысли заняли
+// 675 знаков и съели лимит, ответ пришёл обрезанным. Их движок слушает `reasoning_effort: "none"`
+// (и `chat_template_kwargs.enable_thinking: false`). Дописываем синоним по адресу хостера,
+// чтобы галочка в ноде работала везде одинаково.
+function applyReasoningOff(base, payload) {
+    const off = payload && payload.reasoning && payload.reasoning.enabled === false;
+    if (!off) return;
+    if (/arliai\.com|featherless\.ai/i.test(String(base || ''))) {
+        payload.reasoning_effort = 'none';
+        payload.chat_template_kwargs = { ...(payload.chat_template_kwargs || {}), enable_thinking: false };
+    }
+}
+
 // Общий вызов с таймаутом: провайдер не должен вешать сервер навсегда.
-async function callProvider(url, options, timeoutMs) {
+// `stop` — сигнал отмены ВСЕГО запроса клиента (крестик / «⏹ Стоп»). Слушатель не снимаем в finally
+// намеренно: fetch возвращается на заголовках, а тело (у OpenRouter оно тянется весь ответ) читается
+// уже после — отмена обязана рвать и чтение тела.
+async function callProvider(url, options, timeoutMs, stop) {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), timeoutMs);
+    if (stop) { if (stop.aborted) ac.abort(); else stop.addEventListener('abort', () => ac.abort(), { once: true }); }
     try {
         return await fetch(url, { ...options, signal: ac.signal });
     } finally {
         clearTimeout(timer);
     }
 }
+
+// ── ОТМЕНА ЗАПРОСА К МОДЕЛИ (крестик ленты / «⏹ Стоп») ────────────────────────────────────────
+// Было (замер 2026-09-13 на муляже провайдера, ответ через 25 с, отмена на 5-й секунде): и крестик, и
+// «Стоп» только выбрасывали ответ у клиента — провайдер дорабатывал все 25 с и списывал токены. В Electron
+// запрос идёт мостом главного процесса без сигнала отмены, в браузере клиент отцеплялся, а сервер ждал
+// дальше. Теперь клиент шлёт вместе с запросом номер `rid`, а на отмену — POST /abort { ids }: сервер рвёт
+// запрос к провайдеру. На обрыв соединения клиента НЕ реагируем специально: уснувший телефон — не отмена.
+const INFLIGHT = new Map();   // rid → AbortController идущего запроса
+const ABORTED = new Map();    // rid → время: отмена пришла раньше самого запроса (гонка) — запрос оборвётся на старте
+function trackRequest(rid) {
+    const ctl = new AbortController();
+    const k = rid ? String(rid) : '';
+    if (k) {
+        if (ABORTED.has(k)) { ABORTED.delete(k); ctl.abort(); }
+        INFLIGHT.set(k, ctl);
+    }
+    return { signal: ctl.signal, done: () => { if (k && INFLIGHT.get(k) === ctl) INFLIGHT.delete(k); } };
+}
+const STOPPED = { ok: false, aborted: true, error: 'остановлено' };
+router.post('/abort', (request, response) => {
+    const ids = Array.isArray(request.body?.ids) ? request.body.ids : [];
+    const now = Date.now();
+    for (const [k, t] of ABORTED) if (now - t > 120000) ABORTED.delete(k);   // старые метки — вон
+    let n = 0;
+    for (const raw of ids) {
+        const k = String(raw || ''); if (!k) continue;
+        const ctl = INFLIGHT.get(k);
+        if (ctl) { ctl.abort(); INFLIGHT.delete(k); n++; } else ABORTED.set(k, now);
+    }
+    if (n) console.log(`[rlm] оборвано по отмене клиента: ${n}`);
+    response.json({ ok: true, aborted: n });
+});
 
 // Вытащить осмысленный текст ошибки из ответа провайдера (JSON или простой текст).
 async function readError(resp) {
@@ -60,7 +111,7 @@ function reasoningForced(msg) {
 }
 // POST к провайдеру + этот автоповтор. Тело ошибки читается ОДИН раз (поток не перемотать),
 // поэтому отдаём его наружу вместе с ответом.
-async function postWithReasoningFallback(url, key, payload, timeoutMs) {
+async function postWithReasoningFallback(url, key, payload, timeoutMs, stop) {
     const send = (body) => callProvider(url, {
         method: 'POST',
         headers: {
@@ -68,7 +119,7 @@ async function postWithReasoningFallback(url, key, payload, timeoutMs) {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify(body),
-    }, timeoutMs);
+    }, timeoutMs, stop);
     let resp = await send(payload);
     if (resp.ok || payload.reasoning === undefined) return { resp };
     const error = await readError(resp);
@@ -122,15 +173,34 @@ router.post('/generate', async (request, response) => {
 
     // Тело в формате OpenAI Chat Completions. Сэмплеры кладём как есть, если заданы.
     const payload = { model, messages, ...(params && typeof params === 'object' ? params : {}) };
+    applyReasoningOff(b, payload);
+    const track = trackRequest(request.body && request.body.rid);   // отмена по номеру запроса (крестик / «Стоп»)
+    const stop = track.signal;
 
     try {
-        const { resp, error } = await postWithReasoningFallback(`${b}/chat/completions`, key, payload, 120000);
+        let { resp, error } = await postWithReasoningFallback(`${b}/chat/completions`, key, payload, 120000, stop);
 
         if (!resp.ok) {
             return response.json({ ok: false, status: resp.status, error: error != null ? error : await readError(resp) });
         }
 
-        const data = await resp.json();
+        let data = await resp.json();
+        // ── Пустой ответ провайдера → ПОВТОР (до двух раз) ───────────────────────────────────────────
+        // Замер на живой модели (z-ai/glm-5 через OpenRouter): один и тот же запрос уходит разным
+        // хостерам, и часть из них обрывает генерацию у себя — отвечает 200 OK, но с пустым content и
+        // finish_reason "error". Для приложения это выглядело как «модель вернула пустой ответ», и
+        // повторять приходилось руками. Повторяем сами: следующий заход обычно попадает на другой хостер.
+        // Условие узкое: пусто И content, И «мысли» (иначе повторяли бы reasoning-ответы, где текст в мыслях).
+        for (let tries = 0; tries < 2; tries++) {
+            const m = data?.choices?.[0]?.message;
+            const fin = data?.choices?.[0]?.finish_reason;
+            const empty = !String(m?.content || '').trim() && !String(m?.reasoning_content || m?.reasoning || '').trim();
+            if (!empty || stop.aborted) break;      // хоть что-то пришло (или отменили) — повтора нет
+            console.warn(`[rlm] пустой ответ провайдера (finish=${fin}) — повтор ${tries + 1}/2`);
+            const again = await postWithReasoningFallback(`${b}/chat/completions`, key, payload, 120000, stop);
+            if (!again.resp.ok) break;              // повтор не удался — отдаём то, что было
+            data = await again.resp.json();
+        }
         // content — обычное поле; reasoning_content/reasoning — «мысли» reasoning-моделей ОТДЕЛЬНО.
         // ВАЖНО: отдаём content и reasoning раздельно, чтобы вызывающий (напр. приглашение гостя) мог взять
         // ЧИСТЫЙ ответ и НЕ подмешать «мысли». `text` (content||reasoning) оставлен для обратной совместимости:
@@ -139,8 +209,12 @@ router.post('/generate', async (request, response) => {
         const content = msg0?.content || '';
         const reasoning = msg0?.reasoning_content || msg0?.reasoning || '';
         const text = content || reasoning || '';
+        if (stop.aborted) return response.json(STOPPED);   // отменили, пока разбирали ответ — не отдаём и не пишем
         // Пишем ответ в лог чата САМИ, не полагаясь на вкладку (она могла уснуть или закрыться).
-        try { if (request.body && request.body._saveTo && request.body._saveTo.key) saveReplyToChatlog(request.body._saveTo.key, text); } catch (e) { console.error('[rlm] _saveTo:', e); }
+        // В лог кладём только САМ ответ: мысли (reasoning) репликой не бывают. Раньше писался `text`
+        // (= content || reasoning), и при пустом content — лимит съели размышления — в чат ложились мысли модели.
+        const replyForLog = String(content || '').replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '').replace(/<think(?:ing)?>[\s\S]*$/i, '').trim();
+        try { if (request.body && request.body._saveTo && request.body._saveTo.key) saveReplyToChatlog(request.body._saveTo.key, replyForLog); } catch (e) { console.error('[rlm] _saveTo:', e); }
         return response.json({
             ok: true,
             text,
@@ -150,13 +224,45 @@ router.post('/generate', async (request, response) => {
             usage: data?.usage,
         });
     } catch (e) {
+        if (stop.aborted) return response.json(STOPPED);   // оборвали по крестику / «Стоп», а не таймаут
         const msg = e?.name === 'AbortError' ? 'Таймаут: провайдер не ответил' : String(e?.message || e);
         return response.json({ ok: false, error: msg });
+    } finally {
+        track.done();
     }
 });
 
 // ---- Генерация в режиме text-completion (нода «Критик», «ядерный режим») --------
 // Не chat, а «продолжи документ»: без ролей system/user/assistant. POST {base}/completions.
+// Ответ просим ПОТОКОМ и склеиваем сами: Featherless обрывает непотоковый /completions на ~2-й минуте. Замер
+// 2026-09-13 на Kimi K2-Thinking: без потока заголовки через 7 с, тело оборвано на 132 с («terminated» /
+// IncompleteRead); потоком тот же запрос — 226 с, ответ целиком. Провайдер поток не понял и прислал JSON — разбираем как раньше.
+async function readCompletionBody(resp) {
+    const type = String(resp.headers.get('content-type') || '');
+    if (!type.includes('text/event-stream')) {
+        const data = await resp.json();
+        return { text: data?.choices?.[0]?.text || '', finish_reason: data?.choices?.[0]?.finish_reason, usage: data?.usage };
+    }
+    const dec = new TextDecoder();
+    let buf = '', text = '', finish, usage, error;
+    const eat = (line) => {
+        const s = line.trim(); if (!s.startsWith('data:')) return;   // комментарии провайдера («: PROCESSING») пропускаем
+        const p = s.slice(5).trim(); if (!p || p === '[DONE]') return;
+        try {
+            const j = JSON.parse(p); const ch = j?.choices?.[0];
+            // «мысли» думающих моделей Featherless шлёт полем reasoning — в текст ответа они не идут
+            if (ch) { text += ch.text || ''; if (ch.finish_reason) finish = ch.finish_reason; }
+            if (j?.usage) usage = j.usage;
+            if (j?.error) error = j.error.message || j.error;           // ошибка посреди потока (занято, лимит) — отдадим наверх
+        } catch { /* строка не JSON — пропускаем */ }
+    };
+    for await (const chunk of resp.body) {
+        buf += dec.decode(chunk, { stream: true });
+        let i; while ((i = buf.indexOf('\n')) >= 0) { eat(buf.slice(0, i)); buf = buf.slice(i + 1); }
+    }
+    buf += dec.decode(); if (buf) eat(buf);
+    return { text, finish_reason: finish, usage, error };
+}
 router.post('/complete', async (request, response) => {
     const { base, key, model, prompt, params } = request.body || {};
     const b = trimBase(base);
@@ -164,26 +270,40 @@ router.post('/complete', async (request, response) => {
     if (!model) return response.json({ ok: false, error: 'Не задана модель' });
     if (typeof prompt !== 'string' || !prompt) return response.json({ ok: false, error: 'Пустой prompt' });
 
-    const payload = { model, prompt, ...(params && typeof params === 'object' ? params : {}) };
+    const payload = { model, prompt, ...(params && typeof params === 'object' ? params : {}), stream: true };
+    const track = trackRequest(request.body && request.body.rid);   // отмена по номеру запроса (крестик / «Стоп»)
+    const stop = track.signal;
 
     try {
-        const { resp, error } = await postWithReasoningFallback(`${b}/completions`, key, payload, 120000);
+        const { resp, error } = await postWithReasoningFallback(`${b}/completions`, key, payload, 120000, stop);
 
         if (!resp.ok) {
             return response.json({ ok: false, status: resp.status, error: error != null ? error : await readError(resp) });
         }
 
-        const data = await resp.json();
-        const text = data?.choices?.[0]?.text || '';
+        let out = await readCompletionBody(resp);
+        // Тот же повтор, что и у /generate: провайдер отвечает 200 OK с пустым текстом (обрыв у него).
+        for (let tries = 0; tries < 2; tries++) {
+            if (String(out.text || '').trim() || stop.aborted) break;
+            console.warn(`[rlm] пустой ответ провайдера (completions${out.error ? ': ' + out.error : ''}${out.finish_reason ? ', finish=' + out.finish_reason : ''}) — повтор ${tries + 1}/2`);
+            const again = await postWithReasoningFallback(`${b}/completions`, key, payload, 120000, stop);
+            if (!again.resp.ok) break;
+            out = await readCompletionBody(again.resp);
+        }
+        if (stop.aborted) return response.json(STOPPED);
+        if (!String(out.text || '').trim() && out.error) return response.json({ ok: false, error: String(out.error) });   // пусто и провайдер назвал причину — это ошибка, а не «пустой ответ»
         return response.json({
             ok: true,
-            text,
-            finish_reason: data?.choices?.[0]?.finish_reason,
-            usage: data?.usage,
+            text: out.text || '',
+            finish_reason: out.finish_reason,
+            usage: out.usage,
         });
     } catch (e) {
+        if (stop.aborted) return response.json(STOPPED);   // оборвали по крестику / «Стоп», а не таймаут
         const msg = e?.name === 'AbortError' ? 'Таймаут: провайдер не ответил' : String(e?.message || e);
         return response.json({ ok: false, error: msg });
+    } finally {
+        track.done();
     }
 });
 

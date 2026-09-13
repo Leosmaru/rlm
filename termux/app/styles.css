@@ -307,6 +307,10 @@ html, body { height: 100%; overflow: hidden; background: var(--canvas-grad); col
 /* Админ-панель, раздел «Опции»: «Обновлять Души — каждые N ходов». */
 .tg-ng-cfg { display: flex; flex-direction: column; gap: 4px; }
 .tg-ng-batch-lbl { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--muted); }
+.tg-ng-batch-hint { font-size: 9.5px; opacity: 0.7; }   /* «(0 — выкл.)» рядом с «каждые N ходов» */
+/* Нода «API» — «Хостеры» (провайдеры OpenRouter): строка списка + галочка «без замен» */
+.api-prov-row2 { margin-top: -4px; }
+.api-prov-strict { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--muted); cursor: pointer; }
 .tg-admin .tg-ng-batch { width: 52px; flex: none; }
 /* Админ-панель, пункт «ГМ меню»: тумблеры «Цели» и приглашение гостя/визитёра. */
 .tg-gm-none { font-size: 10px; color: var(--muted); opacity: .8; }
@@ -545,6 +549,9 @@ html, body { height: 100%; overflow: hidden; background: var(--canvas-grad); col
 .tg-sel-box { border: none; background: transparent; color: var(--accent); cursor: pointer; font-size: 12px; line-height: 1.4; padding: 0 5px 0 0; }
 .tg-cand:not(.tg-sel) { opacity: 0.55; }
 .tg-cand:not(.tg-sel) .tg-txt { text-decoration: line-through; }
+/* Текст реплик в ленте — ВЫДЕЛЯЕМЫЙ: у ноды целиком `user-select: none` (иначе таскание тянуло бы
+   выделение), а без выделения не работают ножницы ✂ Clip. Разрешаем ровно текст пузыря. */
+.tg-feed .tg-txt { -webkit-user-select: text; user-select: text; cursor: text; }
 .tg-cand:not(.tg-sel) .tg-sel-box { color: var(--muted); }
 .tg-who { display: block; font-weight: 700; font-size: 11px; color: var(--muted); margin-bottom: 2px; }   /* ник шапкой над репликой — как в Telegram */
 .tg-line.out .tg-who { color: var(--accent); }
@@ -1693,6 +1700,7 @@ html, body { height: 100%; overflow: hidden; background: var(--canvas-grad); col
 .soul-opt input { width: 44px; box-sizing: border-box; font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--inset); border: 1px solid var(--line); padding: 3px 5px; outline: none; }
 .soul-opt input:focus { border-color: var(--corner); }
 .soul-opt-desc { font-size: 10px; line-height: 1.35; color: var(--muted); opacity: 0.75; margin: -2px 0 2px; }
+.soul-opt-hint { font-size: 10px; color: var(--muted); opacity: 0.7; }   /* «(0 — выкл.)» рядом с «каждые N сообщ.» */
 
 /* ── Нода «Хроника» — авто-память в лорбук чата (референс «Механик машин») ── */
 .node-chronicle { width: 300px; }
@@ -1815,7 +1823,15 @@ html.mobile-mode .chr-chatlayer { right: 0; }
   pointer-events: auto; transition: opacity 0.15s, color 0.15s; }
 .chr-toast .ct-x:hover { opacity: 1; color: var(--text); }
 
-/* (Кнопка Clip теперь внутри чата у выделения — `#stmb-clip-fab` в moonlit/chat.html, не здесь.) */
+/* (Кнопка Clip внутри чата — `#stmb-clip-fab` в moonlit/chat.html: там свой кадр, свои стили.)
+   Здесь — та же кнопка для ЛЕНТЫ ноды «Телеграм» / «Телеграм сетевая игра»: реплики рисуются прямо
+   в ноде, кадра ST нет. Позиция — fixed по экрану (лента внутри масштабируемого холста). */
+#rlm-feed-clip-fab { position: fixed; z-index: 9999; display: none; align-items: center; gap: 6px;
+  padding: 5px 10px; font-family: inherit; font-size: 12px; line-height: 1; cursor: pointer; white-space: nowrap;
+  color: #eaf2f8; background: rgba(18, 26, 36, 0.96); border: 1px solid #66c0f4; border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5); }
+#rlm-feed-clip-fab:hover { background: #1a2a3a; }
+#rlm-feed-clip-fab .cic { font-size: 13px; }
 
 /* Превью перед сохранением — модалка по центру области чата */
 .chr-pv-back { position: absolute; inset: 0; z-index: 48; background: rgba(0, 0, 0, 0.55); display: flex; align-items: center; justify-content: center; }

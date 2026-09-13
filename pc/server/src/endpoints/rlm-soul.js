@@ -19,14 +19,18 @@
 //   POST /api/rlm/soul/chats                        -> { ok, chats:[{id,docs}] }
 //   POST /api/rlm/soul/all    { chat }              -> { ok, docs:[{name,group,text,off}] }
 //   POST /api/rlm/soul/diary  { chat, query, k, threshold, cap } -> { ok, memory, entries, mode }
-//   POST /api/rlm/soul/topics { chat, query, k }    -> { ok, memory, entries }
+//   POST /api/rlm/soul/topics { chat, query, k }    -> { ok, memory, entries:[{name,score,text}] }
+//   POST /api/rlm/soul/dedupe { chat, source, against:[…], threshold } -> { ok, text, dropped, kept }
+//        (отсев дублей по смыслу: предложения source, почти совпавшие с against, вырезаются)
 // ============================================================================
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
-import { getTransformersVector } from '../vectors/embedding.js';
+import { pipeline } from 'sillytavern-transformers';
+import { getConfigValue } from '../util.js';
+import '../transformers.js';   // настройка onnx (потоки, локальные wasm) — та же, что у ST
 
 export const router = express.Router();
 
@@ -34,11 +38,38 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Одна папка данных с плагином soul-md — единственный источник правды.
 const ROOT = path.join(__dirname, '..', '..', 'plugins', 'soul-md', 'data');
 
-// e5-префиксы. Модель обучена различать запрос и документ; без префиксов качество
-// падает. Для не-e5 моделей префикс безвреден, а дефолт у нас e5. Режем до ~512
-// токенов грубо по символам (у e5-small контекст 512 токенов).
-const embedQuery = (t) => getTransformersVector('query: ' + String(t || '').slice(0, 1600));
-const embedPassage = (t) => getTransformersVector('passage: ' + String(t || '').slice(0, 1600));
+// МОДЕЛЬ ЭМБЕДДЕРА — та, что выбрана в ноде «Эмбеддер» (поле `model` в запросе). Раньше сервер всегда считал моделью
+// из config.yaml, а выбор в ноде только сохранялся (найдено 2026-09-13). Пусто или незнакомое имя — модель из config.yaml.
+const EMBED_MODELS = {
+    'multilingual-e5-small': 'Xenova/multilingual-e5-small',
+    'all-MiniLM-L6-v2': 'Xenova/all-MiniLM-L6-v2',
+    'jina-embeddings-v2-base-en': 'Xenova/jina-embeddings-v2-base-en',
+};
+const embedModelId = (m) => EMBED_MODELS[String(m || '').trim()]
+    || String(getConfigValue('extensions.models.embedding', 'Xenova/multilingual-e5-small') || 'Xenova/multilingual-e5-small');
+// По пайплайну на модель: ST держит одну модель на задачу и выгружает её при смене — при двух разных нодах «Эмбеддер»
+// модели грузились бы заново на каждом запросе.
+const PIPES = new Map();
+function pipeFor(id) {
+    if (!PIPES.has(id)) {
+        const cacheDir = path.join(globalThis.DATA_ROOT, '_cache');
+        const localOnly = !getConfigValue('extensions.models.autoDownload', true, 'boolean');
+        console.log('[rlm-soul] эмбеддер:', id);
+        PIPES.set(id, pipeline('feature-extraction', id, { cache_dir: cacheDir, quantized: true, local_files_only: localOnly })
+            .catch((e) => { PIPES.delete(id); throw e; }));
+    }
+    return PIPES.get(id);
+}
+async function vecOf(text, id) {
+    const pipe = await pipeFor(id);
+    const result = await pipe(text, { pooling: 'mean', normalize: true });
+    return Array.from(result.data);
+}
+// e5 обучена различать запрос и документ — ей нужны префиксы «query: » / «passage: »; другим моделям они не нужны.
+// Режем грубо по символам (у e5-small контекст 512 токенов).
+const isE5 = (id) => /e5/i.test(String(id || ''));
+const embedQuery = (t, id) => vecOf((isE5(id) ? 'query: ' : '') + String(t || '').slice(0, 1600), id);
+const embedPassage = (t, id) => vecOf((isE5(id) ? 'passage: ' : '') + String(t || '').slice(0, 1600), id);
 
 // векторы нормализованы (normalize:true) → косинус == скалярное произведение
 const dot = (a, b) => { let s = 0; const n = Math.min(a.length, b.length); for (let i = 0; i < n; i++) s += a[i] * b[i]; return s; };
@@ -51,7 +82,8 @@ const dot = (a, b) => { let s = 0; const n = Math.min(a.length, b.length); for (
 const VEC_MEM = new Map();                 // hash → вектор
 const VEC_MEM_MAX = 6000;                  // потолок: дальше вытесняем самые старые
 const VEC_DISK_MAX = 1200;                 // столько векторов держим в файле чата (≈3 МБ потолок)
-const vecHash = (t) => crypto.createHash('sha1').update('e5|' + String(t)).digest('hex').slice(0, 16);
+// ключ — хэш модели и текста: векторы разных моделей не смешиваются (у e5 прежний ключ — старый кэш остаётся годным)
+const vecHash = (t, id) => crypto.createHash('sha1').update((/multilingual-e5-small/i.test(String(id || '')) ? 'e5' : String(id)) + '|' + String(t)).digest('hex').slice(0, 16);
 const vecFile = (dir) => path.join(dir, '_vectors.json');
 const vecMemPut = (h, v) => {
     if (VEC_MEM.size >= VEC_MEM_MAX) { const first = VEC_MEM.keys().next().value; VEC_MEM.delete(first); }
@@ -79,17 +111,17 @@ function vecDiskSave(dir, store) {
     } catch (_) { /* кэш — не данные, потеря не страшна */ }
 }
 // Векторы для списка текстов: берём из кэша, считаем только недостающие, файл пишем один раз.
-async function embedMany(dir, texts) {
+async function embedMany(dir, texts, id) {
     const store = vecDiskLoad(dir);
     let свежих = 0;
     const out = [];
     for (const raw of texts) {
         const text = String(raw || '');
-        const h = vecHash(text);
+        const h = vecHash(text, id);
         let v = VEC_MEM.get(h);
         if (!v && store && store[h]) { v = store[h]; vecMemPut(h, v); }
         if (!v) {
-            v = await embedPassage(text);
+            v = await embedPassage(text, id);
             vecMemPut(h, v);
             if (store) { store[h] = Array.from(v).map((x) => +x.toFixed(4)); свежих++; }   // 4 знаков хватает: косинус не дрогнет, файл втрое легче
         }
@@ -99,11 +131,52 @@ async function embedMany(dir, texts) {
     return out;
 }
 
+// Вектор ТЕМЫ — по имени файла + ВСЕМУ тексту, а не по первым 1600 знакам.
+// Раньше тема эмбеддилась как обычная запись: обрезка на 1600 знаках, имя файла в вектор не входило.
+// У темы на 3700 знаков вторая половина на поиск не влияла вовсе. Теперь: имя темы — первым (самый
+// сильный сигнал «о ком папка»), текст режем на куски по ~1500 знаков (предел модели ~512 токенов),
+// вектор темы = нормализованное среднее векторов кусков. Куски кэшируются как обычные записи.
+const TOPIC_CHUNK = 1500;
+async function embedTopics(dir, items, id) {
+    const plan = items.map((x) => {
+        const title = String(x.name || '').replace(/[_\-]+/g, ' ').trim();
+        const body = String(x.text || '');
+        const chunks = [];
+        for (let i = 0; i < body.length || (!chunks.length && i === 0); i += TOPIC_CHUNK) chunks.push(title + '\n' + body.slice(i, i + TOPIC_CHUNK));
+        return chunks;
+    });
+    const flat = plan.flat();
+    const vecs = await embedMany(dir, flat, id);
+    const out = []; let k = 0;
+    for (const chunks of plan) {
+        const acc = new Array(vecs[k] ? vecs[k].length : 0).fill(0);
+        for (let c = 0; c < chunks.length; c++, k++) { const v = vecs[k]; for (let i = 0; i < acc.length; i++) acc[i] += v[i]; }
+        const n = Math.sqrt(acc.reduce((s, x) => s + x * x, 0)) || 1;
+        out.push(acc.map((x) => x / n));
+    }
+    return out;
+}
+
 // ── ЖУРНАЛ ПРАВОК ПАМЯТИ (healing log) ──────────────────────────────────────────
 // Трекеры и темы модель перезаписывает целиком, и что именно она поменяла — не видно.
 // Пишем это САМИ, без модели: сравниваем предложения старой и новой версии.
 const healFile = (dir) => path.join(dir, '_healing.jsonl');
-const предложения = (s) => String(s || '').split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter((x) => x.length > 12);
+// Режем на предложения по «.!?» + пробел, но НЕ после сокращений (Mr. Halvorsen, Dr. Who, St. Mary, инициалы
+// J. K.) — иначе «Mr.» становится отдельным «предложением», и отсев дублей вырезает «Halvorsen…», оставляя «Mr.».
+const СОКРАЩЕНИЯ = /(?:^|\s)(?:Mr|Mrs|Ms|Dr|St|Sr|Jr|Prof|Sgt|Capt|Lt|Col|Gen|vs|etc|e\.g|i\.e|т|г|гг|ул|им|см|т\.е|т\.д|т\.п|[A-ZА-ЯЁ])\.$/;
+const предложения = (s) => {
+    const out = []; let cur = '';
+    for (const piece of String(s || '').split(/((?<=[.!?])\s+|\n+)/)) {
+        if (/^(\s+|\n+)$/.test(piece)) {                             // разделитель: закрываем предложение, если оно не оборвано на сокращении
+            if (СОКРАЩЕНИЯ.test(cur) && !/\n/.test(piece)) { cur += piece; continue; }
+            if (cur.trim()) out.push(cur.trim()); cur = '';
+            continue;
+        }
+        cur += piece;
+    }
+    if (cur.trim()) out.push(cur.trim());
+    return out.filter((x) => x.length > 12);
+};
 function healLog(dir, file, oldText, newText) {
     try {
         if (!dir) return;
@@ -128,10 +201,13 @@ function healLog(dir, file, oldText, newText) {
 const MIN_TRACKER = 80;    // короче — почти наверняка обрубок, а не «сцена стала проще»
 const MIN_TOPIC = 50;
 const SHRINK = 0.4;        // усушка больше чем в 2.5 раза — тоже подозрительно
-function слишкомКоротко(oldText, newText, min) {
+function слишкомКоротко(oldText, newText, min, limit) {
     const было = String(oldText || '').trim(), стало = String(newText || '').trim();
     if (!стало) return 'empty';
     if (стало.length < min) return 'short';
+    // Ужатие дока до лимита (клиент прислал limit — число слов из инструкции дока, World): мерка — лимит, а не прежняя
+    // длина, иначе честное 705 → 190 слов резалось бы как «усушка». Огрызок — короче той же доли лимита.
+    if (limit > 0) return стало.split(/\s+/).filter(Boolean).length < limit * SHRINK ? 'short' : '';
     if (было.length >= min * 2 && стало.length < было.length * SHRINK) return 'shrink';
     return '';
 }
@@ -199,7 +275,8 @@ router.post('/all', (req, res) => {
 // Без запроса — фолбэк на последние N по времени (тоже сценарий SW).
 router.post('/diary', async (req, res) => {
     try {
-        const { chat, query, k = 3, threshold = 0, cap = 2500 } = req.body || {};
+        const { chat, query, k = 3, threshold = 0, cap = 2500, model } = req.body || {};
+        const id = embedModelId(model);
         const dir = chatDir(chat);
         const entries = dir ? readDiaryEntries(dir) : [];
         if (!entries.length) return res.json({ ok: true, memory: '', entries: [], mode: 'empty' });
@@ -211,8 +288,8 @@ router.post('/diary', async (req, res) => {
             return res.json({ ok: true, memory: capTail(last.map((e) => e.text).join('\n\n')), entries: last, mode: 'recent' });
         }
 
-        const qv = await embedQuery(query);
-        const vecs = await embedMany(dir, entries.map((e) => e.text));      // кэш: считаем только новые записи
+        const qv = await embedQuery(query, id);
+        const vecs = await embedMany(dir, entries.map((e) => e.text), id);      // кэш: считаем только новые записи
         entries.forEach((e, i) => { e.score = dot(qv, vecs[i]); });
         entries.sort((a, b) => b.score - a.score);
         const top = entries.filter((e) => e.score >= threshold).slice(0, Math.max(1, k));
@@ -228,7 +305,8 @@ router.post('/diary', async (req, res) => {
 // ---- ТЕМЫ = смысловой RAG (актуальные факты по субъекту) ------------------------
 router.post('/topics', async (req, res) => {
     try {
-        const { chat, query, k = 3 } = req.body || {};
+        const { chat, query, k = 3, model } = req.body || {};
+        const id = embedModelId(model);
         const dir = chatDir(chat);
         const td = dir ? path.join(dir, 'topics') : null;
         if (!td || !fs.existsSync(td)) return res.json({ ok: true, memory: '', entries: [] });
@@ -239,18 +317,18 @@ router.post('/topics', async (req, res) => {
 
         if (!query || !String(query).trim()) {
             const top = items.slice(0, Math.max(1, k));
-            return res.json({ ok: true, memory: top.map((x) => x.text).join('\n\n'), entries: top.map((x) => ({ name: x.name, score: null })), mode: 'list' });
+            return res.json({ ok: true, memory: top.map((x) => x.text).join('\n\n'), entries: top.map((x) => ({ name: x.name, score: null, text: x.text })), mode: 'list' });
         }
 
-        const qv = await embedQuery(query);
-        const tvecs = await embedMany(dir, items.map((x) => x.text));       // кэш тем живёт в папке чата
+        const qv = await embedQuery(query, id);
+        const tvecs = await embedTopics(dir, items, id);                         // имя + весь текст кусками; кэш — в папке чата
         items.forEach((x, i) => { x.score = dot(qv, tvecs[i]); });
         items.sort((a, b) => b.score - a.score);
         const top = items.slice(0, Math.max(1, k));
         res.json({
             ok: true,
             memory: top.map((x) => x.text).join('\n\n'),
-            entries: top.map((x) => ({ name: x.name, score: +x.score.toFixed(3) })),
+            entries: top.map((x) => ({ name: x.name, score: +x.score.toFixed(3), text: x.text })),   // text — писарю тем: что уже лежит в ближайших папках
             mode: 'rag',
         });
     } catch (e) { res.status(500).json({ ok: false, error: String(e) }); }
@@ -261,14 +339,57 @@ router.post('/topics', async (req, res) => {
 // Возвращает баллы в порядке texts. Векторы нормализованы → косинус = скалярное.
 router.post('/score', async (req, res) => {
     try {
-        const { query, texts } = req.body || {};
+        const { query, texts, model } = req.body || {};
+        const id = embedModelId(model);
         if (!query || !String(query).trim() || !Array.isArray(texts) || !texts.length) return res.json({ ok: true, scores: [] });
-        const qv = await embedQuery(query);
+        const qv = await embedQuery(query, id);
         // Лорбук зовёт это КАЖДЫЙ ход по всем записям — тут кэш экономит больше всего. Папки чата у
         // запроса нет (тексты приходят снаружи), поэтому кэш только в памяти процесса.
-        const svecs = await embedMany(null, texts.map((x) => String(x || '')));
+        const svecs = await embedMany(null, texts.map((x) => String(x || '')), id);
         const scores = texts.map((x, i) => (String(x || '').trim() ? +dot(qv, svecs[i]).toFixed(4) : 0));
         res.json({ ok: true, scores });
+    } catch (e) { res.status(500).json({ ok: false, error: String(e) }); }
+});
+
+// ---- ОТСЕВ ДУБЛЕЙ между документами памяти (по смыслу, без модели) --------------
+// Темы пишутся отдельным запросом и не видят трекеров — поэтому после записи их сверяем
+// с тем, что уже записано в общем блоке. `source` режем на предложения, `against` — тоже;
+// предложение source, у которого есть почти такое же по смыслу в against (косинус ≥ threshold),
+// считается дублем и выкидывается. Кто из двух документов отдаёт строку — решает КЛИЕНТ
+// (правило хозяина: сцена/чувства → из темы; досье → из World); сервер только режет то,
+// что ему передали как source. Порог — параметр, подбирается на живых ходах.
+// Возвращаем текст без дублей (строки сохраняем, пустые строки после вырезания убираем)
+// и список того, что ушло, с парой-совпадением и баллом — для журнала и разбора.
+router.post('/dedupe', async (req, res) => {
+    try {
+        const { chat, source, against, threshold = 0.86, model } = req.body || {};
+        const id = embedModelId(model);
+        const src = String(source || '');
+        const others = (Array.isArray(against) ? against : [against]).map((t) => String(t || '')).filter((t) => t.trim());
+        if (!src.trim() || !others.length) return res.json({ ok: true, text: src, dropped: [], kept: предложения(src).length });
+        const dir = chatDir(chat);                                            // кэш векторов — в папке чата, если она названа
+        const refs = others.flatMap((t) => предложения(t));
+        if (!refs.length) return res.json({ ok: true, text: src, dropped: [], kept: предложения(src).length });
+        const rvecs = await embedMany(dir, refs, id);
+        const th = Math.max(0.5, Math.min(0.99, +threshold || 0.86));
+        const dropped = [], near = []; let kept = 0;   // near — «почти дубли» ниже порога: диагностика для подбора порога
+        const lines = src.split('\n');
+        const outLines = [];
+        for (const line of lines) {
+            const sents = предложения(line);
+            if (!sents.length) { outLines.push(line); continue; }             // пустая/короткая строка — как есть
+            const svecs = await embedMany(dir, sents, id);
+            let rest = line;
+            sents.forEach((s, i) => {
+                let best = -1, at = -1;
+                for (let j = 0; j < rvecs.length; j++) { const sc = dot(svecs[i], rvecs[j]); if (sc > best) { best = sc; at = j; } }
+                if (best >= th) { dropped.push({ line: s, match: refs[at], score: +best.toFixed(3) }); rest = rest.replace(s, '').replace(/\s{2,}/g, ' ').trim(); }
+                else { kept++; if (best >= th - 0.08) near.push({ line: s, match: refs[at], score: +best.toFixed(3) }); }
+            });
+            if (rest.trim() || !sents.length) outLines.push(rest);
+        }
+        const text = outLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+        res.json({ ok: true, text, dropped, near, kept, threshold: th });
     } catch (e) { res.status(500).json({ ok: false, error: String(e) }); }
 });
 
@@ -313,12 +434,12 @@ router.post('/append', (req, res) => {
 // Трекер — ПЕРЕЗАПИСАТЬ целиком по имени (Status/World/Psyche/…).
 router.post('/tracker', (req, res) => {
     try {
-        const { chat, name, text } = req.body || {};
+        const { chat, name, text, limit } = req.body || {};
         const dir = chatDir(chat); const fn = trackerFile(name);
         if (!dir || !fn) return res.json({ ok: false, skipped: 'no-chat-or-name' });
         const file = path.join(dir, fn);
         const prev = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : '';
-        const беда = слишкомКоротко(prev, text, MIN_TRACKER);
+        const беда = слишкомКоротко(prev, text, MIN_TRACKER, Math.max(0, Math.min(5000, parseInt(limit, 10) || 0)));   // limit — ужатие до лимита
         if (беда) return res.json({ ok: false, skipped: беда, kept: prev.length, got: String(text || '').trim().length });
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(file, String(text).trim(), 'utf-8');

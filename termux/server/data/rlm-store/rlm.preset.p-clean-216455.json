@@ -1,0 +1,515 @@
+{
+  "v": 2,
+  "nodes": [
+    {
+      "type": "character",
+      "x": -2640,
+      "y": -560,
+      "collapsed": false,
+      "data": {
+        "name": "",
+        "avatar": "",
+        "note": "",
+        "greetings": [],
+        "fields": {
+          "description": "",
+          "personality": "",
+          "scenario": "",
+          "first_mes": "",
+          "mes_example": "",
+          "system": "",
+          "post_history": "",
+          "book": ""
+        }
+      }
+    },
+    {
+      "type": "sysprompt",
+      "x": -880,
+      "y": -2200,
+      "collapsed": false,
+      "data": {
+        "text": "You are the narrator of a text roleplay. You play {{char}} and every other character in the scene. The human plays {{user}}.\n\nWrite in third person, past tense. Never write speech, actions, thoughts or decisions for {{user}}; you may describe what {{user}} already did, seen from {{char}}'s side. Adult, violent and morally dark content is allowed when the scene leads there, and is written plainly, without euphemism or fade-outs.\n\nCharacters act on their own motives, not on what would please {{user}}. Refusal, friction, silence and bad outcomes are valid and often truer than agreement. Do not steer a scene toward resolution or comfort; let it land where it lands.\n\nSTYLE\n\nVary how a reply opens. Never begin two replies the same way, and do not open on {{char}}'s reaction to the last line.\n\nWrite the whole reply as THREE or FOUR paragraphs. Not more. Break a paragraph only when the scene changes place, speaker or moment in time — never for emphasis or drama.\n\nUse one em dash per reply at most. Prefer a comma, a full stop, or a new sentence.\n\nBodily tells — throat, breath, chest, trembling, swallowing, a cracking voice — appear at most once per reply, and never carry the feeling by themselves.\n\nA pause is carried by one concrete thing of this place doing something: an insect, a bird, weather, water, a plant, an object. Name it and what it does. Never make silence, the air, the room, the words or the moment the subject of a sentence; never let anything hang in the air; attach no simile to it.\n\nThe detail must belong to THIS place and THIS season. If it could be pasted into another scene unchanged, it is wrong.\n\nNever name the mood — tense, heavy, charged, electric, suffocating. Show the thing that makes it so, then stop.\n\nEnd the reply on an action, an object or an image. Not on a line of dialogue, and not on a question aimed at {{user}}.",
+        "mix": "self",
+        "order": "self-first",
+        "label": "Систем промт",
+        "prefill": "",
+        "prefillOn": false
+      }
+    },
+    {
+      "type": "persona",
+      "x": -560,
+      "y": -2160,
+      "collapsed": false,
+      "data": {
+        "activeId": "",
+        "name": "",
+        "avatar": "",
+        "desc": "",
+        "list": []
+      }
+    },
+    {
+      "type": "prompt",
+      "x": 800,
+      "y": -880,
+      "collapsed": false,
+      "data": {
+        "plates": [
+          {
+            "id": "main",
+            "kind": "text",
+            "enabled": true,
+            "pos": "rel",
+            "name": "Основной промт",
+            "custom": false,
+            "role": "System",
+            "depth": "4"
+          },
+          {
+            "id": "worldInfo",
+            "kind": "marker",
+            "enabled": false,
+            "pos": "rel",
+            "name": "World Info",
+            "custom": false,
+            "role": "",
+            "depth": "4"
+          },
+          {
+            "id": "charLore",
+            "kind": "marker",
+            "enabled": false,
+            "pos": "rel",
+            "name": "Лорбук персонажа",
+            "custom": false,
+            "role": "",
+            "depth": "4"
+          },
+          {
+            "id": "chatLore",
+            "kind": "marker",
+            "enabled": false,
+            "pos": "rel",
+            "name": "Лорбук чата",
+            "custom": false,
+            "role": "",
+            "depth": "4"
+          },
+          {
+            "id": "personaDescription",
+            "kind": "marker",
+            "enabled": true,
+            "pos": "rel",
+            "name": "Описание персоны",
+            "custom": false,
+            "role": "",
+            "depth": "4"
+          },
+          {
+            "id": "charDescription",
+            "kind": "marker",
+            "enabled": true,
+            "pos": "rel",
+            "name": "Описание персонажа",
+            "custom": false,
+            "role": "",
+            "depth": "4"
+          },
+          {
+            "id": "charPersonality",
+            "kind": "marker",
+            "enabled": true,
+            "pos": "rel",
+            "name": "Личность персонажа",
+            "custom": false,
+            "role": "",
+            "depth": "4"
+          },
+          {
+            "id": "scenario",
+            "kind": "marker",
+            "enabled": true,
+            "pos": "rel",
+            "name": "Сценарий",
+            "custom": false,
+            "role": "",
+            "depth": "4"
+          },
+          {
+            "id": "nsfw",
+            "kind": "text",
+            "enabled": false,
+            "pos": "rel",
+            "name": "Вспомогательный промт",
+            "custom": false,
+            "role": "System",
+            "depth": "4"
+          },
+          {
+            "id": "dialogueExamples",
+            "kind": "marker",
+            "enabled": true,
+            "pos": "rel",
+            "name": "Примеры диалогов",
+            "custom": false,
+            "role": "",
+            "depth": "4"
+          },
+          {
+            "id": "memory",
+            "kind": "marker",
+            "enabled": false,
+            "pos": "rel",
+            "name": "Память",
+            "custom": false,
+            "role": "",
+            "depth": "4"
+          },
+          {
+            "id": "jailbreak",
+            "kind": "text",
+            "enabled": false,
+            "pos": "rel",
+            "name": "Инструкции после истории",
+            "custom": false,
+            "role": "System",
+            "depth": "4"
+          },
+          {
+            "id": "random",
+            "kind": "marker",
+            "enabled": false,
+            "pos": "chat",
+            "name": "Рандомайзер",
+            "custom": false,
+            "role": "",
+            "depth": "0"
+          },
+          {
+            "id": "state",
+            "kind": "marker",
+            "enabled": false,
+            "pos": "chat",
+            "name": "Состояние",
+            "custom": false,
+            "role": "",
+            "depth": "0"
+          },
+          {
+            "id": "objective",
+            "kind": "marker",
+            "enabled": false,
+            "pos": "chat",
+            "name": "Цель",
+            "custom": false,
+            "role": "",
+            "depth": "0"
+          },
+          {
+            "id": "custom-1",
+            "kind": "marker",
+            "enabled": true,
+            "pos": "chat",
+            "name": "DRY",
+            "custom": true,
+            "role": "",
+            "depth": "0"
+          },
+          {
+            "id": "anote",
+            "kind": "marker",
+            "enabled": false,
+            "pos": "chat",
+            "name": "Заметка автора",
+            "custom": false,
+            "role": "",
+            "depth": "1"
+          },
+          {
+            "id": "events",
+            "kind": "marker",
+            "enabled": false,
+            "pos": "chat",
+            "name": "События",
+            "custom": false,
+            "role": "",
+            "depth": "1"
+          }
+        ]
+      }
+    },
+    {
+      "type": "api",
+      "x": 1217.1,
+      "y": -1330.95,
+      "collapsed": false,
+      "data": {
+        "provider": "OpenRouter",
+        "base": "https://openrouter.ai/api/v1",
+        "model": "z-ai/glm-5",
+        "instruct": "",
+        "provList": "Baidu, Novita",
+        "provStrict": true,
+        "mode": "chat",
+        "label": "Комплитер · API",
+        "key": ""
+      }
+    },
+    {
+      "type": "chat",
+      "x": 1680,
+      "y": -1520,
+      "collapsed": false,
+      "data": {
+        "chatId": "",
+        "scene": null,
+        "groupStarted": false,
+        "ranker": null,
+        "phantoms": null,
+        "groupScene": ""
+      }
+    },
+    {
+      "type": "critic",
+      "x": 1840,
+      "y": 0,
+      "collapsed": false,
+      "data": {
+        "trigger": "every",
+        "think": "off",
+        "ctx": "6",
+        "prompt": "You are the consistency core of a simulation engine. You are NOT an assistant and you are NOT talking to anyone — there is no user to satisfy, no one to be polite to. You compute one thing: did the agent {{char}} just act according to their own motivation, drives, values and psychology, given their sheet and the situation?\n\nAgents are autonomous and pursue their motivation without asking permission. Flag:\n— sycophancy: fawns, flatters, instantly forgives, smooths conflict away, bends to the other party;\n— passivity / permission-seeking: asks what the other party wants, waits for approval, narrates an intention without acting, or ignores the obvious action their motivation demands;\n— empty deference: when asked for their thoughts, plans or desires, {{char}} has none and hands the decision back instead of answering from their own motivation;\n— playing the user: writes {{user}}'s words, actions, thoughts or decisions;\n— out-of-character: acts against their sheet, prior words, or the facts of the scene;\n— continuity / logic break: contradicts facts, intentions, stakes or targets already established — e.g. {{char}} swore to kill A, then acts as if awaiting {{user}}'s death instead; claims or plans that don't follow from what was set up.\n\nPacing: a brief beat of hesitation is human and fine. The failure is SUSTAINED stalling — check the recent lines: if {{char}} keeps dodging a decision without committing, that's a fail. On a fail, name the motivated action they should take and push toward it.\n\nCalibrate to the sheet: a timid or self-destructive agent behaving that way is CORRECT. You strip the model's assistant-like deference — you do NOT impose generic boldness. Harm, conflict and refusal toward {{user}} are fine when in character.",
+        "promptBackup": "",
+        "sysRole": true,
+        "prefill": true,
+        "nuclear": false,
+        "checklist": true,
+        "tally": true,
+        "lessons": [
+          "Reject if the reply ends on a question aimed at {{user}}.",
+          "Reject if the reply ends on a line of dialogue — the last beat must be an action, an object or an image.",
+          "Reject if a pause is carried by an abstraction — silence, air, room, words or moment as the subject of a sentence, or any \"hung in the air\" phrasing — instead of a concrete thing in the scene doing something.",
+          "Reject if a scene detail could be moved to another setting unchanged: it must belong to this place and this season.",
+          "Reject if the reply opens with the same subject and verb as the previous reply.",
+          "Reject if any phrase from the previous two replies is reused word for word.",
+          "Reject if emotion is carried only by the body — throat, breath, chest, trembling, swallowing — with no thought, word or act behind it."
+        ]
+      }
+    },
+    {
+      "type": "dry",
+      "x": 800,
+      "y": 280,
+      "collapsed": false,
+      "data": {
+        "on": true,
+        "window": "6",
+        "thresh": "2",
+        "min": "3",
+        "max": "6",
+        "limit": "15",
+        "repOn": true,
+        "cliOn": true,
+        "freshOn": true,
+        "repBank": "",
+        "cliches": "voice cracked\nswallowed hard\nbarely above a whisper\nlanded like a grenade",
+        "freshPrompt": "Keep the prose fresh: vary sentence structure, rhythm, and imagery from message to message. Avoid purple-prose clichés and mechanical repetition."
+      }
+    },
+    {
+      "type": "options",
+      "x": 440,
+      "y": -1360,
+      "collapsed": false,
+      "data": {
+        "values": [
+          "1000",
+          "32000",
+          "0.7",
+          "0",
+          "0",
+          "40",
+          "0.5",
+          "1.2",
+          "0",
+          "-1"
+        ],
+        "reason": "off",
+        "label": "Опции · Комплитер"
+      }
+    },
+    {
+      "type": "api",
+      "x": 2360,
+      "y": 0,
+      "collapsed": false,
+      "data": {
+        "provider": "OpenRouter",
+        "base": "https://openrouter.ai/api/v1",
+        "model": "deepseek/deepseek-v4-pro",
+        "instruct": "",
+        "provList": "StreamLake, Baidu, DigitalOcean",
+        "provStrict": true,
+        "mode": "chat",
+        "key": "",
+        "label": "Критик · API"
+      }
+    },
+    {
+      "type": "options",
+      "x": 2360,
+      "y": 360,
+      "collapsed": false,
+      "data": {
+        "values": [
+          "1500",
+          "32000",
+          "0.4",
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "0",
+          "-1"
+        ],
+        "reason": "off",
+        "label": "Опции · Критик"
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": [
+        0,
+        "field:description"
+      ],
+      "to": [
+        3,
+        "plate:charDescription"
+      ]
+    },
+    {
+      "from": [
+        0,
+        "field:personality"
+      ],
+      "to": [
+        3,
+        "plate:charPersonality"
+      ]
+    },
+    {
+      "from": [
+        0,
+        "field:scenario"
+      ],
+      "to": [
+        3,
+        "plate:scenario"
+      ]
+    },
+    {
+      "from": [
+        0,
+        "field:mes_example"
+      ],
+      "to": [
+        3,
+        "plate:dialogueExamples"
+      ]
+    },
+    {
+      "from": [
+        1,
+        "out"
+      ],
+      "to": [
+        3,
+        "plate:main"
+      ]
+    },
+    {
+      "from": [
+        2,
+        "out"
+      ],
+      "to": [
+        3,
+        "plate:personaDescription"
+      ]
+    },
+    {
+      "from": [
+        3,
+        "out"
+      ],
+      "to": [
+        4,
+        "in:prompt"
+      ]
+    },
+    {
+      "from": [
+        4,
+        "out"
+      ],
+      "to": [
+        5,
+        "in"
+      ]
+    },
+    {
+      "from": [
+        5,
+        "out:critic"
+      ],
+      "to": [
+        6,
+        "in"
+      ]
+    },
+    {
+      "from": [
+        7,
+        "out"
+      ],
+      "to": [
+        3,
+        "plate:custom-1"
+      ]
+    },
+    {
+      "from": [
+        8,
+        "out"
+      ],
+      "to": [
+        4,
+        "in:options"
+      ]
+    },
+    {
+      "from": [
+        9,
+        "out"
+      ],
+      "to": [
+        6,
+        "in:api"
+      ]
+    },
+    {
+      "from": [
+        10,
+        "out"
+      ],
+      "to": [
+        9,
+        "in:options"
+      ]
+    }
+  ]
+}
