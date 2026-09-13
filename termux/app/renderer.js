@@ -21389,7 +21389,7 @@ function startMenuRender() {
       const lead = i === 0 ? '<span class="sm-p-star" title="Дефолтный пресет">★</span>'
                            : `<button class="sm-p-up" data-preset="${p.id}" title="Сделать дефолтом (наверх)">▲</button>`;
       const del = (presets.length > 1 && !p.locked) ? `<button class="sm-p-del" data-preset="${p.id}" title="Удалить пресет">✕</button>` : '';   // защищённый (locked) — крестика нет: на этих сборках всё держится
-      return `<div class="${cls}" data-preset="${p.id}" title="Двойной клик — открыть сборку пресета">${lead}<span class="sm-p-name">${esc(p.name || '(без имени)')}</span>${del}</div>`;
+      return `<div class="${cls}" data-preset="${p.id}" title="Двойной клик — открыть сборку пресета">${lead}<span class="sm-p-name${p.cold ? ' cold' : ''}"${p.cold ? ' title="Модель этого пресета не прогрета у хостера — не ответит"' : ''}>${esc(p.name || '(без имени)')}</span>${del}</div>`;
     }).join('');
   }
   // Выпадашка ⋮ (телефон): тап по пресету делает его АКТИВНЫМ для новых чатов (✓). ★ = дефолтный.
@@ -21398,7 +21398,7 @@ function startMenuRender() {
     pMenu.innerHTML = presets.map((p, i) => {
       const act = p.id === activeId ? ' act' : '';
       const star = i === 0 ? ' <span class="sm-pm-star" title="Дефолтный">★</span>' : '';
-      return `<button class="sm-pm-item${act}" data-preset="${p.id}"><span class="sm-pm-check">${p.id === activeId ? '✓' : ''}</span><span class="sm-pm-name">${esc(p.name || '(без имени)')}</span>${star}</button>`;
+      return `<button class="sm-pm-item${act}" data-preset="${p.id}"><span class="sm-pm-check">${p.id === activeId ? '✓' : ''}</span><span class="sm-pm-name${p.cold ? ' cold' : ''}"${p.cold ? ' title="Модель этого пресета не прогрета у хостера — не ответит"' : ''}>${esc(p.name || '(без имени)')}</span>${star}</button>`;
     }).join('');
   }
   // Сетка карточек: только аватар + имя под ним, клик открывает меню персонажа.

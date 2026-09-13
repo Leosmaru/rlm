@@ -37,7 +37,9 @@ function applyReasoningOff(base, payload) {
     if (!off) return;
     if (/arliai\.com|featherless\.ai/i.test(String(base || ''))) {
         payload.reasoning_effort = 'none';
-        payload.chat_template_kwargs = { ...(payload.chat_template_kwargs || {}), enable_thinking: false };
+        // `thinking: false` — Kimi K2.5/K2.6: режим Instant включается только им (карточка модели: chat_template_kwargs
+        // {"thinking": false}); `enable_thinking` — шаблоны Qwen/GLM. Лишний ключ шаблон просто не читает.
+        payload.chat_template_kwargs = { ...(payload.chat_template_kwargs || {}), enable_thinking: false, thinking: false };
     }
 }
 

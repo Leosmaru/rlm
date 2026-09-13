@@ -2994,6 +2994,8 @@ html, body { overscroll-behavior: none; }   /* без pull-to-refresh / овер
 .sm-pm-item.act { border-color: var(--accent); background: var(--node-head); }
 .sm-pm-check { flex: 0 0 14px; text-align: center; color: var(--accent); }
 .sm-pm-name { flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Пресет, чья модель не прогрета у хостера (флаг `cold` в списке пресетов): имя зачёркнуто, выбрать можно */
+.sm-p-name.cold, .sm-pm-name.cold { text-decoration: line-through; opacity: .6; }
 .sm-pm-star { color: var(--accent); font-size: 12px; }
 .sm-preset.act { box-shadow: inset 3px 0 0 var(--accent); }    /* активный пресет в сайдбаре (десктоп) */
 
