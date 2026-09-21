@@ -245,6 +245,35 @@ function mayShrink(key, value, req) {
     console.log('[rlm-store] ' + key + ': отклонена запись короче имеющейся (' + prev + ' → ' + next + ' сообщ.) — это не удаление, а отставший клиент');
     return false;
 }
+// ── Списки чатов персонажа: чат, созданный на другом устройстве, не должен исчезать ──────────
+// Ключ rlm.chats.<charId> клиент пишет ЦЕЛИКОМ из своей памяти. Клиент, который загрузил список
+// раньше (телефон открыли в 23:13, ПК начал новый чат в 01:44), клал свой прежний список поверх —
+// и чат пропадал из меню, хотя лог и снимок графа оставались на диске целыми (так пропал чат
+// 2026-09-18 01:44). Правило mayShrink сюда не доставало: оно считает сообщения, а не записи списка.
+// Теперь сервер СЛИВАЕТ: запись, которая есть на сервере и которой нет у клиента, возвращается на
+// место — по времени создания из id (chat-<base36 времени>-<хвост>).
+// Намеренное удаление чата (🗑) приходит с shrinkOk — такой список пишем как есть.
+const CHATS_PREFIX = 'rlm.chats.';
+const chatTime = (id) => { const m = /^chat-([a-z0-9]+)-/.exec(String(id || '')); const t = m ? parseInt(m[1], 36) : NaN; return Number.isFinite(t) ? t : 0; };
+function mergeChatList(key, value, req) {
+    if (key.indexOf(CHATS_PREFIX) !== 0 || !Array.isArray(value)) return value;
+    if (req && req.body && req.body.shrinkOk) return value;          // пользователь сам удалил чат
+    let prev;
+    try { prev = JSON.parse(fs.readFileSync(fileFor(key), 'utf8')); } catch { return value; }
+    if (!Array.isArray(prev)) return value;
+    const have = new Set(value.map((c) => c && c.id).filter(Boolean));
+    const lost = prev.filter((c) => c && c.id && !have.has(c.id));
+    if (!lost.length) return value;
+    const out = value.slice();
+    for (const c of lost) {
+        let at = out.findIndex((x) => chatTime(x && x.id) > chatTime(c.id));
+        if (at < 0) at = out.length;
+        out.splice(at, 0, c);
+    }
+    console.log('[rlm-store] ' + key + ': клиент прислал список без ' + lost.length + ' чат(ов) (' + lost.map((c) => c.id).join(', ') + ') — вернул их на место');
+    return out;
+}
+
 function mayWrite(req) {
     // ПИШУТ ВСЕ. Телефон, ПК, вторая вкладка — любой клиент, который что-то добавил, делает это истиной.
     // Раньше здесь стоял отказ чужому клиенту, и играющий телефон молча оставался без сохранения.
@@ -290,7 +319,8 @@ router.post('/set', (req, res) => {
     if (!key || typeof key !== 'string') return res.json({ ok: false, error: 'Не задан ключ' });
     mayWrite(req);   // отметить активного клиента (запись не блокируется)
     if (!mayShrink(key, value, req)) return res.json({ ok: true, skipped: 'shorter' });   // отставший клиент — молча не портим историю
-    try { writeOne(key, value); res.json({ ok: true }); }
+    const merged = mergeChatList(key, value, req);   // список чатов: вернуть записи, потерянные отставшим клиентом
+    try { writeOne(key, merged); res.json(merged === value ? { ok: true } : { ok: true, merged });  }
     catch (e) { console.error('rlm-store set:', e); res.json({ ok: false, error: String((e && e.message) || e) }); }
 });
 
@@ -301,7 +331,7 @@ router.post('/setmany', (req, res) => {
     const failed = [];
     for (const [k, v] of Object.entries(entries)) {
         if (!k) continue;
-        try { writeOne(k, v); n++; } catch (e) { failed.push(k); console.error('[rlm-store] setmany ' + k + ':', e); }   // раньше падение на одном ключе рвало цикл на середине
+        try { writeOne(k, mergeChatList(k, v, req)); n++; } catch (e) { failed.push(k); console.error('[rlm-store] setmany ' + k + ':', e); }   // раньше падение на одном ключе рвало цикл на середине
     }
     res.json({ ok: !failed.length, n, failed });
 });

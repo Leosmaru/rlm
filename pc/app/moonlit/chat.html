@@ -92,7 +92,11 @@
     /* RLM: СКРИМ-затенение — тёмный слой ПОВЕРХ низа чата (сообщения + фон), с РАЗМЫТЫМ верхним краем.
        Слои: чат (z0) → скрим (z1) → кнопки/лента/полоса/ввод (z2). Параметры в CSS-переменных — крутятся
        ползунком вживую (тёмность / высота / размытие), сохраняются в localStorage. */
-    :root { --rlm-shade-d: .82; --rlm-shade-h: 210px; --rlm-shade-blur: 3px; }
+    :root { --rlm-shade-d: .82; --rlm-shade-h: 210px; --rlm-shade-blur: 3px; --rlm-sheld-tint: .45; }
+    /* ПОДЛОЖКА ПОЛЯ ЧАТА. Под лентой лежит картинка фона (её ставит «Установить фон»), и без подложки
+       текст читается прямо по ней. Плёнка держится на #sheld — она накрывает ленту и не трогает блок
+       ввода и кнопки (у них свои слои). 0 — прозрачно, как было; регулятор «Подложка чата» в опциях. */
+    #sheld { background: rgba(8, 7, 7, var(--rlm-sheld-tint)) !important; }
     /* Кнопки и лента загрузки БОЛТАЮТСЯ В ВОЗДУХЕ над чатом — без плашки и без отдельной полосы.
        Зона поднята на чат (margin-top<0) и НЕ занимает своё место в потоке → ввод встаёт под чат,
        тёмной полосы-«плашки» между чатом и вводом не остаётся. Прозрачная; клики проходят к чату (кликабельны только кнопки). */
@@ -412,6 +416,8 @@
     let lastStateDefs = [];     // определения переменных «Состояния» (для блока под сообщением); пусто = не показывать
     let lastStateNamesTr = {};  // перевод ИМЁН состояний (id → RU), общий кэш; используется при включённом переводе блока
     let currentMsgs = [];       // последний отрисованный список (для inline-правки — нужен сырой текст)
+    let lastApiPresets = [];    // пресеты ноды API (модель + сэмплеры) — для выбора в окне фидбека 💬
+    let lastApiPreset = '';     // какой пресет сейчас стоит на основном API чата
     let lastGroup = null;       // групповой чат: {started, scene} — пока !started, показываем экран «Вход в игру»
     let lastParty = null;       // партия (слоты) для экрана входа
     let sceneStart = null, sceneEnd = null;   // разметка сцены (как в MachineMechanic): начало/конец
@@ -795,7 +801,7 @@
       }
       else if (m.type === 'bg') { const b = document.getElementById('bg1'); if (b) b.style.backgroundImage = m.url ? "url('" + m.url + "')" : ''; }
       else if (m.type === 'transparent') { de.style.background = m.on ? 'transparent' : ''; document.body.style.background = m.on ? 'transparent' : '#14100f'; }
-      else if (m.type === 'render') { if (m.names) lastNames = m.names; if (m.avatars) lastAvatars = m.avatars; lastSlotAvatars = m.slotAvatars || null; if (m.stateDefs) lastStateDefs = m.stateDefs; lastGroup = m.group || null; lastParty = m.party || null; renderParty(m.party); if (m.group && !m.group.started) { document.getElementById('rlm-entry').dataset.built = ''; } renderGroupEntry(m.group, m.party); randomOn = !!m.randomOn; renderMessages(m.msgs); }
+      else if (m.type === 'render') { if (m.names) lastNames = m.names; if (m.avatars) lastAvatars = m.avatars; lastSlotAvatars = m.slotAvatars || null; if (m.stateDefs) lastStateDefs = m.stateDefs; if (Array.isArray(m.apiPresets)) lastApiPresets = m.apiPresets; if (m.apiPreset != null) lastApiPreset = m.apiPreset; lastGroup = m.group || null; lastParty = m.party || null; renderParty(m.party); if (m.group && !m.group.started) { document.getElementById('rlm-entry').dataset.built = ''; } renderGroupEntry(m.group, m.party); randomOn = !!m.randomOn; renderMessages(m.msgs); }
       else if (m.type === 'group-prep') { groupPrepUpdate(m); }
       else if (m.type === 'group-auto-state') { setAutoBtn(m.on); }
       else if (m.type === 'mes-translated') { const mm = currentMsgs[m.idx]; if (mm) { if (m.text != null) { mm._tr = m.text; mm._showTr = true; } renderMessages(currentMsgs); } }
@@ -1208,11 +1214,21 @@
           '<div class="mrp-sec"><div class="mrp-h">Что не так? Перепишу ответ по замечанию <button class="tr-b crit-tr-fb interactable" type="button" data-fb-dir="ru" title="Перевести твой текст на русский (замена)">RU</button><button class="tr-b crit-tr-fb interactable" type="button" data-fb-dir="en" title="Перевести твой текст на английский (замена)">EN</button></div><textarea class="mes-edit crit-approve-fb" placeholder="напр.: он слишком легко согласился — перепиши жёстче"></textarea></div>'
         + '<div class="mrp-sec fb-reason-sec"><div class="mrp-h">Режим правки</div><select class="fb-mode interactable"><option value="hard" selected>⚖ Перепись — написать иначе</option><option value="soft">✎ Точечно — менять только названное</option></select></div>'
         + '<div class="mrp-sec fb-reason-sec"><div class="mrp-h">Рассуждение при переписи</div><select class="fb-reason interactable"><option value="node">Как в ноде «Опции»</option><option value="off">Выкл</option><option value="low" selected>Короткое</option><option value="medium">Среднее</option><option value="high">Длинное</option></select></div>'
+        + '<div class="mrp-sec fb-reason-sec"><div class="mrp-h">Пресет API — на чём переписывать</div><select class="fb-preset interactable"></select></div>'
         + '<div class="crit-approve-actions">'
         + '<div class="mrp-tr crit-fb-learn interactable" title="Переписать ответ по замечанию И записать урок критику в блокнот">Записать в блокнот</div>'
         + '<div class="mrp-tr crit-fb-send interactable" title="Переписать этот ответ по замечанию">Переписать</div>'
         + '</div>');
       const fa = box.querySelector('.crit-approve-fb'); if (fa) fa.focus();
+      // Пресеты ноды API: выбранный применится к ОСНОВНОМУ API чата (модель + её «Опции») и там останется.
+      // Опции строим через DOM, а не строкой — имя пресета пишет пользователь, в атрибут его не пускаем.
+      const ps = box.querySelector('.fb-preset');
+      if (ps) {
+        const none = document.createElement('option'); none.value = ''; none.textContent = lastApiPresets.length ? '— как сейчас —' : '— пресетов нет —';
+        ps.appendChild(none);
+        lastApiPresets.forEach((p) => { const o = document.createElement('option'); o.value = p.id; o.textContent = p.name || '(без имени)'; ps.appendChild(o); });
+        ps.value = lastApiPreset && lastApiPresets.some((p) => p.id === lastApiPreset) ? lastApiPreset : '';
+      }
       // RU / EN — перевод ТВОЕГО текста в поле (замена), тот же механизм, что в окне апрува.
       box.querySelectorAll('.crit-tr-fb').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -1228,7 +1244,8 @@
         const rz = box.querySelector('.fb-reason'); const reason = rz ? rz.value : 'node';   // то же рассуждение при переписи, что у «Переписать»
         const mz = box.querySelector('.fb-mode'); const mode = mz ? mz.value : 'hard';     // точечно / перепись
         learn.textContent = 'переписываю + пишу…';
-        parent.postMessage({ type: 'feedback-learn', idx: idx, text: val, reason: reason, mode: mode }, '*');   // И перекат по замечанию, И урок в блокнот
+        const pz = box.querySelector('.fb-preset'); const preset = pz ? pz.value : '';   // на какой модели переписывать
+        parent.postMessage({ type: 'feedback-learn', idx: idx, text: val, reason: reason, mode: mode, preset: preset }, '*');   // И перекат по замечанию, И урок в блокнот
         if (critModalClose) critModalClose();
       });
       const send = box.querySelector('.crit-fb-send');
@@ -1237,7 +1254,8 @@
         const rz = box.querySelector('.fb-reason'); const reason = rz ? rz.value : 'node';   // рассуждение при переписи (node = как в «Опциях»)
         const mz = box.querySelector('.fb-mode'); const mode = mz ? mz.value : 'hard';     // точечно (правим только названное) / перепись (пишем иначе)
         send.textContent = 'переписываю…';
-        parent.postMessage({ type: 'feedback', idx: idx, text: val, reason: reason, mode: mode }, '*');   // перекат по замечанию (без авто-урока — урок отдельной кнопкой)
+        const pz = box.querySelector('.fb-preset'); const preset = pz ? pz.value : '';   // выбранный пресет → основной API чата (модель + «Опции»)
+        parent.postMessage({ type: 'feedback', idx: idx, text: val, reason: reason, mode: mode, preset: preset }, '*');   // перекат по замечанию (без авто-урока — урок отдельной кнопкой)
         if (critModalClose) critModalClose();   // окно закрыть — перекат идёт в чате
       });
     });

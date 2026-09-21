@@ -43,6 +43,30 @@ function applyReasoningOff(base, payload) {
     }
 }
 
+// Префилл ответа (нода «Систем промт»: ход Чата и Telegram/сетевой, в запросе поле `prefill: true`) в режиме
+// чата у Kimi на Featherless. Метку `_src` клиент срезает до отправки (stripUiFields), поэтому признак — поле
+// запроса. Без флага движок Featherless закрывает последнюю реплику ассистента и начинает ответ заново: префилл
+// не работает, модель думает в полную силу. Замер 2026-09-15, Kimi-K2.6, карточка Вари: префилл без флага —
+// 181–219 с, 10–13 тыс. знаков мыслей (2 из 2); с `continue_final_message` модель продолжает префилл, но весь
+// ответ приходит полем reasoning, content пустой (4 из 4); плюс `thinking: false` — 7–11 с, мыслей 0, ответ в
+// content (3 из 3). Префилл критика и переводчика поля не ставит и сюда не попадает.
+// Готовое рассуждение `<think>…</think>` переносится в `reasoning_content`: шаблон Kimi ставит мысли ИЗ ЭТОГО
+// поля в блок <think>, а текст `content` — после него. Оставленный в content, `<think>` оказывался после пустого
+// блока мыслей, и модель писала заданные «две строки» прямо в ответ (живые ходы на стенде: 3 из 3).
+// Префилл без готового <think>…</think> не трогаем — такой случай не проверялся.
+function applyPrefillContinue(base, payload, isPrefill) {
+    const msgs = payload && payload.messages;
+    const last = Array.isArray(msgs) && msgs.length ? msgs[msgs.length - 1] : null;
+    if (!isPrefill || !last || last.role !== 'assistant') return;
+    if (!/featherless\.ai/i.test(String(base || '')) || !/kimi/i.test(String(payload.model || ''))) return;
+    const think = String(last.content || '').match(/^\s*<think>([\s\S]*?)<\/think>\s*([\s\S]*)$/i);
+    if (!think) return;
+    msgs[msgs.length - 1] = { role: 'assistant', reasoning_content: think[1].trim(), content: think[2] };
+    payload.continue_final_message = true;
+    payload.add_generation_prompt = false;
+    payload.chat_template_kwargs = { ...(payload.chat_template_kwargs || {}), thinking: false };
+}
+
 // Общий вызов с таймаутом: провайдер не должен вешать сервер навсегда.
 // `stop` — сигнал отмены ВСЕГО запроса клиента (крестик / «⏹ Стоп»). Слушатель не снимаем в finally
 // намеренно: fetch возвращается на заголовках, а тело (у OpenRouter оно тянется весь ответ) читается
@@ -176,6 +200,7 @@ router.post('/generate', async (request, response) => {
     // Тело в формате OpenAI Chat Completions. Сэмплеры кладём как есть, если заданы.
     const payload = { model, messages, ...(params && typeof params === 'object' ? params : {}) };
     applyReasoningOff(b, payload);
+    applyPrefillContinue(b, payload, !!(request.body && request.body.prefill === true));
     const track = trackRequest(request.body && request.body.rid);   // отмена по номеру запроса (крестик / «Стоп»)
     const stop = track.signal;
 

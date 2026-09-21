@@ -517,8 +517,8 @@
       "y": 0,
       "collapsed": false,
       "data": {
-        "refAudio": "C:\\Users\\Leon\\Desktop\\путь 2.2\\Зерно голоса\\Ферн.wav",
-        "refText": "Мне кажется, вы никуда не сбежите. Ничего не знаю, просто вспомнила как боялись сама. Ну да, вижу, но это довольно скучное заклинание. Малютка.",
+        "refAudio": "",
+        "refText": "",
         "lang": "ru",
         "tagging": false,
         "voiceMode": "clone",
