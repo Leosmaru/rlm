@@ -308,6 +308,16 @@ html, body { height: 100%; overflow: hidden; background: var(--canvas-grad); col
 .tg-ng-cfg { display: flex; flex-direction: column; gap: 4px; }
 .tg-ng-batch-lbl { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--muted); }
 .tg-ng-batch-hint { font-size: 9.5px; opacity: 0.7; }   /* «(0 — выкл.)» рядом с «каждые N ходов» */
+/* Нода «API» — пресет ноды (модель + её сэмплеры): выпадашка сверху, кнопка сохранения под ней */
+.api-preset { font-size: 11px; }
+.api-preset-row2 { margin-top: -2px; margin-bottom: 2px; }
+.api-preset-row2 .btn { font-size: 10.5px; }
+/* Нода «API» — чем модель ответила на просьбу о структуре (док «Status»): JSON / список / текст */
+.api-fmt-row { margin-top: -2px; margin-bottom: 2px; }
+.api-fmt { font-size: 10.5px; padding: 1px 7px; border-radius: 9px; border: 1px solid var(--line); opacity: 0.75; }
+.api-fmt[data-kind="json"] { color: #7ddba0; border-color: color-mix(in srgb, #7ddba0 45%, var(--line)); opacity: 1; }
+.api-fmt[data-kind="list"] { color: #e0c070; border-color: color-mix(in srgb, #e0c070 45%, var(--line)); opacity: 1; }
+.api-fmt[data-kind="text"] { color: var(--muted); opacity: 1; }
 /* Нода «API» — «Хостеры» (провайдеры OpenRouter): строка списка + галочка «без замен» */
 .api-prov-row2 { margin-top: -4px; }
 .api-prov-strict { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--muted); cursor: pointer; }
@@ -1089,10 +1099,8 @@ html, body { height: 100%; overflow: hidden; background: var(--canvas-grad); col
 .mu-del-row { margin-left: auto; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 11px; padding: 0 2px; }
 .mu-del-row:hover { color: #e0736b; }
 .pm-mu-fields { padding-left: 8px; }
-.mu-add-row { margin-top: 6px; background: none; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); cursor: pointer; font-size: 11px; padding: 3px 10px; }
-.mu-add-row:hover { border-color: var(--corner); color: var(--text); }
-.mu-pull { background: none; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); cursor: pointer; font-size: 9.5px; padding: 1px 6px; margin-left: auto; }
-.mu-pull:hover { border-color: rgba(201, 139, 219, 0.6); color: #c98bdb; }
+.mu-deal { background: none; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); cursor: pointer; font-size: 9.5px; padding: 1px 6px; margin-left: auto; }
+.mu-deal:hover { border-color: rgba(201, 139, 219, 0.6); color: #c98bdb; }
 .pm-mu-row.pm-mu-muted { opacity: 0.4; }
 .pm-mu-row.pm-mu-muted .port.in { border-color: var(--muted); }
 .pm-mu-row.pm-mu-muted .pm-mu-nm::after { content: ' 🔇'; }
@@ -1189,6 +1197,7 @@ html, body { height: 100%; overflow: hidden; background: var(--canvas-grad); col
 .ch-greet-count { font-family: var(--mono); font-size: 11px; color: var(--muted); min-width: 30px; text-align: center; }
 .ch-ava { cursor: pointer; background-size: cover; background-position: center; }   /* клик — загрузить карточку */
 .ch-ava:hover { border-color: var(--corner); }
+.ch-ava.ava-drop { border-color: var(--corner); box-shadow: inset 0 0 0 2px var(--corner); }   /* картинку тащат на аватар */
 .ch-ava.has-img svg { display: none; }
 
 /* ---- Нода Персона (профиль пользователя, ST User Persona) — переиспользует карточные стили ---- */
@@ -2618,6 +2627,7 @@ html.mobile-mode .tb-left, html.mobile-mode .tb-right { flex: none; }
 .sm-cv-ava { width: 100%; aspect-ratio: 3 / 4; flex: 0 0 auto; border: 1px solid var(--line); background: var(--inset); background-size: cover; background-position: center; display: flex; align-items: center; justify-content: center; color: var(--muted); }
 .sm-cv-ava svg { width: 40%; height: 40%; }
 .sm-cv-ava.has-img svg { display: none; }
+.sm-cv-ava.ava-drop { border-color: var(--corner); box-shadow: inset 0 0 0 2px var(--corner); }   /* картинку тащат на обложку */
 .sm-cv-chats { flex: 1 1 auto; min-height: 80px; overflow-y: auto; border: 1px solid var(--line); background: var(--node-bg); display: flex; flex-direction: column; }
 /* Правая колонка: стопка окон карточки (все поля, даже пустые) + лорбук, прокручивается */
 .sm-cv-fields { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding-right: 4px; }
@@ -2642,6 +2652,8 @@ html.mobile-mode .tb-left, html.mobile-mode .tb-right { flex: none; }
 .sm-cv-name:focus { outline: none; border-color: var(--accent); }
 .sm-cv-copy { flex: 0 0 auto; font-size: 12px; color: var(--muted); background: var(--inset); border: 1px solid var(--line); padding: 6px 12px; cursor: pointer; }
 .sm-cv-copy:hover { color: var(--accent); border-color: var(--accent); }
+.sm-cv-pic { flex: 0 0 auto; margin-top: 8px; font-size: 12px; color: var(--muted); background: var(--inset); border: 1px solid var(--line); padding: 6px 12px; cursor: pointer; }   /* картинка карточки — кнопкой под аватаром */
+.sm-cv-pic:hover { color: var(--accent); border-color: var(--accent); }
 .sm-fld-btns { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
 .sm-fld-ed { font-size: 11px; line-height: 1; letter-spacing: 0; text-transform: none; color: var(--muted); background: var(--inset); border: 1px solid var(--line); padding: 3px 8px; cursor: pointer; }
 .sm-fld-ed:hover { color: var(--accent); border-color: var(--accent); }
@@ -3007,13 +3019,34 @@ html, body { overscroll-behavior: none; }   /* без pull-to-refresh / овер
   #start-menu .sm-side-hd, #start-menu #sm-presets, #start-menu #sm-add-preset { display: none; }   /* пресеты — в ⋮ */
   #start-menu .sm-presets-wrap { display: block; }
   #start-menu .sm-main-hd { flex-wrap: wrap; padding: 10px 12px; }
-  #start-menu .sm-cards { --sm-ava: 120px; gap: 12px; padding: 12px; }
+  #start-menu .sm-cards { gap: 10px; padding: 10px; }   /* размер колонки задаёт выбор пользователя (−/＋), не медиа-запрос */
 }
 html.mobile-mode #start-menu { flex-direction: column; }
 html.mobile-mode #start-menu .sm-side { flex: 0 0 auto; flex-direction: row; align-items: center; gap: 8px; padding: 8px 12px; border-right: none; border-bottom: 1px solid var(--line); }
 html.mobile-mode #start-menu .sm-side-hd, html.mobile-mode #start-menu #sm-presets, html.mobile-mode #start-menu #sm-add-preset { display: none; }
 html.mobile-mode #start-menu .sm-presets-wrap { display: block; }
 html.mobile-mode #start-menu .sm-main-hd { flex-wrap: wrap; }
+
+/* Телефон: ☰ и 🌐 — В СТРОКУ ВКЛАДОК, а не отдельной полосой сверху. Полоса съедала 51px высоты
+   ради двух кнопок; теперь они стоят слева от «Персонажи», а вкладки сдвинуты под них.
+   Сам сайдбар остаётся в потоке нулевой высоты, поэтому список пресетов (он всё так же в ⋮) не ломается. */
+@media (max-width: 720px) {
+  /* Сайдбар на телефоне пустеет (кнопки уехали в строку вкладок, пресеты — в ⋮) — убираем его полосу. */
+  #start-menu .sm-side { display: none; }
+  /* Вкладки — ОДНОЙ строкой с прокруткой вбок (таб-бар), без переносов: перенос раскидывал
+     «Справку» и «Перезапуск» по разным строкам, и шапка выглядела случайной. */
+  #start-menu .sm-tabs { padding: 10px 10px 8px; flex-wrap: nowrap; gap: 6px; overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch; height: auto; }
+  #start-menu .sm-tabs::-webkit-scrollbar { display: none; }
+  #start-menu .sm-tabs .sm-tab, #start-menu .sm-tabs .sm-restart { flex: none; padding: 6px 10px; font-size: 12px; white-space: nowrap; }
+  #start-menu .sm-tabs .sm-restart { margin-left: 0; }
+}
+html.mobile-mode #start-menu .sm-side { display: none; }
+html.mobile-mode #start-menu .sm-tabs { padding: 10px 10px 8px; flex-wrap: nowrap; gap: 6px; overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch; height: auto; }
+html.mobile-mode #start-menu .sm-tabs::-webkit-scrollbar { display: none; }
+html.mobile-mode #start-menu .sm-tabs .sm-tab, html.mobile-mode #start-menu .sm-tabs .sm-restart { flex: none; padding: 6px 10px; font-size: 12px; white-space: nowrap; }
+html.mobile-mode #start-menu .sm-tabs .sm-restart { margin-left: 0; }
 
 /* ── Погружение: опции Moonlit — скрытая выезжающая панель справа (кнопка «опции ⚙» в шапке) ── */
 .im-topbar { justify-content: space-between; }   /* «← ноды» слева, «опции ⚙» справа */
@@ -3232,3 +3265,264 @@ html.mobile-mode .con-tok-row { grid-template-columns: minmax(120px, 1fr) 66px 4
 /* Кнопки перевода замечания в строке фидбека — компактные, как RU/EN в окне чата. */
 .tg-fb-row .tg-fb-tr { flex: none; width: auto; padding: 0 8px; font-size: 10px; }
 .tg-fb-row .tg-fb-tr.busy { opacity: .6; }
+
+/* Лорбук: ✨ подбор ключей у записи. Подсвечена, когда текст есть, а ключей нет — такая запись немая */
+.lb-key1 { margin-left: 6px; font-size: 11px; line-height: 1; padding: 1px 4px; background: none; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); cursor: pointer; }
+.lb-key1:hover { color: var(--accent); border-color: var(--accent); }
+.lb-key1.need { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent); }
+.lb-keygen, .lb-dry { font-size: 10.5px; }
+/* Лорбук: значок у записей, которые пишет «Душа» (World/Topics) — их модель переписывает сама */
+.lb-src { margin-left: 4px; font-size: 10px; opacity: 0.65; flex: none; }
+.lb-litem.sel .lb-src { opacity: 1; }
+
+/* Телефон: кнопки ☰/🌐 внутри строки вкладок — тот же размер, что у вкладок, и не липнут к ним. */
+@media (max-width: 720px) {
+  #start-menu .sm-tabs .sm-side-tools { display: flex; gap: 6px; flex: none; margin-right: 6px; }
+  #start-menu .sm-tabs .sm-tool { width: 30px; height: 30px; }
+}
+html.mobile-mode #start-menu .sm-tabs .sm-side-tools { display: flex; gap: 6px; flex: none; margin-right: 6px; }
+html.mobile-mode #start-menu .sm-tabs .sm-tool { width: 30px; height: 30px; }
+
+/* Кнопка выхода к холсту — только на телефоне: там ☰ занят пресетами, а «⋮ Пресеты» убрана. */
+.sm-tool-exit { display: none; }
+@media (max-width: 720px) {
+  .sm-tool-exit { display: inline-flex; }
+  #start-menu #sm-presets-btn { display: none !important; }   /* сама кнопка «⋮ Пресеты» убрана — её роль у ☰ */
+}
+html.mobile-mode .sm-tool-exit { display: inline-flex; }
+html.mobile-mode #start-menu #sm-presets-btn { display: none !important; }
+/* Выпадашка пресетов на телефоне раскрывается под шапкой, а не из-под убранной кнопки. */
+@media (max-width: 720px) {
+  #start-menu #sm-presets-menu { position: fixed; left: 8px; top: 48px; right: auto; min-width: 220px; max-height: 60vh; overflow: auto; z-index: 40; }
+}
+html.mobile-mode #start-menu #sm-presets-menu { position: fixed; left: 8px; top: 48px; right: auto; min-width: 220px; max-height: 60vh; overflow: auto; z-index: 40; }
+
+/* Плашка активного пресета вынесена из сетки карточек в свою строку над «Размером аватаров». */
+#sm-playbar-host { flex: none; }
+#sm-playbar-host .sm-playbar { grid-column: auto; margin: 0; border-radius: 0; border-left: 0; border-right: 0; border-top: 0; }
+@media (max-width: 720px) {
+  #sm-playbar-host .sm-playbar { padding: 8px 12px; }
+}
+
+/* ── Каталог сайтов на телефоне: шапка съедала треть экрана ─────────────────────────────
+   Ряды кнопок (назад · тип · сайты · поиск · сортировка · 18+ · перевод · теги) расползались
+   на шесть строк. Ужимаем: ряды прокручиваются вбок, кнопки мельче, «К персонажам» — одной
+   стрелкой, у переключателя перевода остаётся короткая подпись. */
+@media (max-width: 720px) {
+  #sm-browse-view .sm-cv-bar { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; gap: 6px; padding: 8px 10px; scrollbar-width: none; }
+  #sm-browse-view .sm-cv-bar::-webkit-scrollbar { display: none; }
+  #sm-browse-view .sm-cv-bar > * { flex: none; }
+  #sm-browse-view .sm-back { font-size: 0; padding: 5px 9px; }
+  #sm-browse-view .sm-back::before { content: '←'; font-size: 14px; }
+  #sm-browse-view .sm-kind, #sm-browse-view .sm-src { padding: 5px 9px; font-size: 11.5px; white-space: nowrap; }
+  #sm-browse-view .sm-src-note { display: none; }
+  
+  #sm-browse-view .sm-q { flex: 1 1 100%; order: 0; padding: 7px 10px; font-size: 13px; }
+  #sm-browse-view .sm-q-go { order: 1; padding: 5px 9px; font-size: 11.5px; }
+  #sm-browse-view .sm-sortrow { order: 2; gap: 6px; }
+  #sm-browse-view .sm-sort { padding: 5px 9px; font-size: 11.5px; }
+  #sm-browse-view .sm-nsfw { order: 3; font-size: 11.5px; }
+  #sm-browse-view .sm-autotr { order: 4; font-size: 11.5px; gap: 4px; }
+  
+  #sm-browse-view .sm-autotr-prov { order: 5; padding: 3px 4px; font-size: 11px; max-width: 78px; }
+  #sm-browse-view .sm-tag-toggle { padding: 4px 9px; font-size: 11.5px; }
+}
+html.mobile-mode #sm-browse-view .sm-cv-bar { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; gap: 6px; padding: 8px 10px; scrollbar-width: none; }
+html.mobile-mode #sm-browse-view .sm-cv-bar::-webkit-scrollbar { display: none; }
+html.mobile-mode #sm-browse-view .sm-cv-bar > * { flex: none; }
+html.mobile-mode #sm-browse-view .sm-back { font-size: 0; padding: 5px 9px; }
+html.mobile-mode #sm-browse-view .sm-back::before { content: '←'; font-size: 14px; }
+html.mobile-mode #sm-browse-view .sm-kind, #sm-browse-view .sm-src { padding: 5px 9px; font-size: 11.5px; white-space: nowrap; }
+html.mobile-mode #sm-browse-view .sm-src-note { display: none; }
+html.mobile-mode 
+html.mobile-mode #sm-browse-view .sm-q { flex: 1 1 100%; order: 0; padding: 7px 10px; font-size: 13px; }
+html.mobile-mode #sm-browse-view .sm-q-go { order: 1; padding: 5px 9px; font-size: 11.5px; }
+html.mobile-mode #sm-browse-view .sm-sortrow { order: 2; gap: 6px; }
+html.mobile-mode #sm-browse-view .sm-sort { padding: 5px 9px; font-size: 11.5px; }
+html.mobile-mode #sm-browse-view .sm-nsfw { order: 3; font-size: 11.5px; }
+html.mobile-mode #sm-browse-view .sm-autotr { order: 4; font-size: 11.5px; gap: 4px; }
+html.mobile-mode 
+html.mobile-mode #sm-browse-view .sm-autotr-prov { order: 5; padding: 3px 4px; font-size: 11px; max-width: 78px; }
+html.mobile-mode #sm-browse-view .sm-tag-toggle { padding: 4px 9px; font-size: 11.5px; }
+
+/* Фильтры каталога: поиск, сортировка, 18+, перевод и «Теги» — один поток, кнопка тегов не занимает
+   отдельную строку. Планетка сама по себе ничего не объясняла, подпись «перевод» вернулась. */
+.sm-browse-filters { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; }
+@media (max-width: 720px) {
+  #sm-browse-view .sm-browse-filters { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; }
+  #sm-browse-view .sm-browse-top { display: contents; }   /* дети — прямо в поток фильтров, чтобы «Теги» встали в тот же ряд */
+  #sm-browse-view .sm-tagrow { display: contents; }   /* в ряд встаёт кнопка, а облако тегов — своей строкой */
+  #sm-browse-view .sm-tagbar { order: 6; flex: 0 0 auto; }
+  #sm-browse-view .sm-tagwrap { order: 7; flex: 1 1 100%; }
+  #sm-browse-view .sm-autotr-prov { max-width: 92px; }
+}
+html.mobile-mode #sm-browse-view .sm-browse-filters { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; }
+html.mobile-mode #sm-browse-view .sm-browse-top { display: contents; }   /* дети — прямо в поток фильтров, чтобы «Теги» встали в тот же ряд */
+html.mobile-mode #sm-browse-view .sm-tagrow { display: contents; }
+html.mobile-mode #sm-browse-view .sm-tagbar { order: 6; flex: 0 0 auto; }
+html.mobile-mode #sm-browse-view .sm-tagwrap { order: 7; flex: 1 1 100%; }
+html.mobile-mode #sm-browse-view .sm-autotr-prov { max-width: 92px; }
+
+/* Телефон: карточки каталога — ГОРИЗОНТАЛЬНЫЕ плашки. Вертикальные плитки с большой обложкой
+   показывали две штуки на экран; так их помещается вчетверо больше: миниатюра слева узкой
+   полосой, имя-автор-описание справа. Сетка на телефоне в одну колонку. */
+@media (max-width: 720px) {
+  #sm-browse-view .sm-results { grid-template-columns: 1fr; gap: 8px; }
+  #sm-browse-view .sm-res { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto 1fr auto; gap: 4px 8px; padding: 6px; height: 118px; overflow: hidden; }   /* высота плашки фиксирована — только так ава остаётся ровно 3:4 */
+  #sm-browse-view .sm-res > * + * { margin-top: 0; }
+  #sm-browse-view .sm-res-thumb { grid-row: 1 / span 4; align-self: stretch; width: 79px; height: auto; aspect-ratio: auto; }   /* ава дотянута до низа плашки; 88px к её высоте (~118) — те же 3:4, картинка внутри по cover, не растянута.
+      span 4 = ровно строки контента: со «span 20» пустые строки добавляли 19 зазоров и плашка распухала вдвое */
+  #sm-browse-view .sm-res-name { font-size: 12px; white-space: normal; }
+  #sm-browse-view .sm-res-meta { font-size: 10px; }
+  #sm-browse-view .sm-res-desc { -webkit-line-clamp: 3; line-clamp: 3; font-size: 10.5px; }
+  #sm-browse-view .sm-res-stats { font-size: 10px; }
+  #sm-browse-view .sm-res.downloaded .sm-res-thumb::after { font-size: 8px; left: 2px; right: 2px; bottom: 2px; }
+}
+
+/* Телефон: карточки каталога — ГОРИЗОНТАЛЬНЫЕ плашки. Вертикальные плитки с большой обложкой
+   показывали две штуки на экран; так их помещается вчетверо больше: миниатюра слева узкой
+   полосой, имя-автор-описание справа. Сетка на телефоне в одну колонку. */
+html.mobile-mode #sm-browse-view .sm-results { grid-template-columns: 1fr; gap: 8px; }
+html.mobile-mode #sm-browse-view .sm-res { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto 1fr auto; gap: 4px 8px; padding: 6px; height: 118px; overflow: hidden; }   /* высота плашки фиксирована — только так ава остаётся ровно 3:4 */
+html.mobile-mode #sm-browse-view .sm-res > * + * { margin-top: 0; }
+html.mobile-mode #sm-browse-view .sm-res-thumb { grid-row: 1 / span 4; align-self: stretch; width: 79px; height: auto; aspect-ratio: auto; }   /* ава дотянута до низа плашки; 88px к её высоте (~118) — те же 3:4, картинка внутри по cover, не растянута.
+      span 4 = ровно строки контента: со «span 20» пустые строки добавляли 19 зазоров и плашка распухала вдвое */
+html.mobile-mode #sm-browse-view .sm-res-name { font-size: 12px; white-space: normal; }
+html.mobile-mode #sm-browse-view .sm-res-meta { font-size: 10px; }
+html.mobile-mode #sm-browse-view .sm-res-desc { -webkit-line-clamp: 3; line-clamp: 3; font-size: 10.5px; }
+html.mobile-mode #sm-browse-view .sm-res-stats { font-size: 10px; }
+html.mobile-mode #sm-browse-view .sm-res.downloaded .sm-res-thumb::after { font-size: 8px; left: 2px; right: 2px; bottom: 2px; }
+
+
+/* ═══ Вкладка стартового меню «✨ Создатель» (creator.js) ═══
+   Карточка пишется моделью по полям: слева форма, справа панель (Сборка / Алгоритм / Чат-правка).
+   Вид взят у панелей меню персонажа (.sm-fld), чтобы вкладка не выглядела чужой. */
+.cr-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 18px; border-bottom: 1px solid var(--line); flex: none; }
+.cr-bar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cr-btn { font-size: 12px; color: var(--text); background: var(--inset); border: 1px solid var(--line); padding: 6px 12px; cursor: pointer; white-space: nowrap; }
+.cr-btn:hover { color: var(--accent); border-color: var(--accent); }
+.cr-btn:disabled { opacity: .4; cursor: default; }
+.cr-primary { font-size: 12px; letter-spacing: .3px; color: #fff; background: var(--btn-grad); border: 1px solid transparent; border-radius: 6px; padding: 7px 14px; cursor: pointer; white-space: nowrap; }
+.cr-primary:hover { filter: brightness(1.12); }
+.cr-ib { font-size: 11px; line-height: 1; letter-spacing: 0; text-transform: none; color: var(--muted); background: var(--inset); border: 1px solid var(--line); padding: 4px 7px; cursor: pointer; white-space: nowrap; }
+.cr-ib:hover { color: var(--accent); border-color: var(--accent); }
+.cr-ib.hot { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.cr-ib:disabled { opacity: .35; cursor: default; }
+.cr-src { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.cr-src b { color: var(--text); font-weight: 400; }
+.cr-mini { width: 22px; height: 29px; border: 1px solid var(--line); display: grid; place-items: center; font-size: 11px; color: #fff; }
+.cr-saved { font-size: 11px; color: var(--muted); }
+.cr-narrow { display: none; }
+
+.cr-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 430px; position: relative; }
+.cr-form { min-height: 0; overflow-y: auto; padding: 16px 18px 60px; display: flex; flex-direction: column; gap: 14px; }
+.cr-side { min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--node-body); }
+.cr-side-tabs { display: flex; align-items: flex-end; gap: 4px; padding: 8px 10px 0; border-bottom: 1px solid var(--line); flex: none; }
+.cr-stab { font-size: 12px; color: var(--muted); background: transparent; border: 1px solid transparent; border-bottom: none; padding: 7px 12px; cursor: pointer; border-radius: 4px 4px 0 0; margin-bottom: -1px; }
+.cr-stab:hover { color: var(--text); }
+.cr-stab.on { color: var(--text); background: var(--node-bg); border-color: var(--line); }
+.cr-side-close { margin: 0 0 6px auto; display: none; }
+.cr-pane { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+.cr-pane.hidden { display: none; }
+
+.cr-sec { border: 1px solid var(--line); background: var(--node-bg); flex: none; }
+.cr-sec-hd { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 8px 6px 12px; font-size: 11px; letter-spacing: .5px; text-transform: uppercase; color: var(--accent); background: var(--node-head); border-bottom: 1px solid var(--line); }
+.cr-sec-hd .cr-push { margin-left: auto; }
+.cr-sec-bd { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.cr-note { font-size: 11px; color: var(--muted); line-height: 1.45; }
+.cr-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cr-lbl { font-size: 11px; color: var(--muted); }
+.cr-in, .cr-sel, .cr-ta { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--inset); border: 1px solid var(--line); padding: 5px 8px; min-width: 0; }
+.cr-in:focus, .cr-sel:focus, .cr-ta:focus { outline: none; border-color: var(--accent); }
+.cr-sel { cursor: pointer; }
+.cr-ta { width: 100%; resize: vertical; line-height: 1.5; min-height: 56px; display: block; }
+.cr-grow { flex: 1 1 auto; }
+.cr-seg { display: inline-flex; border: 1px solid var(--line); }
+.cr-seg button { font-size: 12px; color: var(--muted); background: var(--inset); border: none; padding: 5px 12px; cursor: pointer; }
+.cr-seg button + button { border-left: 1px solid var(--line); }
+.cr-seg button.on { color: var(--text); background: color-mix(in srgb, var(--accent) 24%, var(--inset)); }
+.cr-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); cursor: pointer; user-select: none; }
+.cr-check input { accent-color: var(--accent); }
+.cr-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+.cr-opt { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.cr-opt .cr-lbl { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cr-opt .cr-in { flex: 0 0 62px; width: 62px; text-align: right; }
+
+.cr-fld .sm-fld-hd { gap: 6px; flex-wrap: wrap; }
+.cr-fld .sm-fld-lbl { flex: 0 1 auto; }
+.cr-fld.busy .sm-fld-hd { background-image: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 22%, transparent), transparent); background-size: 40% 100%; background-repeat: no-repeat; animation: cr-sweep 1.1s linear infinite; }
+@keyframes cr-sweep { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+.cr-val { display: block; width: 100%; border: none; background: var(--inset); color: var(--text); font-family: var(--mono); font-size: 12px; line-height: 1.55; padding: 10px 12px; resize: none; overflow: hidden; min-height: 46px; }
+.cr-val:focus { outline: none; box-shadow: inset 0 0 0 1px var(--accent); }
+.cr-val-one { display: block; width: 100%; border: none; padding: 10px 12px; font-size: 13px; }
+.cr-tr-wrap { padding: 0 10px 4px; }
+.cr-instr { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-top: 1px solid var(--line); }
+.cr-instr-ico { font-size: 11px; color: var(--muted); flex: none; }
+.cr-instr-in { flex: 1 1 auto; min-width: 0; border: none; background: transparent; color: var(--text); font-family: var(--mono); font-size: 11.5px; padding: 3px 0; }
+.cr-instr-in:focus { outline: none; }
+.cr-busy-lbl { font-size: 10px; letter-spacing: 0; text-transform: none; color: var(--muted); }
+.cr-note-item { border-top: 1px solid var(--line); }
+.cr-note-item:first-child { border-top: none; }
+.cr-note-hd { display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 12px; }
+.cr-note-title { flex: 1 1 auto; min-width: 0; background: transparent; border: none; color: var(--text); font-family: var(--mono); font-size: 12px; font-weight: 700; }
+.cr-note-title:focus { outline: none; color: var(--accent); }
+.cr-collapse { cursor: pointer; user-select: none; }
+
+.cr-blocks { display: flex; flex-direction: column; gap: 6px; }
+.cr-block { border: 1px solid var(--line); background: var(--inset); padding: 6px 8px; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 4px 8px; align-items: center; }
+.cr-block.off .cr-bname, .cr-block.off .cr-bcom { opacity: .45; }
+.cr-grip { cursor: default; color: var(--muted); user-select: none; font-size: 12px; letter-spacing: -2px; }
+.cr-bname { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cr-bacts { display: inline-flex; gap: 4px; align-items: center; }
+.cr-role { font-size: 11px; padding: 2px 3px; }
+.cr-bcom { grid-column: 3 / -1; font-size: 10.5px; color: var(--muted); line-height: 1.4; }
+.cr-bextra { grid-column: 3 / -1; }
+.cr-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.cr-chip { font-size: 11px; color: var(--text); background: var(--node-head); border: 1px solid var(--line); padding: 2px 4px 2px 7px; display: inline-flex; align-items: center; gap: 4px; }
+.cr-chip button { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 11px; padding: 0 2px; }
+.cr-chip button:hover { color: var(--accent); }
+.cr-tpl-grp { font-size: 10px; letter-spacing: .8px; text-transform: uppercase; color: var(--muted); margin-top: 4px; }
+.cr-tpl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px; padding: 7px 0; border-top: 1px solid var(--line); }
+.cr-tpl-name { font-size: 12px; color: var(--text); }
+.cr-tpl-tag { font-size: 10px; color: var(--accent); margin-left: 6px; }
+.cr-tpl-com { grid-column: 1 / -1; font-size: 10.5px; color: var(--muted); line-height: 1.45; }
+.cr-empty { margin: auto; text-align: center; color: var(--muted); font-size: 12px; line-height: 1.7; max-width: 320px; padding: 20px; }
+
+.cr-modal { position: absolute; inset: 0; z-index: 50; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 20px; }
+.cr-modal.hidden { display: none; }
+.cr-dlg { width: min(780px, 100%); max-height: 100%; display: flex; flex-direction: column; background: var(--node-body); border: 1px solid var(--corner); box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+.cr-dlg.small { width: min(460px, 100%); }
+.cr-dlg-hd { display: flex; align-items: center; gap: 10px; padding: 9px 12px 9px 14px; background: var(--node-head); border-bottom: 1px solid var(--line); font-size: 12px; letter-spacing: .5px; text-transform: uppercase; color: var(--accent); flex: none; }
+.cr-dlg-hd .cr-ib { margin-left: auto; }
+.cr-dlg-bd { padding: 14px; overflow: auto; display: flex; flex-direction: column; gap: 10px; font-size: 12px; min-height: 0; }
+.cr-dlg-ft { display: flex; gap: 8px; justify-content: flex-end; align-items: center; padding: 10px 14px; border-top: 1px solid var(--line); flex: none; flex-wrap: wrap; }
+.cr-dlg-ft .cr-left { margin-right: auto; }
+.cr-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cr-diff-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.cr-diff-col > div { border: 1px solid var(--line); background: var(--inset); padding: 10px; white-space: pre-wrap; word-break: break-word; line-height: 1.55; font-size: 12px; max-height: 52vh; overflow: auto; }
+.d-add { background: rgba(72,176,110,.25); color: #a6ebbe; }
+.d-del { background: rgba(229,84,74,.25); color: #f3aaa3; text-decoration: line-through; }
+.cr-libgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
+.cr-libgrid .sm-card.pick { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.cr-ava-ph { font-size: 34px; color: #fff; opacity: .9; }
+.cr-code { font-family: var(--mono); font-size: 12px; line-height: 1.5; min-height: 220px; }
+.cr-vars { font-size: 11px; color: var(--muted); line-height: 1.6; }
+.cr-vars code { color: var(--text); background: var(--inset); border: 1px solid var(--line); padding: 0 4px; margin-right: 4px; }
+.cr-toast { position: absolute; right: 18px; bottom: 18px; z-index: 60; background: var(--popup); border: 1px solid var(--line); border-left: 3px solid var(--accent); padding: 10px 14px; font-size: 12px; max-width: 380px; box-shadow: 0 10px 30px rgba(0,0,0,.5); line-height: 1.45; }
+.cr-toast.hidden { display: none; }
+
+/* Узкое окно и телефон: правая панель выезжает поверх формы */
+@media (max-width: 1150px) {
+  .cr-body { grid-template-columns: minmax(0, 1fr); }
+  .cr-side { position: absolute; top: 0; right: 0; bottom: 0; width: min(440px, 100%); z-index: 20; box-shadow: -18px 0 40px rgba(0,0,0,.55); transform: translateX(105%); transition: transform .2s; }
+  .cr-side.open { transform: none; }
+  .cr-narrow, .cr-side-close { display: inline-block; }
+}
+html.mobile-mode .cr-body { grid-template-columns: minmax(0, 1fr); }
+html.mobile-mode .cr-side { position: absolute; top: 0; right: 0; bottom: 0; width: 100%; z-index: 20; transform: translateX(105%); transition: transform .2s; }
+html.mobile-mode .cr-side.open { transform: none; }
+html.mobile-mode .cr-narrow, html.mobile-mode .cr-side-close { display: inline-block; }
+html.mobile-mode .cr-bar { padding: 10px 12px; }
+html.mobile-mode .cr-form { padding: 12px 10px 60px; }
+html.mobile-mode .cr-hide-m { display: none; }
+html.mobile-mode .cr-diff { grid-template-columns: 1fr; }

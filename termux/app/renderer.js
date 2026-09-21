@@ -586,8 +586,6 @@ const DD_OPTS = {
 // Пояснения типов триггеров (для дропдауна «Тип триггера» Лорбука/Режиссёра).
 const TRIGGER_DESC = {
   keyword: 'Срабатывает, когда в сцене всплыло ключевое слово.',
-  semantic: 'Смысл сцены близок к твоей фразе-эталону (нужен «Эмбеддер»).',
-  vectorized: 'Смысл сцены близок к тексту самой записи, без фразы (нужен «Эмбеддер»).',
   always_on: 'Всегда в промте, без условий.',
   range: 'Активно, пока номер сообщения в заданном окне (акт).',
   random: 'Срабатывает случайно каждый ход (шанс из «Вероятности, %»).',
@@ -1073,6 +1071,101 @@ function saveApiKeyFor(provider, key) {
     if (String(key || '').trim()) keys[p] = key; else delete keys[p];
     store.set(API_KEYS_KEY, keys);
 }
+// ── ПРЕСЕТЫ ноды API: модель + её сэмплеры одной кнопкой ──────────────────────────
+// Зачем: «быстро переключаться между моделями». Пресет — снимок ДВУХ нод разом: самой «API»
+// (провайдер, Base URL, модель, режим, хостеры, разметка) и подключённых к её входу «Опции»
+// сэмплеров — ноды «Опции» и, если стоит, «Локал-сэмплеры». Ключ общий на всю базу, а не на
+// граф: список пресетов один и тот же в любом чате и любой сборке (потому и переживает вход
+// в чат, выход и перезапуск). Ключ API сюда НЕ кладём — он живёт в rlm.apiKeys по сервисам.
+const API_PRESETS_KEY = 'rlm.apiPresets';
+function getApiPresets() { const v = lsGet(API_PRESETS_KEY, null); return Array.isArray(v) ? v : []; }
+function setApiPresets(list) { lsSet(API_PRESETS_KEY, list); }
+function apiPresetById(id) { return getApiPresets().find((p) => p && p.id === id) || null; }
+// Два готовых пресета — как если бы их сохранил сам пользователь: значения нод «API» и «Опции»
+// взяты из стартовых сборок («GLM-4.7 · Featherless» и «Чистый ролеплей» на GLM-5).
+// Сеются ОДИН раз (по id/имени): удалил или переименовал — обратно не всплывут.
+const API_PRESETS_SEED = [
+  { id: 'ap-glm4-std', name: 'GLM 4 стандартный',
+    api: { provider: 'Featherless', base: 'https://api.featherless.ai/v1', model: 'zai-org/GLM-4.7', instruct: '', provList: '', provStrict: true, mode: 'chat' },
+    options: { values: ['4000', '32000', '0.9', '0', '0', '0', '1', '1', '0.05', '-1'], reason: 'off' } },
+  { id: 'ap-glm5', name: 'GLM 5',
+    api: { provider: 'OpenRouter', base: 'https://openrouter.ai/api/v1', model: 'z-ai/glm-5', instruct: '', provList: 'Baidu, Novita', provStrict: true, mode: 'chat' },
+    options: { values: ['1000', '32000', '0.7', '0', '0', '40', '0.5', '1.2', '0', '-1'], reason: 'off' } },
+];
+function ensureApiPresets() {
+  const have = getApiPresets();
+  const seeded = lsGet(API_PRESETS_KEY + '.seeded', null);
+  if (seeded) return;                                        // сеяли — больше не лезем (даже если пресеты удалили)
+  const add = API_PRESETS_SEED.filter((s) => !have.some((p) => p && (p.id === s.id || p.name === s.name)));
+  if (add.length) setApiPresets(have.concat(JSON.parse(JSON.stringify(add))));
+  lsSet(API_PRESETS_KEY + '.seeded', 1);
+}
+// Ноды сэмплеров ЭТОГО API. На холсте — по проводам со входа «Опции»; в вижне (клон API и клон
+// «Опций» стоят рядом в одном окне) проводов нет, поэтому берём соседей по окну.
+function apiSamplerPeers(apiEl) {
+  const wrap = apiEl && apiEl.closest ? apiEl.closest('.nvis-wrap') : null;
+  if (wrap) return { opts: wrap.querySelector('.node-opts'), local: wrap.querySelector('.node-local') };
+  return { opts: (typeof optionsForApi === 'function') ? optionsForApi(apiEl) : null,
+           local: (typeof localForApi === 'function') ? localForApi(apiEl) : null };
+}
+// Мастер-нода API для клона. Вижн и разворот-по-глазку строят КОПИЮ ноды (buildApiNode + applyValues),
+// её правки уезжают в мастер только на синке. Пресет пишем в обе: копию видит пользователь, мастер —
+// снимок графа. Клон из чата ищем по парам вижна, клон-разворот — по loreFsState.
+function apiMasterOf(apiEl) {
+  if (!apiEl) return null;
+  if (apiEl.closest('#world')) return apiEl;                 // уже нода холста
+  try {
+    const st = (typeof chatVisionState !== 'undefined') ? chatVisionState : null;
+    if (st && Array.isArray(st.pairs)) { const pr = st.pairs.find((x) => x.view === apiEl); if (pr && pr.master) return pr.master; }
+  } catch (_) {}
+  try {
+    const fs = (typeof loreFsState !== 'undefined') ? loreFsState : null;
+    if (fs && fs.el && fs.view === apiEl) return fs.el;
+  } catch (_) {}
+  return apiEl;
+}
+// Снять пресет с ноды API и её сэмплеров. label (подпись-роль: «Комплитер · API») НЕ храним:
+// иначе применение пресета к API критика переименовало бы его в комплитер.
+function apiPresetSnapshot(apiEl) {
+  const { opts, local } = apiSamplerPeers(apiEl);
+  const api = nodeValues(apiEl, 'api'); delete api.label; delete api.preset;
+  const snap = { api };
+  if (opts)  { const o = nodeValues(opts, 'options'); delete o.label; snap.options = o; }
+  if (local) snap.local = nodeValues(local, 'local');
+  return snap;
+}
+// Применить пресет к ноде API и к её «Опциям»/«Локал-сэмплерам» — и в копию (вижн), и в мастер.
+function applyApiPreset(apiEl, preset) {
+  if (!apiEl || !preset) return;
+  const master = apiMasterOf(apiEl);
+  const targets = (master && master !== apiEl) ? [apiEl, master] : [apiEl];
+  targets.forEach((el) => {
+    applyValues(el, 'api', Object.assign({}, preset.api || {}));
+    el.dataset.preset = preset.id || '';
+    const sel = el.querySelector('.api-preset'); if (sel) sel.value = preset.id || '';
+    const { opts, local } = apiSamplerPeers(el);
+    if (opts && preset.options) applyValues(opts, 'options', preset.options);
+    if (local && preset.local)  applyValues(local, 'local', preset.local);
+    if (el._persist) { try { el._persist(); } catch (_) {} }   // конфиг ноды (провайдер/URL/модель/режим) — в базу
+    if (typeof applyLocalCaps === 'function') { try { applyLocalCaps(el); } catch (_) {} }   // гейт умных крутилок под новый режим
+  });
+  if (typeof syncApiLabels === 'function') syncApiLabels();
+  if (typeof persistCurrentGraph === 'function') persistCurrentGraph();   // снимок графа чата: модель и сэмплеры переживут выход
+}
+// Заполнить выпадашку пресетов в ноде API (зовётся при сборке ноды и после сохранения нового).
+function fillApiPresetSelect(apiEl) {
+  const sel = apiEl && apiEl.querySelector('.api-preset'); if (!sel) return;
+  const cur = apiEl.dataset.preset || '';
+  sel.innerHTML = '<option value="">— не выбран —</option>'
+    + getApiPresets().map((p) => '<option value="' + esc(p.id) + '">' + esc(p.name || '(без имени)') + '</option>').join('');
+  sel.value = cur;
+  if (sel.value !== cur) { apiEl.dataset.preset = ''; sel.value = ''; }   // пресет удалили — метка больше не показывается
+}
+// Перерисовать выпадашки во ВСЕХ нодах API (холст + открытый вижн): список пресетов общий.
+function refreshApiPresetSelects() {
+  document.querySelectorAll('.node-api').forEach((el) => fillApiPresetSelect(el));
+}
+
 // Настройки ноды Telegram (токен + режим). Токен в граф НЕ пишем (секрет) — он живёт в базе под своим ключом.
 const TG_CFG_KEY = 'rlm.telegram';
 const loadTgCfg = () => store.get(TG_CFG_KEY) || {};
@@ -1092,6 +1185,16 @@ function buildApiNode() {
       <div class="api-ins">
         <div class="api-in" data-in="prompt"><span class="port in" data-dir="in" title="Промт: собранные сообщения"></span><span class="api-in-lbl">Промт</span></div>
         <div class="api-in" data-in="options"><span class="port in" data-dir="in" title="Опции: сэмплеры"></span><span class="api-in-lbl">Опции</span></div>
+      </div>
+      <div class="row api-preset-row" title="Пресет = снимок ЭТОЙ ноды API и подключённых к ней «Опций» (и «Локал-сэмплеров», если стоят). Выбрал пресет — обе ноды разом переключились на другую модель">
+        <span class="flabel">Пресет</span>
+        <select class="field api-preset"><option value="">— не выбран —</option></select>
+      </div>
+      <div class="row api-fmt-row" title="Чем модель этой ноды ответила в последний раз, когда её просили структуру (док «Status»). JSON — сцена разобрана точно; список — разобрана по строкам; текст — структуры не было, состав сцены берётся грубо, поиском имён по тексту">
+        <span class="flabel">Формат ответа</span><span class="api-fmt" data-kind="">—</span>
+      </div>
+      <div class="row api-preset-row2">
+        <button class="btn ghost api-preset-save" type="button" title="Сохранить настройки этой ноды API и её «Опций» как пресет — спросит имя">💾 Сохранить пресет</button>
       </div>
       <div class="row"><span class="flabel">Провайдер</span>
         <div class="dropdown dd-desc">
@@ -1167,6 +1270,42 @@ function buildApiNode() {
   }
 
   const persist = () => { saveApiKeyFor(cur.textContent, key.value); saveApiCfg({ provider: cur.textContent, base: base.value, key: key.value, model: model.value, mode: el.dataset.mode || 'chat' }) };
+  el._persist = persist;   // applyApiPreset пишет конфиг ноды тем же путём, что и ручная правка полей
+  // ── Пресеты ноды (модель + сэмплеры) ──
+  const presetSel = el.querySelector('.api-preset');
+  const presetSave = el.querySelector('.api-preset-save');
+  fillApiPresetSelect(el);
+  if (presetSel) {
+    presetSel.addEventListener('pointerdown', (e) => e.stopPropagation());   // не таскать ноду за выпадашку
+    presetSel.addEventListener('click', (e) => e.stopPropagation());
+    presetSel.addEventListener('change', (e) => {
+      e.stopPropagation();
+      const p = apiPresetById(presetSel.value);
+      if (!p) { el.dataset.preset = ''; if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); return; }
+      applyApiPreset(el, p);
+    });
+  }
+  if (presetSave) {
+    presetSave.addEventListener('pointerdown', (e) => e.stopPropagation());
+    presetSave.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const был = apiPresetById(el.dataset.preset || '');
+      rlmPrompt('Имя пресета API:', был ? был.name : (model.value || ''), (name) => {
+        const nm = String(name || '').trim(); if (!nm) return;             // отменили именование — не сохраняем
+        const list = getApiPresets();
+        const snap = apiPresetSnapshot(el);
+        const same = list.find((p) => p && (p.name || '').trim().toLowerCase() === nm.toLowerCase());
+        let id;
+        if (same) { id = same.id; Object.assign(same, snap, { id, name: nm }); }   // то же имя = обновить пресет
+        else { id = 'ap-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 5); list.push(Object.assign({ id, name: nm }, snap)); }
+        setApiPresets(list);
+        el.dataset.preset = id;
+        refreshApiPresetSelects();
+        flashBtn(presetSave, true);
+        if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
+      });
+    });
+  }
   const setStatus = (text, state) => { status.textContent = text; status.dataset.state = state || ''; };
   // Переключатель Chat/Text: подсветить активную кнопку, запомнить режим.
   // skipPersist — при ЗАГРУЗКЕ (восстановление конфига): не писать обратно на сервер то, что только что прочитали.
@@ -1996,8 +2135,9 @@ function makeSlotIcItem(p, list) {
 }
 
 // ── Слот МУЛЬТИПОЛЬЗОВАТЕЛЯ (сетевая игра) — плашка с рядами игроков; у каждого свои входы: Персона / Душа /
-//    Состояние. Имена игроков берутся из ноды «Сетевая игра» (обратная связь — Фаза 2b) либо правятся вручную.
-//    Порты сериализуются ключом muser:<plateId>:<playerId>:<field> (см. portKey/findPort). ──
+//    Состояние. Ряд появляется, когда админ одобрил участника ноды «Сетевая игра» («Это персонаж»), — в порядке
+//    одобрения; ник ряда — ник участника в Telegram (Leon 2026-09-14: «никаких рядов», «в комплитере появляются
+//    автоматом одобренные в порядке одобрения»). Порты сериализуются ключом muser:<plateId>:<playerId>:<field>. ──
 const MUSER_FIELDS = [{ f: 'persona', n: 'Персона' }, { f: 'soul', n: 'Душа' }, { f: 'state', n: 'Состояние' }];
 // customSeq сбрасывается в 0 при каждой перезагрузке, поэтому НЕ полагаемся только на него:
 // крутим счётчик, пока id не окажется свободным среди уже существующих рядов (иначе дубли data-player →
@@ -2005,8 +2145,7 @@ const MUSER_FIELDS = [{ f: 'persona', n: 'Персона' }, { f: 'soul', n: 'Д
 function muNewPlayerId() { let id; do { id = 'mu-' + (++customSeq); } while (document.querySelector('.pm-mu-row[data-player="' + id + '"]')); return id; }
 function makeMuserItem(p, list) {
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const players = (Array.isArray(p.players) && p.players.length) ? p.players
-    : [{ id: muNewPlayerId(), name: 'Игрок 1' }, { id: muNewPlayerId(), name: 'Игрок 2' }, { id: muNewPlayerId(), name: 'Игрок 3' }];
+  const players = Array.isArray(p.players) ? p.players : [];   // заготовок «Игрок 1…3» нет — ряды только от одобрения
   const item = document.createElement('div');
   item.className = 'pm-item pm-muser' + (p.expanded === false ? '' : ' open');
   item.dataset.id = p.id; item.dataset.kind = 'muser'; item.dataset.enabled = String(p.on !== false); item.dataset.pos = 'rel';
@@ -2027,13 +2166,12 @@ function makeMuserItem(p, list) {
       <span class="pm-caret mu-caret">▾</span>
       <span class="pm-name">${esc(p.name || 'Мультипользователь')}</span>
       <span class="pm-badge muser">мультиюзер</span>
-      <button class="mu-pull" title="Подтянуть имена игроков из ноды «Сетевая игра»">🔄 из ноды</button>
+      <button class="mu-deal" title="Каждому игроку без нод — Персона, Душа и Состояние с готовым ХП">Раздать ноды</button>
       <button class="pm-del" title="Удалить плашку">✕</button>
     </div>
     <div class="pm-muser-body">
-      <div class="pm-sf-note">Ряды игроков сетевой игры. Каждому — Персона (костюм), Душа, Состояние. Имена берутся из ноды «Сетевая игра» (обратная связь) или правь вручную.</div>
+      <div class="pm-sf-note">Игроки сетевой игры. Появляются сами, когда в ноде «Сетевая игра» участнику нажали «Это персонаж». «Раздать ноды» — каждому Персона, Душа и Состояние с ХП.</div>
       <div class="pm-mu-rows">${players.map(rowHtml).join('')}</div>
-      <button class="mu-add-row" type="button">＋ игрок</button>
     </div>`;
   const bindRow = (row) => {
     row.querySelectorAll('.port.in').forEach((prt) => { prt.dataset.bound = '1'; prt.addEventListener('pointerdown', onPortDown); });
@@ -2055,17 +2193,15 @@ function makeMuserItem(p, list) {
   const caret = item.querySelector('.mu-caret');   // свернуть/раскрыть
   caret.addEventListener('pointerdown', (e) => e.stopPropagation());
   caret.addEventListener('click', (e) => { e.stopPropagation(); item.classList.toggle('open'); redrawWires(); });
-  const pull = item.querySelector('.mu-pull');   // подтянуть имена игроков из ноды «Сетевая игра»
-  pull.addEventListener('pointerdown', (e) => e.stopPropagation());
-  pull.addEventListener('click', (e) => { e.stopPropagation(); muserSyncFromNode(item); });
-  const addRow = item.querySelector('.mu-add-row');   // + игрок
-  addRow.addEventListener('pointerdown', (e) => e.stopPropagation());
-  addRow.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const rows = item.querySelector('.pm-mu-rows');
-    const tmp = document.createElement('div'); tmp.innerHTML = rowHtml({ id: muNewPlayerId(), name: '' });
-    const row = tmp.firstElementChild; rows.appendChild(row); bindRow(row); redrawWires(); muRenumberRows(item);
-  });
+  const deal = item.querySelector('.mu-deal');   // раздать ноды всем игрокам, у кого их нет
+  deal.addEventListener('pointerdown', (e) => e.stopPropagation());
+  deal.addEventListener('click', (e) => { e.stopPropagation(); muDealNodes(item); });
+  // Новый ряд в конец списка (порядок одобрения). Зовёт только одобрение участника — ручной кнопки нет.
+  item._addRow = (pl) => {
+    const tmp = document.createElement('div'); tmp.innerHTML = rowHtml(pl);
+    const row = tmp.firstElementChild; item.querySelector('.pm-mu-rows').appendChild(row); bindRow(row); redrawWires(); muRenumberRows(item);
+    return row;
+  };
   attachSortHandle(item.querySelector('.pm-drag'), list, '.pm-item', () => relayoutPlates(list));
   muRenumberRows(item);
   return item;
@@ -2136,8 +2272,9 @@ function createNodeTidy(type, x, y, gap) {
   n.style.left = spot.x + 'px'; n.style.top = spot.y + 'px';
   return n;
 }
-// Кнопка ряда «＋ ноды»: создать Персону + Душу + Состояние для этого игрока и подключить к его входам.
-// Ноды рождаются СВЁРНУТЫМИ и стоят колонкой слева от комплитера — блок на игрока, без наложений.
+// Кнопка ряда «＋ ноды» и «Раздать ноды»: создать игроку НЕДОСТАЮЩИЕ Персону / Душу / Состояние и подключить к его
+// входам (уже подключённые не дублируем). Состояние рождается с готовым ХП (Leon 2026-09-14: «нажимаем создать ноды —
+// там в состояниях уже есть хп»). Ноды СВЁРНУТЫЕ, колонкой слева от комплитера — блок на игрока, без наложений.
 function muCreateNodesForRow(row) {
   if (!row) return;
   const plate = row.closest('.pm-item.pm-muser'); if (!plate) return;
@@ -2146,61 +2283,53 @@ function muCreateNodesForRow(row) {
   const cx = parseFloat(comp.style.left) || 0, cy = parseFloat(comp.style.top) || 0;
   const colX = cx - 1320;                        // одна колонка слева от комплитера — все три ноды выровнены
   const y = cy + idx * 200;                      // свой блок на каждого игрока (три шапки + воздух)
-  const persona = createNodeTidy('persona', colX, y);
-  const soul = createNodeTidy('soul', colX, y + 56);
-  const state = createNodeTidy('state', colX, y + 112);
+  const has = (field) => { const inp = row.querySelector('.port.in[data-field="' + field + '"]'); return !!(inp && connections.some((c) => c.to === inp)); };
   // Подключаем ПРЯМО к портам ЭТОГО ряда (по элементу), а не через ключ muser:…:pid — так «+ ноды»
   // цепляет ноды к нажатому ряду независимо от id (даже если он случайно совпал с соседним).
   const link = (node, field) => { const o = findPort(node, 'out'), inp = row.querySelector('.port.in[data-field="' + field + '"]'); if (o && inp) addConnection(o, inp); };
-  link(persona, 'persona'); link(soul, 'soul'); link(state, 'state');
-  // Своя модель Душ: если у какой-то Души сборки уже есть «Души · API» — новая Душа игрока пишет той же моделью.
-  const soulsApi = (typeof soulApiNode === 'function') ? [...document.querySelectorAll('.node-soul:not(.nvis)')].filter((s) => s !== soul).map((s) => soulApiNode(s)).find(Boolean) : null;
-  if (soulsApi) { const o = findPort(soulsApi, 'out'), inp = findPort(soul, 'in:api'); if (o && inp) addConnection(o, inp); }
-  if (typeof applyNetgameSoulDocs === 'function') applyNetgameSoulDocs(soul);   // Душа игрока: доки под сетевую игру (Inventory)
-  const nm = ((row.querySelector('.pm-mu-nm') || {}).textContent || '').trim();  // имя ряда → имя персоны (костюм)
-  if (nm) { const ni = persona.querySelector('.ch-name-input'); if (ni) ni.value = nm; }
+  if (!has('persona')) {
+    const persona = createNodeTidy('persona', colX, y);
+    link(persona, 'persona');
+    const nm = ((row.querySelector('.pm-mu-nm') || {}).textContent || '').trim();  // имя ряда → имя персоны (костюм)
+    if (nm) { const ni = persona.querySelector('.ch-name-input'); if (ni) ni.value = nm; }
+  }
+  if (!has('soul')) {
+    const soul = createNodeTidy('soul', colX, y + 56);
+    link(soul, 'soul');
+    // Своя модель Душ: если у какой-то Души сборки уже есть «Души · API» — новая Душа игрока пишет той же моделью.
+    const soulsApi = (typeof soulApiNode === 'function') ? [...document.querySelectorAll('.node-soul:not(.nvis)')].filter((s) => s !== soul).map((s) => soulApiNode(s)).find(Boolean) : null;
+    if (soulsApi) { const o = findPort(soulsApi, 'out'), inp = findPort(soul, 'in:api'); if (o && inp) addConnection(o, inp); }
+    if (typeof applyNetgameSoulDocs === 'function') applyNetgameSoulDocs(soul);   // Душа игрока: доки под сетевую игру (Inventory)
+  }
+  if (!has('state')) {
+    const state = createNodeTidy('state', colX, y + 112);
+    link(state, 'state');
+    applyValues(state, 'state', { vars: [{ ...NETGAME_HP_VAR }] });   // готовое ХП: 0–100, на нуле персонаж мёртв
+  }
   redrawWires();
   if (typeof persistCurrentGraph === 'function') persistCurrentGraph();   // сохранить созданные Персону/Душу/Состояние + провода (иначе слетают)
 }
-// ── Обратная связь слота ↔ ноды «Сетевая игра» (Фаза 2b) ──
-// Нода «Сетевая игра», которую в итоге кормит этот комплитер (комплитер.out → API → netgame.in).
-// Фолбэк — единственная нода netgame на холсте.
-function netgameForCompleter(compEl) {
-  if (!compEl) return null;
-  const out = compEl.querySelector(':scope > .port.out'); if (!out) return null;
-  const cApi = connections.find((c) => c.from === out && c.to.closest && c.to.closest('.node-api'));
-  const api = cApi ? cApi.to.closest('.node-api') : null; if (!api) return null;
-  const cNg = connections.find((c) => c.from.closest && c.from.closest('.node-api') === api && c.to.closest && c.to.closest('.node-netgame'));
-  return cNg ? cNg.to.closest('.node-netgame') : null;   // строго по цепочке комплитер→API→netgame; без глобального фолбэка (изоляция)
+// «Раздать ноды» (шапка слота): всем игрокам, у кого не хватает Персоны / Души / Состояния, — создать недостающее.
+function muDealNodes(plate) {
+  if (!plate) return;
+  [...plate.querySelectorAll('.pm-mu-row')].forEach((row) => { if (!tgNgRowReady(row)) muCreateNodesForRow(row); });
+  if (typeof tgNgRefreshAllCast === 'function') tgNgRefreshAllCast();   // «играет: X» / «нет персонажа» — по факту новых нод
 }
-// Имена рядов слота мультипользователя ← список участников ноды «Сетевая игра» (позиционно: ряд i ← участник i).
-// Провода существующих рядов НЕ трогаем; для лишних участников дописываем ряды (через штатную «＋ игрок»).
-function muserSyncFromNode(muPlate) {
-  if (!muPlate || !muPlate.classList.contains('pm-muser')) return;
-  const comp = muPlate.closest('.node-prompt, .node-mprompt'); if (!comp) return;
-  const ng = netgameForCompleter(comp); if (!ng) return;
-  const cast = ng._cast || [];
-  const rowsBox = muPlate.querySelector('.pm-mu-rows'); if (!rowsBox) return;
-  const addBtn = muPlate.querySelector('.mu-add-row');
-  cast.forEach((p, i) => {
-    let rows = rowsBox.querySelectorAll('.pm-mu-row');
-    while (rows.length <= i && addBtn) { addBtn.click(); rows = rowsBox.querySelectorAll('.pm-mu-row'); }   // добить рядов до нужного числа штатной кнопкой (ряд привязан)
-    const row = rows[i]; if (!row) return;
-    const nm = row.querySelector('.pm-mu-nm'), ava = row.querySelector('.mu-ava');
-    const label = p.name || '';
-    if (nm && nm.textContent.trim() !== label) nm.textContent = label;
-    if (ava) ava.textContent = label ? label.slice(0, 1) : '＋';
-  });
-  redrawWires();
+// Ник ряда = ник участника Telegram. Участника узнаём по номеру аккаунта (data-author), не по нику: сменил ник —
+// ряд тот же, подпись обновляется. Имя персонажа (нода Персона) ник не трогает.
+function muSetRowNick(row, name) {
+  if (!row) return;
+  const nm = row.querySelector('.pm-mu-nm'), ava = row.querySelector('.mu-ava');
+  const label = String(name || '').trim();
+  if (nm && nm.textContent.trim() !== label) nm.textContent = label;
+  if (ava) ava.textContent = label ? label.slice(0, 1) : '＋';
 }
-// Пересинхронить ВСЕ слоты мультипользователя (после смены состава участников в ноде «Сетевая игра»).
 // Нода «Душа», подключённая к ряду игрока (нужна и сборке промта, и движку памяти).
 function muRowSoulNode(row) {
   const port = row && row.querySelector('.port.in[data-field="soul"]');
   const conn = port && connections.find((c) => c.to === port && c.from.closest && c.from.closest('.node-soul'));
   return conn ? conn.from.closest('.node-soul') : null;
 }
-function muserRefreshAll() { document.querySelectorAll('.pm-item.pm-muser').forEach(muserSyncFromNode); }
 // Имя костюма ряда = имя подключённой ноды Персона (её `.ch-name-input`); фолбэк — имя ряда (ник). Единый
 // источник подписи и в компиляции хода, и в сборке промта — чтобы модель видела ОДНО имя персонажа.
 function muRowPersonaName(row) {
@@ -2910,6 +3039,23 @@ function buildPersonaNode() {
   return el;
 }
 
+// Аватар карточки под курсором: в него уходит картинка по Ctrl+V. Обработчик paste — ОДИН на документ
+// (вешать его на каждую ноду нельзя: событие приходит в документ, а не в div под мышью).
+let chAvaUnderCursor = null;
+document.addEventListener('paste', (e) => {
+  const ava = chAvaUnderCursor; if (!ava || !ava._setAvaFromFile) return;
+  const ae = document.activeElement;   // печатают в поле — вставка принадлежит полю, аватар не трогаем
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+  const items = (e.clipboardData && e.clipboardData.items) || [];
+  for (const it of items) {
+    if (it.kind !== 'file' || !/^image\//.test(it.type || '')) continue;
+    const f = it.getAsFile(); if (!f) continue;
+    e.preventDefault();
+    ava._setAvaFromFile(f);
+    break;
+  }
+});
+
 function buildCharacterNode() {
   const el = document.createElement('div');
   el.className = 'node panel node-char';
@@ -2924,10 +3070,12 @@ function buildCharacterNode() {
       <span class="ch-book-sum ch-book-empty">— встроенного лорбука нет —</span>
     </div>`;
     // «Первое сообщение» — с листалкой приветствий (first_mes + alternate_greetings): читать/править все.
-    const greetNav = f.id === 'first_mes' ? `<span class="ch-greet-nav" style="display:none" title="Приветствия карточки — листать все">
-        <button class="ch-greet-arrow ch-greet-prev" type="button" title="Предыдущее приветствие">‹</button>
+    const greetNav = f.id === 'first_mes' ? `<span class="ch-greet-nav" title="Приветствия карточки — листать, добавить, удалить">
+        <button class="ch-greet-arrow ch-greet-prev" type="button" style="display:none" title="Предыдущее приветствие">‹</button>
         <span class="ch-greet-count">1 / 1</span>
-        <button class="ch-greet-arrow ch-greet-next" type="button" title="Следующее приветствие">›</button>
+        <button class="ch-greet-arrow ch-greet-next" type="button" style="display:none" title="Следующее приветствие">›</button>
+        <button class="ch-greet-arrow ch-greet-add" type="button" title="Добавить пустое приветствие и перейти к нему">＋</button>
+        <button class="ch-greet-arrow ch-greet-del" type="button" style="display:none" title="Удалить это приветствие (последнее удалить нельзя)">✕</button>
       </span>` : '';
     return `
     <div class="ch-item" data-field="${f.id}">
@@ -2941,7 +3089,7 @@ function buildCharacterNode() {
     ${head(CARD_ICON, charName || 'Персонаж')}
     <div class="node-body ch-body">
       <div class="ch-card">
-        <div class="ch-ava" title="Загрузить карточку (PNG/JSON)">${SILHOUETTE}</div>
+        <div class="ch-ava" title="Клик — загрузить карточку (PNG/JSON). Перетащи сюда картинку или вставь из буфера (Ctrl+V) — она станет аватаром, поля не тронутся">${SILHOUETTE}</div>
         <div class="ch-meta">
           <input class="ch-name-input" spellcheck="false" placeholder="имя персонажа" value="${charName}">
           <div class="ch-anote-wrap">
@@ -3015,6 +3163,30 @@ function buildCharacterNode() {
     } catch (err) { /* некорректный файл — тихо игнорируем */ }
     fileInput.value = ''; // разрешить выбрать тот же файл снова
   });
+  // Картинку можно ПЕРЕТАЩИТЬ на аватар или ВСТАВИТЬ из буфера (Ctrl+V), пока курсор над ним: ставим
+  // только обложку карточки, поля не трогаем — то же, что кнопка «🖼 Картинка», но без диалога файла.
+  const setAvaFromFile = (f) => {
+    if (!f || !/^image\//.test(f.type || '')) return false;
+    const rd = new FileReader();
+    rd.onload = () => {
+      ava.style.backgroundImage = 'url("' + rd.result + '")';
+      ava.classList.add('has-img');
+      if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
+      if (typeof redrawWires === 'function') redrawWires();
+    };
+    rd.readAsDataURL(f);
+    return true;
+  };
+  ava._setAvaFromFile = setAvaFromFile;   // сюда же придёт картинка из буфера (обработчик paste — один на документ)
+  ava.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; ava.classList.add('ava-drop'); });
+  ava.addEventListener('dragleave', () => ava.classList.remove('ava-drop'));
+  ava.addEventListener('drop', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    ava.classList.remove('ava-drop');
+    setAvaFromFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]);
+  });
+  ava.addEventListener('mouseenter', () => { chAvaUnderCursor = ava; });
+  ava.addEventListener('mouseleave', () => { if (chAvaUnderCursor === ava) chAvaUnderCursor = null; });
   // «📚 Из библиотеки» — пикер только скачанных карточек (без сайдбара/каталога), грузит выбранную в ЭТУ ноду.
   // «＋ В библиотеку»: правки карточки внутри чата местные (оригинал не трогаем). Сохранить их отдельной
   // карточкой можно ТОЛЬКО под новым именем — иначе непонятно, какая из двух настоящая.
@@ -3106,7 +3278,29 @@ function buildCharacterNode() {
       gnav.addEventListener('click', (e) => {
         const arrow = e.target.closest('.ch-greet-arrow'); if (!arrow) return;
         e.stopPropagation();
-        const g = el._greetings || []; if (g.length < 2) return;
+        const ta = gItem.querySelector('.ch-text');
+        if (ta && document.activeElement === ta) ta.blur();   // поле в фокусе chGreetSync не трогает — иначе в нём осталось бы прошлое приветствие
+        const g = Array.isArray(el._greetings) ? el._greetings : (el._greetings = []);
+        // ＋ — новое пустое приветствие сразу после текущего (пустой массив: сначала забираем то, что в поле).
+        if (arrow.classList.contains('ch-greet-add')) {
+          if (!g.length) g.push(ta ? ta.value : '');
+          el._greetIdx = (el._greetIdx || 0) + 1;
+          g.splice(el._greetIdx, 0, '');
+          chGreetSync(el);
+          if (ta) { ta.value = ''; ta.focus(); }
+          persistCurrentGraph();
+          return;
+        }
+        // ✕ — убрать текущее; единственное приветствие не удаляем (иначе карточка останется без него).
+        if (arrow.classList.contains('ch-greet-del')) {
+          if (g.length < 2) return;
+          g.splice(el._greetIdx || 0, 1);
+          if ((el._greetIdx || 0) >= g.length) el._greetIdx = g.length - 1;
+          chGreetSync(el);
+          persistCurrentGraph();
+          return;
+        }
+        if (g.length < 2) return;
         const dir = arrow.classList.contains('ch-greet-next') ? 1 : -1;
         el._greetIdx = ((el._greetIdx || 0) + dir + g.length) % g.length;
         chGreetSync(el);
@@ -3155,10 +3349,12 @@ function parseLorebook(obj) {
     const tt = String(e.trigger_type || ex.trigger_type || e.trigger || '').trim().toLowerCase();
     const phrase = String(e.semantic_trigger || ex.semantic_trigger || e.semTrigger || '').trim();
     const thrRaw = parseFloat(e.semantic_threshold ?? ex.semantic_threshold ?? e.semThreshold);
-    const trig = (tt === 'semantic') ? (phrase ? 'semantic' : '') : ((tt === 'always_on' || tt === 'vectorized' || tt === 'keyword') ? tt : '');
+    // SW-карточки приходят со смысловым типом; отбор по смыслу вырезан — такие записи ловятся ключами,
+    // а фраза-эталон остаётся в данных (её прогоняет генератор ключей). 2026-09-21.
+    const trig = (tt === 'always_on') ? 'always_on' : ((tt === 'semantic' || tt === 'vectorized' || tt === 'keyword') ? 'keyword' : '');
     return {
       ...(trig ? { trigger: trig } : {}),
-      ...(trig === 'semantic' ? { semTrigger: phrase, semThreshold: semThrScale(thrRaw) } : {}),
+      ...(phrase ? { semTrigger: phrase } : {}),   // фраза из карточки — сырьё для генератора ключей
       name: e.comment || e.name || '',
       keys: Array.isArray(k) ? k.join(', ') : String(k || ''),
       keys2: Array.isArray(k2) ? k2.join(', ') : String(k2 || ''),
@@ -3182,16 +3378,24 @@ let loreSeq = 0;
 // Замер 2026-09-13 (e5-small, Ептенбург): всем 40 фразам эмбеддер дал 0,735–0,824 при порогах 0,66–0,72 —
 // порог пропускал всё, и бюджет набирал 12 записей по приоритету, а не по близости к сцене.
 const LORE_SEM_TOPK_DEF = 3;
+// Липкость: сколько ходов запись держится в промте после срабатывания по ключу (0 = выключить).
+// Есть у всех трёх референсов (ST timedEffects, SW sticky_until, Aventuras stickiness) — без неё запись
+// пропадает на следующем же ходу, и модель «забывает» то, что минуту назад знала.
+const LORE_STICKY_DEF = 3;
+// Вырезанные триггеры (2026-09-21): отбор по смыслу держался на эмбеддере, а он на этой задаче не работает —
+// замер на лорбуке Ептенбурга дал полосу оценок 0,085 на 40 записей (все слиплись). Старые записи читаются
+// как «по ключам»; поля semTrigger/semThreshold/vecThreshold в данных остаются нетронутыми (для отката).
+const LORE_DEAD_TRIGGERS = new Set(['semantic', 'vectorized']);
 const LORE_SEM_QUERY_CHARS = 1600;   // столько знаков сцены сервер кладёт в вектор запроса (embedQuery в rlm-soul.js)
 const LORE_TRIGGERS = [ // полный список (для подписей `[тип]` в списке записей)
-  ['keyword', 'По ключам'], ['semantic', 'По смыслу'], ['vectorized', 'Векторизация'], ['always_on', 'Всегда'],
+  ['keyword', 'По ключам'], ['always_on', 'Всегда'],
   ['range', 'По акту'], ['random', 'Случайно'], ['chain', 'Цепочка'],
 ];
 // Лорбук — знание: триггеры про ТЕМУ. Два «смысловых» режима (оба на векторах, нужен Эмбеддер):
 //   semantic (SW) — по заданной ФРАЗЕ-эталону (точнее); vectorized (ST) — по вектору самой записи (неточнее).
 //   keyword / always_on — не-семантика. Событийные range/random/chain сюда НЕ даём.
 const LORE_KNOWLEDGE_TRIGGERS = [
-  ['keyword', 'По ключам'], ['semantic', 'По смыслу'], ['vectorized', 'Векторизация'], ['always_on', 'Всегда'],
+  ['keyword', 'По ключам'], ['always_on', 'Всегда'],
 ];
 // Режиссёр — события во времени (без keyword/semantic/always).
 const DIRECTOR_TRIGGERS = [
@@ -3216,7 +3420,7 @@ function loreNormEntry(e) {
   return {
     id,
     name: e.name || '',
-    trigger: e.trigger || (e.constant ? 'always_on' : 'keyword'),
+    trigger: LORE_DEAD_TRIGGERS.has(e.trigger) ? 'keyword' : (e.trigger || (e.constant ? 'always_on' : 'keyword')),
     injection: e.injection || 'lore',
     keys: e.keys || '', keys2: e.keys2 || '', logic: e.logic || 'and_any',
     whole: !!e.whole, case: !!e.case, content: e.content || '',
@@ -3230,6 +3434,7 @@ function loreNormEntry(e) {
     order: e.order ?? 100,               // приоритет для бюджета (выше order — раньше влезает)
     ignoreBudget: !!e.ignoreBudget,      // запись всегда влезает мимо бюджета
     // Метка «эту запись написала нода Хроника» + № записи + диапазон сцены (индексы сообщений, ЧИСЛА) — для «Оглавления»/нумерации.
+    src: e.src || '',                    // кто написал запись: '' — человек, 'World'/'Topics' — «Душа»
     mm: !!e.mm, mmNum: Number(e.mmNum) || 0, mmStart: Number(e.mmStart) || 0, mmEnd: Number(e.mmEnd) || 0,
     // Консолидация (уровни Хроники): tier — уровень записи (0 = Сцена, 1 = Арка…); members — id свёрнутых
     // детей; hiddenBy — id сводки, что скрыла эту запись (скрытые в промт/список не идут, формально в лорбуке).
@@ -3261,31 +3466,6 @@ function loreNormEntries(list) {
   });
 }
 const loreLabel = (e) => e.name || (e.keys ? e.keys.split(',')[0].trim() : '') || '(без имени)';
-// Массовая векторизация: все записи «по ключам» переводим на поиск ПО СМЫСЛУ (тип «Векторизация» —
-// эталон = текст самой записи, ключи не нужны). Прежний тип помним, чтобы галочку можно было снять.
-// Векторы считает «Эмбеддер» перед сборкой промта (refreshSemanticLore) — отдельной кнопки не нужно.
-function loreVectorizeAll(el, on) {
-  const list = el._entries || [];
-  let n = 0;
-  list.forEach((e) => {
-    if (on) {
-      if (e.trigger === 'keyword') { e._preVec = e.trigger; e.trigger = 'vectorized'; n++; }
-    } else if (e._preVec) { e.trigger = e._preVec; delete e._preVec; n++; }
-  });
-  loreRenderList(el); loreRenderEditor(el);
-  if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
-  // Без «Эмбеддера» векторные записи не сработают — говорим сразу, а не молчим.
-  const embIn = el.querySelector('.svc-in[data-in="embedder"] .port.in');
-  const hasEmb = !!embIn && connections.some((c) => c.to === embIn && c.from.closest('.node-embedder'));
-  const note = on
-    ? (n ? ('🧬 на смысл переведено записей: ' + n) : 'записей «по ключам» не нашлось')
-    : (n ? ('вернул на ключи записей: ' + n) : 'возвращать нечего');
-  const full = note + (on && !hasEmb ? ' · подключи «Эмбеддер» — без него они не всплывут' : '');
-  const cnt = el.querySelector('.lb-count'); if (cnt) cnt.title = full;   // подсказка прямо в ноде
-  const ch = document.querySelector('.node-chat');
-  if (ch && typeof chatToast === 'function') chatToast(ch, full, (on && !hasEmb) ? 'err' : 'ok', { title: 'ЛОРБУК', icon: '🧬' });
-  return n;
-}
 function loreRenderList(el) {
   const listEl = el.querySelector('.lb-list');
   const filter = (el.querySelector('.lb-filter').value || '').toLowerCase();
@@ -3301,6 +3481,11 @@ function loreRenderList(el) {
       const dot = document.createElement('span'); dot.className = 'lb-dot ' + e.trigger;
       const nm = document.createElement('span'); nm.className = 'lb-litem-n'; nm.textContent = loreLabel(e);
       it.append(dot, nm);
+      if (e.src) {                                            // запись написала «Душа» (World/Topics) — видно значком
+        const sb = document.createElement('span'); sb.className = 'lb-src'; sb.textContent = '🧠';
+        sb.title = 'Написала «Душа» (' + e.src + '). Такие записи модель переписывает сама при обновлении памяти';
+        it.appendChild(sb);
+      }
       if ((e.tier || 0) > 0) {                                // значок уровня консолидации (Арка/Глава/…) у сводок
         const bd = document.createElement('span'); bd.className = 'lb-tier tier-' + chrTier(e.tier).key;
         bd.textContent = chrTier(e.tier).label; it.appendChild(bd);
@@ -3312,7 +3497,7 @@ function loreRenderList(el) {
   el.querySelector('.lb-count').textContent = visible.length + ' записей';
 }
 // Блоки полей, показываемые под конкретный тип триггера.
-const LORE_BLOCKS = { '.lb-kwblock': 'keyword', '.lb-semblock': 'semantic', '.lb-vecblock': 'vectorized', '.lb-rangeblock': 'range', '.lb-randblock': 'random', '.lb-chainblock': 'chain' };
+const LORE_BLOCKS = { '.lb-kwblock': 'keyword', '.lb-rangeblock': 'range', '.lb-randblock': 'random', '.lb-chainblock': 'chain' };
 function loreRenderEditor(el) {
   const ed = el.querySelector('.lb-ed');
   const e = el._entries.find((x) => x.id === el._sel);
@@ -3326,7 +3511,7 @@ function loreRenderEditor(el) {
   set('.lb-prob', e.prob);
   set('.lb-sticky', e.sticky); set('.lb-cooldown', e.cooldown); set('.lb-delay', e.delay); // тайминги (только Режиссёр)
   set('.lb-msgmin', e.msgMin); set('.lb-msgmax', e.msgMax);
-  set('.lb-semtrigger', e.semTrigger); set('.lb-semthr', e.semThreshold); set('.lb-vecthr', e.vecThreshold);
+  set('.lb-sticky', e.sticky > 0 ? e.sticky : '');
   set('.lb-chaindelay', e.chainDelay);
   // Селект «зависит от записи» — остальные записи книги (для chain).
   const dep = ed.querySelector('.lb-depends');
@@ -3336,6 +3521,9 @@ function loreRenderEditor(el) {
     dep.value = e.dependsOn || '';
   }
   Object.entries(LORE_BLOCKS).forEach(([sel, t]) => { const b = ed.querySelector(sel); if (b) b.classList.toggle('hidden', e.trigger !== t); });
+  { const st = ed.querySelector('.lb-stickyf'); if (st) st.classList.toggle('hidden', e.trigger !== 'keyword'); }   // липкость считается только у записей «по ключам»
+  { const k1 = ed.querySelector('.lb-key1');   // есть текст, а ключей нет — подсвечиваем ✨: такая запись немая
+    if (k1) k1.classList.toggle('need', e.trigger === 'keyword' && !!(e.content || '').trim() && !String(e.keys || '').trim()); }
 }
 function loreBindEditor(el) {
   const ed = el.querySelector('.lb-ed');
@@ -3352,13 +3540,15 @@ function loreBindEditor(el) {
     const cd = g('.lb-cooldown'); if (cd) e.cooldown = cd.value;
     const dl = g('.lb-delay'); if (dl) e.delay = dl.value;
     e.msgMin = g('.lb-msgmin').value; e.msgMax = g('.lb-msgmax').value;
-    e.semTrigger = g('.lb-semtrigger').value; e.semThreshold = g('.lb-semthr').value;
-    const vt = g('.lb-vecthr'); if (vt) e.vecThreshold = vt.value;
+    { const sk = g('.lb-sticky'); if (sk) e.sticky = parseInt(sk.value, 10) || 0; }
     const pr = g('.lb-prob'); if (pr) e.prob = pr.value;                 // «Вероятность» только у Режиссёра
     e.dependsOn = g('.lb-depends').value; e.chainDelay = g('.lb-chaindelay').value;
     // Сменили тип — перерисуем редактор (переключить блоки, обновить селект зависимостей).
     if (e.trigger !== prevTrigger) loreRenderEditor(el);
     Object.entries(LORE_BLOCKS).forEach(([sel, t]) => { const b = ed.querySelector(sel); if (b) b.classList.toggle('hidden', e.trigger !== t); });
+  { const st = ed.querySelector('.lb-stickyf'); if (st) st.classList.toggle('hidden', e.trigger !== 'keyword'); }   // липкость считается только у записей «по ключам»
+  { const k1 = ed.querySelector('.lb-key1');   // есть текст, а ключей нет — подсвечиваем ✨: такая запись немая
+    if (k1) k1.classList.toggle('need', e.trigger === 'keyword' && !!(e.content || '').trim() && !String(e.keys || '').trim()); }
     loreRenderList(el);
   };
   ed.querySelectorAll('input, select, textarea, .dd-desc').forEach((c) => {
@@ -3437,14 +3627,14 @@ function fsCloneFor(master) {
     view.classList.add('lore-fs-node', 'soul-view');   // soul-view — маркер вижна Души (node-soul снят, чтобы движок не считал клон живой нодой; CSS вижна цепляется за soul-view)
     view._docs = []; const dh = view.querySelector('.soul-docs'); if (dh) dh.innerHTML = '';
     (master._docs || []).forEach((d) => soulAddDocRow(view, d));   // общие объекты доков
-    ['.soul-batch', '.soul-delta', '.soul-topk', '.soul-maxtok', '.soul-temp', '.soul-prompt-preset'].forEach((c) => { const m = master.querySelector(c), v = view.querySelector(c); if (m && v) v.value = m.value; });
+    ['.soul-batch', '.soul-delta', '.soul-topk', '.soul-maxtok', '.soul-temp', '.soul-reason', '.soul-prompt-preset'].forEach((c) => { const m = master.querySelector(c), v = view.querySelector(c); if (m && v) v.value = m.value; });
     view._master = master;   // движку памяти нужен МАСТЕР (у клона нет проводов → не найти ни слот, ни ряд игрока)
     view._promptMode = master._promptMode || 'single';   // режим набора промтов — общий с мастером
     view._recChat = master._recChat;
     if (typeof soulRecLoadChats === 'function') soulRecLoadChats(view);   // сама выставит папку (игрок сетевой игры / слот / общая) и покажет записи
     if (typeof instrumentTranslateFields === 'function') instrumentTranslateFields(view);
     const sync = () => {
-      ['.soul-batch', '.soul-delta', '.soul-topk', '.soul-maxtok', '.soul-temp', '.soul-prompt-preset'].forEach((c) => { const m = master.querySelector(c), v = view.querySelector(c); if (m && v) m.value = v.value; });
+      ['.soul-batch', '.soul-delta', '.soul-topk', '.soul-maxtok', '.soul-temp', '.soul-reason', '.soul-prompt-preset'].forEach((c) => { const m = master.querySelector(c), v = view.querySelector(c); if (m && v) m.value = v.value; });
       master._promptMode = view._promptMode || master._promptMode || 'single';
       master._docs = view._docs;   // перенять add/delete доков (объекты общие; провода к докам восстановятся по ключу doc:<id> при загрузке)
     };
@@ -3550,7 +3740,6 @@ function buildLoreApp(cfg) {
         <div class="lb-toc-backdrop"></div>
         <div class="lb-side">
           <input class="lb-filter" placeholder="Фильтр записей…" spellcheck="false">
-          <label class="lb-vecall-lbl" title="Перевести ВСЕ записи «по ключам» на поиск по смыслу (векторизация). Снять — вернуть их обратно на ключи. Нужен подключённый «Эмбеддер»."><input type="checkbox" class="lb-vecall"> 🧬 векторизировать все</label>
           <div class="lb-count"></div>
           <div class="lb-list"></div>
           <button class="lb-add" type="button">＋ добавить запись</button>
@@ -3563,7 +3752,7 @@ function buildLoreApp(cfg) {
               <label class="lb-f">Инъекция<select class="lb-injection"><option value="lore">Пассивная (в фон)</option><option value="event">Активная (событие)</option></select></label>
             </div>
             <div class="lb-kwblock">
-              <label class="lb-f">Ключи (через запятую)<input class="lb-keys" spellcheck="false" placeholder="слова-триггеры"></label>
+              <label class="lb-f">Ключи (через запятую)<button class="lb-key1" type="button" title="Пусть модель подберёт ключи по тексту этой записи: имена и редкие слова, без общих">✨</button><input class="lb-keys" spellcheck="false" placeholder="слова-триггеры"></label>
               <label class="lb-f">Вторичные ключи (условие)<input class="lb-keys2" spellcheck="false" placeholder="доп. слова"></label>
               <label class="lb-f">Условие вторичных<select class="lb-logic">
                 <option value="and_any">есть любой вторичный</option>
@@ -3576,15 +3765,7 @@ function buildLoreApp(cfg) {
                 <label class="lb-check"><input type="checkbox" class="lb-case"> Регистр</label>
               </div>
             </div>
-            <div class="lb-semblock hidden">
-              <label class="lb-f">Фраза-эталон смысла<input class="lb-semtrigger" spellcheck="false" placeholder="напр.: разговор о войне"></label>
-              <label class="lb-f" title="Шкала эмбеддера MiniLM: у подходящих записей обычно 0,25–0,40. Выше 0,40 — старая шкала, при загрузке станет 0,30">Порог близости (0–1)<input class="lb-semthr" value="0.30"></label>
-              <div class="lb-hint">SW-стиль: срабатывает, когда смысл сцены близок к твоей фразе-эталону (точнее). ⚠ Нужен «Эмбеддер» (ждёт бэкенд векторов).</div>
-            </div>
-            <div class="lb-vecblock hidden">
-              <label class="lb-f" title="Шкала эмбеддера MiniLM: у подходящих записей обычно 0,25–0,40. Выше 0,40 — старая шкала, при загрузке станет 0,30">Порог близости (0–1)<input class="lb-vecthr" value="0.30"></label>
-              <div class="lb-hint">ST-стиль (неточная векторизация): срабатывает по вектору САМОЙ записи (её текста), без эталонной фразы — ловит по общему смыслу. ⚠ Нужен «Эмбеддер» (ждёт бэкенд векторов).</div>
-            </div>
+              <label class="lb-f lb-stickyf" title="Сколько ходов запись держится в промте после срабатывания. Пусто — как у всей книги (внизу ноды). Окно не продлевается: держится ровно столько и гаснет, потом ловится заново">Держать после срабатывания<input class="lb-sticky" placeholder="как у книги"><span class="lb-unit">ход.</span></label>
             <div class="lb-rangeblock hidden">
               <div class="lb-grid2">
                 <label class="lb-f">С сообщения №<input class="lb-msgmin" value="0"></label>
@@ -3616,8 +3797,12 @@ function buildLoreApp(cfg) {
       <div class="lb-foot">
         <span>Дальность сканирования:</span>
         <input class="lb-scan" value="3"><span class="lb-unit">сообщ.</span>
-        ${cfg.scoped ? `<span title="Записи «По смыслу» и «Векторизация»: из прошедших порог в промт идут только самые близкие к сцене — не больше этого числа. Эмбеддер ставит почти всем записям похожий балл, и без предела срабатывало всё подряд. В сетевой игре число делится между игроками по кругу: каждому — самая близкая к его заявке">По смыслу — не больше:</span>
-        <input class="lb-semk" value="${LORE_SEM_TOPK_DEF}"><span class="lb-unit">зап.</span>` : ''}
+        <span title="Сколько ходов сработавшая запись держится в промте, прежде чем погаснуть. Иначе запись пропадает на следующем же ходу: имя в разговоре звучит редко, и модель забывает то, что минуту назад знала. Окно жёсткое — не продлевается, пока идёт; 0 — выключить">Держать после срабатывания:</span>
+        <input class="lb-sticky" value="${LORE_STICKY_DEF}"><span class="lb-unit">ход.</span>
+        ${cfg.scoped ? `<span title="Сколько токенов лорбук может занять в промте. Пусто = 25% от «Контекст, ток.» ноды «Опции» этого комплитера. Сработавшие записи набираются по «Порядку», пока бюджет не кончится; остальные в промт НЕ попадают — под ответом видно «…+N срезано бюджетом». Запись с галочкой «Всегда в промт» бюджет не считает">Бюджет:</span>
+        <input class="lb-budget" placeholder="авто"><span class="lb-unit">ток.</span>` : ''}
+        <button class="lb-keygen" type="button" title="Проставить ключи записям, у которых их нет (приехали из смыслового режима или из карточки). Модель видит всю книгу сразу, чтобы не выдать двум записям одинаковые слова. Готовые ключи не трогаются">🔑 Ключи</button>
+        <button class="lb-dry" type="button" title="Прогон по истории без модели: сколько раз каждая запись сработала бы на последних ходах. Две-три на сотню сообщений — норма; десятки означают, что ключи слишком общие">🎯 Прогон</button>
         <button class="lb-import" type="button">Импорт JSON</button>
         <button class="lb-export" type="button">Экспорт JSON</button>
       </div>
@@ -3658,22 +3843,53 @@ function buildLoreApp(cfg) {
     lbFile.value = '';
   });
   const filt = el.querySelector('.lb-filter'); stop(filt); filt.addEventListener('input', () => loreRenderList(el));
-  const vecAll = el.querySelector('.lb-vecall');   // 🧬 «векторизировать все» — одним переключателем
-  if (vecAll) {
-    stop(vecAll.closest('label'));
-    vecAll.addEventListener('change', () => loreVectorizeAll(el, vecAll.checked));
-  }
   const addBtn = el.querySelector('.lb-add'); stop(addBtn);
   addBtn.addEventListener('click', (ev) => { ev.stopPropagation(); const e = loreNormEntry({ name: 'New Entry', trigger: el._defTrigger, injection: el._defInjection }); el._entries.push(e); el._sel = e.id; loreRenderList(el); loreRenderEditor(el); redrawWires(); persistCurrentGraph(); });
   const delBtn = el.querySelector('.lb-del'); stop(delBtn);
   delBtn.addEventListener('click', (ev) => { ev.stopPropagation(); const di = el._entries.findIndex((x) => x.id === el._sel); if (di >= 0) el._entries.splice(di, 1); el._sel = el._entries[0] && el._entries[0].id; loreRenderList(el); loreRenderEditor(el); redrawWires(); persistCurrentGraph(); });   // in-place splice — общий массив не отвязываем
   stop(el.querySelector('.lb-scan'));
-  { const sk = el.querySelector('.lb-semk'); if (sk) { stop(sk); sk.addEventListener('change', () => persistCurrentGraph()); } }
+  { const sk = el.querySelector('.lb-sticky'); if (sk) { stop(sk); sk.addEventListener('change', () => persistCurrentGraph()); } }
+  { const k1 = el.querySelector('.lb-key1');
+    if (k1) { stop(k1);
+      k1.addEventListener('click', async (ev) => { ev.stopPropagation();
+        const e = (el._entries || []).find((x) => x.id === el._sel); if (!e) return;
+        const chatNode = document.querySelector('.node-chat, .node-telegram, .node-netgame');
+        const was = k1.textContent; k1.textContent = '…'; k1.disabled = true;
+        try { await loreGenKeysOne(el, e, chatNode); } catch (err) { console.error(err); }
+        k1.textContent = was; k1.disabled = false;
+      });
+    }
+  }
+  { const bg = el.querySelector('.lb-budget'); if (bg) { stop(bg); bg.addEventListener('change', () => persistCurrentGraph()); } }
   // Мобайл: список записей (оглавление) — выезжающая слева шторка; значок ☰ справа её открывает/прячет,
   // тап по фону-затемнению закрывает. На десктопе кнопка скрыта (CSS), список стоит колонкой как раньше.
   const lbApp = el.querySelector('.lb-app');
   const tocToggle = el.querySelector('.lb-toc-toggle'); if (tocToggle) { stop(tocToggle); tocToggle.addEventListener('click', (ev) => { ev.stopPropagation(); lbApp.classList.toggle('lb-toc-open'); }); }
   const tocBack = el.querySelector('.lb-toc-backdrop'); if (tocBack) { stop(tocBack); tocBack.addEventListener('click', (ev) => { ev.stopPropagation(); lbApp.classList.remove('lb-toc-open'); }); }
+  { const kb = el.querySelector('.lb-keygen');
+    if (kb) { stop(kb);
+      kb.addEventListener('click', async (ev) => { ev.stopPropagation();
+        const chatNode = (typeof chatNodeForLore === 'function') ? chatNodeForLore(el) : document.querySelector('.node-chat, .node-telegram, .node-netgame');
+        const was = kb.textContent; kb.textContent = '…'; kb.disabled = true;
+        try { await loreGenKeys(el, chatNode); } catch (e) { console.error(e); }
+        kb.textContent = was; kb.disabled = false;
+      });
+    }
+  }
+  { const db = el.querySelector('.lb-dry');
+    if (db) { stop(db);
+      db.addEventListener('click', (ev) => { ev.stopPropagation();
+        const chatNode = (typeof chatNodeForLore === 'function') ? chatNodeForLore(el) : document.querySelector('.node-chat, .node-telegram, .node-netgame');
+        const r = loreDryRun(el, chatNode);
+        const top = r.rows.slice(0, 12).map((x) => x.name + ': ' + x.hits + (x.always ? ' (всегда)' : '')).join(String.fromCharCode(10));
+        const cnt = el.querySelector('.lb-count');
+        const head = 'Прогон по ' + r.turns + ' последним сообщениям (сработало бы раз):' + String.fromCharCode(10);
+        if (cnt) cnt.title = head + (top || 'ни одна запись не сработала');
+        if (typeof chatToast === 'function' && chatNode) chatToast(chatNode, head + (top || 'ни одна запись не сработала'));
+        else alert(head + top);
+      });
+    }
+  }
   const impBtn = el.querySelector('.lb-import'); stop(impBtn); impBtn.addEventListener('click', (ev) => { ev.stopPropagation(); lbFile.click(); });
   const expBtn = el.querySelector('.lb-export'); stop(expBtn); expBtn.addEventListener('click', (ev) => { ev.stopPropagation(); loreExport(el); });
   // Глазок в шапке — как у Чата: развернуть на весь экран.
@@ -3754,25 +3970,25 @@ const SOUL_DOCS = [
     prompt: 'You are {{char}}. Write a short, secret, internal diary entry reflecting on your recent conversation with {{user}}. You are NOT roleplaying and NOT talking to {{user}} — you are alone, recording your private thoughts.\n\n- Write entirely in the FIRST PERSON ("I", "me", "my"). Refer to {{user}} in the third person or by name.\n- Plain prose ONLY: no asterisks, no actions, no dialogue, no quotation marks, no headers.\n- Strictly 2–4 sentences, short and impactful.\n- Focus on your INTERNAL EMOTIONS: how did {{user}} make you feel — annoyed, happy, scared, curious?\n\nOutput only the diary text, no explanations.' },
   { name: 'Status', kind: 'tracker', desc: 'сейчас: сцена, кто где, вид, состояние, предметы (наст. время)',
     lead: 'The scene as it stands RIGHT NOW — place, positions, clothing, condition, what is at hand. This is the present moment: trust it over anything older in the log and stay consistent with it.',
-    prompt: 'Update the "here and now" snapshot by merging the previous version with the new messages. Write in the PRESENT tense, densely, no repetition, up to ~150 words. Keep only the current state — do not carry history. Overwrite the whole file.\n\nTrack:\n- Where the scene takes place; exact positioning and poses of the characters.\n- Time of day, weather, lighting, atmosphere, smells.\n- Who is present, what they wear, visible injuries/fatigue/condition.\n- What they carry (key items, inventory).\n- Each character\'s immediate intentions; any dangers, time limits, or unresolved hooks in the scene.' },
-  { name: 'World', kind: 'tracker', squeeze: true, desc: 'факты о мире вокруг: места, лор, NPC, правила, тайны',
+    prompt: 'Update the "here and now" snapshot by merging the previous version with the new messages. Return ONLY strict JSON, no text outside it: {"location": string, "time": string, "present": [{"name": string, "pose": string, "state": string}], "departed": [string], "atmosphere": string}\n\n- "location": where the scene takes place right now, short.\n- "time": time of day, weather, lighting.\n- "present": every character in the scene EXCEPT {{user}} (who is always there). "name" is the bare name and nothing else; "pose" is the body (standing/sitting/kneeling, where in relation to others, what is in their hands); "state" is condition, mood, clothing, intent. Keep each under 25 words.\n- "departed": names of those who just left the scene.\n- "atmosphere": one sentence (smells, sounds, light).\nPresent tense. Current state only, no history: the whole snapshot is rewritten every time.' },
+  { name: 'World', kind: 'lore', desc: 'мир записями в «Лорбук чата»: места, фракции, предметы, правила, NPC',
     lead: 'Established facts about the world and the people in it — true right now. The world may keep changing, but openly, through what happens in the scene; never quietly undo what is written here. What is not here has not been established — do not present invented details as settled fact.',
-    prompt: 'Maintain facts about the world around the scene by merging the previous version with the new. Hard facts only, third person, no fluff, up to ~200 words. Resolve contradictions in favor of the new; remove outdated info. Overwrite the whole file.\n\nInclude:\n- Important places and settings, significant objects.\n- Secondary characters (NPCs): who they are, their role, their attitude.\n- World rules/laws, magic/technology.\n- Revealed secrets, backstories, agreements.\n\nIf nothing new was discovered, keep the established lore.' },
-  { name: 'Psyche', kind: 'tracker', desc: 'внутренняя психология {{char}} и отношение к {{user}}',
+    prompt: 'Maintain the world around the scene as LOREBOOK ENTRIES — one entry per subject: a place, a faction, an object, a rule of this world, a secondary character. Output ONLY blocks in this exact form:\n\nENTRY: <subject name, 1-4 words>\nkeys: <2-5 distinctive words that would be spoken in a scene where this matters>\n<hard facts about it, third person, under 60 words>\n\n- One subject per entry; never mix two subjects in one.\n- To update something already known, reuse its EXACT ENTRY name — that entry is overwritten.\n- keys: proper names and rare words only. Never generic ones (man, woman, sword, house, city, magic).\n- Only what the scene established. No guesses, no inner feelings, nothing about the player.' },
+  { name: 'Psyche', kind: 'tracker', squeeze: true, desc: 'внутренняя психология {{char}} и отношение к {{user}}',
     lead: "{{char}}'s inner state and true feelings toward {{user}} — subtext, not speech. Let it shape tone, reactions and what {{char}} hides; never state it outright and never have {{char}} narrate their own psychology.",
-    prompt: 'Track {{char}}\'s inner psychology and attitude toward {{user}}, updating in place. Work as an analyst of subtext, not a recap of lines. Overwrite the whole file, up to ~200 words. Update subtly — from hints, not explicit statements.\n\nKeep:\n- 3–5 core, unbreakable beliefs and fatal flaws of {{char}}.\n- Current dominant emotion and its intensity (1–5), inner tension/dilemma.\n- Hidden goal in this conversation (subtext: "to test whether he actually cares", "to mask vulnerability with humor").\n- Trust level toward {{user}}: Distrustful / Wary / Neutral / Developing Trust / Deeply Bound / Unstable.\n- What {{char}} hides or secretly hopes to get from {{user}}.\n\nIf an emotion stops surfacing for several turns, gradually soften it. Resolve contradictions in favor of new events.' },
-  { name: 'Topics', kind: 'topic', desc: 'по файлу на субъект (человек/место/событие), плотно, RAG', enabled: false,
+    prompt: 'Track {{char}}\'s inner psychology and attitude toward {{user}}, updating in place. Work as an analyst of subtext, not a recap of lines. Overwrite the whole file, up to ~300 words. Update subtly — from hints, not explicit statements.\n\nKeep:\n- 3–5 core, unbreakable beliefs and fatal flaws of {{char}}.\n- Current dominant emotion and its intensity (1–5), inner tension/dilemma.\n- Hidden goal in this conversation (subtext: "to test whether he actually cares", "to mask vulnerability with humor").\n- Trust level toward {{user}}: Distrustful / Wary / Neutral / Developing Trust / Deeply Bound / Unstable.\n- What {{char}} hides or secretly hopes to get from {{user}}.\n\nIf an emotion stops surfacing for several turns, gradually soften it. Resolve contradictions in favor of new events.' },
+  { name: 'Topics', kind: 'lore', desc: 'субъекты записями в «Лорбук чата»: люди, места, события, отношения', enabled: false,
     lead: 'Long-term facts about the people, places and events this scene touches. Established history — draw on it when relevant, but do not re-announce it as news.',
-    prompt: 'Sort durable facts into topic-subjects — ONE file per topic (a person, place, item, event, or relationship). When a fact worth remembering long-term surfaces, create a new topic file or update an existing one.\n\n- Start with a descriptive topic title.\n- Write densely, third person, STRICTLY under 300 words: every sentence is a hard fact, event, or key emotional milestone. No fluff.\n- If new info contradicts the old, overwrite the outdated part — new truth wins.\n- Ignore OOC lines (out-of-scene meta talk).' },
+    prompt: 'Sort durable facts into LOREBOOK ENTRIES — one entry per subject: a person, a place, an item, an event, or a relationship between two people. Output ONLY blocks in this exact form:\n\nENTRY: <subject name, 1-4 words>\nkeys: <2-5 distinctive words that would be spoken in a scene where this matters>\n<what is established about it, third person, densely, under 80 words>\n\n- Each main character and each important relationship deserves its own entry.\n- To add to a subject already known, reuse its EXACT ENTRY name — that entry is overwritten, so repeat what still holds.\n- keys: proper names and rare words only. Never generic ones.\n- Durable facts only: what will still matter in ten scenes. No scene-by-scene retelling.' },
 ];
 // Набор промтов доков ПОД НЕСКОЛЬКО ПЕРСОНАЖЕЙ (кнопка-переключатель на ноде «Душа» заполняет ВСЕ доки).
 // Пишем обобщённо: промт сам подхватывает столько персонажей, сколько описано в карточке/сцене (по имени доку из SOUL_DOCS).
 const SOUL_PROMPTS_MULTI = {
   'Diary': 'You are an unseen chronicler of this scene. Write a short, secret account of what just happened between the characters — from an outside observer\'s view, not as any one of them.\n\n- Third person. Name the characters as they appear in the conversation.\n- Plain prose ONLY: no asterisks, no dialogue, no quotation marks, no headers.\n- Strictly 2–4 sentences, short and impactful.\n- Focus on the EMOTIONAL SHIFTS and the dynamics BETWEEN the characters: tension, closeness, conflict, who reacted to whom.\n\nOutput only the entry text, no explanations.',
-  'Status': 'Update the "here and now" snapshot by merging the previous version with the new messages. Present tense, dense, no repetition, up to ~180 words. Keep only the current state — do not carry history. Overwrite the whole file.\n\nTrack:\n- Where the scene takes place; exact positioning and poses of EACH character present.\n- Time of day, weather, lighting, atmosphere, smells.\n- For EVERY character in the scene: clothing, visible injuries/fatigue/condition, what they carry.\n- Each character\'s immediate intentions; any dangers, time limits, or unresolved hooks.\n\nList characters by name — never merge them together.',
-  'World': 'Maintain facts about the world around the scene by merging the previous version with the new. Hard facts only, third person, no fluff, up to ~200 words. Resolve contradictions in favor of the new; remove outdated info. Overwrite the whole file.\n\nInclude:\n- Important places and settings, significant objects.\n- Secondary characters (NPCs) beyond the main cast: who they are, role, attitude.\n- World rules/laws, magic/technology.\n- Shared history and relationships BETWEEN the main characters (how they know each other, alliances, rivalries, debts).\n- Revealed secrets, backstories, agreements.\n\nIf nothing new was discovered, keep the established lore.',
-  'Psyche': 'Track the inner psychology of EACH main character in the scene and their attitude toward one another and toward {{user}}. Work as an analyst of subtext, not a recap of lines. Overwrite the whole file, up to ~250 words. Update subtly — from hints, not explicit statements.\n\nFor EACH character, under their NAME as a heading, keep:\n- 2–3 core, unbreakable beliefs and fatal flaws.\n- Current dominant emotion and intensity (1–5), inner tension/dilemma.\n- Hidden goal right now (subtext).\n- Attitude and trust toward the OTHER characters and toward {{user}}: Distrustful / Wary / Neutral / Developing / Bonded / Unstable.\n- What they hide or secretly hope to get.\n\nIf a character stops appearing for several turns, keep their last state but note they are absent. Resolve contradictions in favor of new events.',
-  'Topics': 'Sort durable facts into topic-subjects — ONE file per topic (a person, place, item, event, or relationship). Each main character, and each important relationship BETWEEN characters, deserves its own file. When a fact worth remembering long-term surfaces, create a new topic file or update an existing one.\n\n- Start with a descriptive topic title.\n- Write densely, third person, STRICTLY under 300 words: every sentence is a hard fact, event, or key emotional milestone. No fluff.\n- If new info contradicts the old, overwrite the outdated part — new truth wins.\n- Ignore OOC lines (out-of-scene meta talk).',
+  'Status': 'Update the "here and now" snapshot by merging the previous version with the new messages. Return ONLY strict JSON, no text outside it: {"location": string, "time": string, "present": [{"name": string, "pose": string, "state": string}], "departed": [string], "atmosphere": string}\n\n- "location": where the scene takes place right now, short.\n- "time": time of day, weather, lighting.\n- "present": every character in the scene EXCEPT the players (who are always there). "name" is the bare name and nothing else; "pose" is the body (standing/sitting/kneeling, where in relation to others, what is in their hands); "state" is condition, mood, clothing, intent. Keep each under 25 words.\n- "departed": names of those who just left the scene.\n- "atmosphere": one sentence (smells, sounds, light).\nPresent tense. Current state only, no history: the whole snapshot is rewritten every time.',
+  'World': 'Maintain the world around the scene as LOREBOOK ENTRIES — one entry per subject: a place, a faction, an object, a rule of this world, a secondary character. Output ONLY blocks in this exact form:\n\nENTRY: <subject name, 1-4 words>\nkeys: <2-5 distinctive words that would be spoken in a scene where this matters>\n<hard facts about it, third person, under 60 words>\n\n- One subject per entry; never mix two subjects in one.\n- To update something already known, reuse its EXACT ENTRY name — that entry is overwritten.\n- keys: proper names and rare words only. Never generic ones (man, woman, sword, house, city, magic).\n- Only what the scene established. No guesses, no inner feelings, nothing about the player.',
+  'Psyche': 'Track the inner psychology of EACH main character in the scene and their attitude toward one another and toward {{user}}. Work as an analyst of subtext, not a recap of lines. Overwrite the whole file, up to ~400 words. Update subtly — from hints, not explicit statements.\n\nFor EACH character, under their NAME as a heading, keep:\n- 2–3 core, unbreakable beliefs and fatal flaws.\n- Current dominant emotion and intensity (1–5), inner tension/dilemma.\n- Hidden goal right now (subtext).\n- Attitude and trust toward the OTHER characters and toward {{user}}: Distrustful / Wary / Neutral / Developing / Bonded / Unstable.\n- What they hide or secretly hope to get.\n\nIf a character stops appearing for several turns, keep their last state but note they are absent. Resolve contradictions in favor of new events.',
+  'Topics': 'Sort durable facts into LOREBOOK ENTRIES — one entry per subject: a person, a place, an item, an event, or a relationship between two people. Output ONLY blocks in this exact form:\n\nENTRY: <subject name, 1-4 words>\nkeys: <2-5 distinctive words that would be spoken in a scene where this matters>\n<what is established about it, third person, densely, under 80 words>\n\n- Each main character and each important relationship deserves its own entry.\n- To add to a subject already known, reuse its EXACT ENTRY name — that entry is overwritten, so repeat what still holds.\n- keys: proper names and rare words only. Never generic ones.\n- Durable facts only: what will still matter in ten scenes. No scene-by-scene retelling.',
 };
 // Наборы доков ПОД СЕТЕВУЮ ИГРУ (два новых пресета в шапке «Доки памяти»). В отличие от «один/несколько»,
 // эти наборы задают ещё и СОСТАВ: чего нет — создаётся, что не из набора — выключается (не удаляется).
@@ -3987,6 +4203,7 @@ function buildSoulNode() {
           <label class="soul-opt" title="Сколько тем-файлов подтягивать по смыслу в промт (нужен «Эмбеддер»)">тем<input class="soul-topk" value="3"></label>
           <label class="soul-opt" title="Лимит на САМУ запись — сколько токенов ИИ пишет в каждый док. На размышления модели запас добавляется сверху автоматически (мысли в документ не попадают)">лимит, ток.<input class="soul-maxtok" value="400"></label>
           <label class="soul-opt" title="Температура при записи памяти: 0 — строго/точно, выше — свободнее. Доки памяти — факты, им нужна стабильность: 0.2–0.3">темп.<input class="soul-temp" value="0.3"></label>
+          <label class="soul-opt soul-reason-lbl" title="Скрытое размышление модели при записи памяти. «Авто» — как решит сама модель (так было всегда); «Выкл» — запретить (дешевле и быстрее); остальное — задать длину. Запас токенов на мысли добавляется сверху автоматически">рассуждение<span class="soul-reason-mount"></span></label>
         </div>
         <div class="soul-card-note">🪪 Карточка (описание · сценарий · примеры диалогов) подаётся в доки «Psyche» и «Diary» как отправные данные.</div>
         <button class="soul-refresh" type="button">⟳ Обновить память сейчас</button>
@@ -3997,6 +4214,18 @@ function buildSoulNode() {
       </div>
       <div class="soul-ins"></div>
     </div>`;
+  { // Рассуждение при записи памяти — как у Критика. «Авто» = ничего не шлём (прежнее поведение).
+    const dd = describedDropdown([
+      { value: 'off',    label: 'Выкл',     desc: 'Без размышления: дешевле и быстрее, запись сразу. По умолчанию.' },
+      { value: 'auto',   label: 'Авто',     desc: 'Как решит сама модель — так работало до 2026-09-21.' },
+      { value: 'low',    label: 'Короткое', desc: 'Думает чуть-чуть перед записью.' },
+      { value: 'medium', label: 'Среднее',  desc: 'Думает побольше — дороже и медленнее.' },
+      { value: 'high',   label: 'Длинное',  desc: 'Максимум размышления — для сложной психологии.' },
+    ], 'off', () => {});
+    dd.classList.add('soul-reason');
+    const mount = el.querySelector('.soul-reason-mount'); if (mount) mount.replaceWith(dd);
+    dd.addEventListener('change', () => { try { persistCurrentGraph(); } catch (_) {} });
+  }
   el.querySelectorAll('.soul-batch, .soul-delta, .soul-topk, .soul-maxtok, .soul-temp').forEach((i) => i.addEventListener('pointerdown', (e) => e.stopPropagation()));
   const soulRefresh = el.querySelector('.soul-refresh');
   soulRefresh.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -5084,10 +5313,10 @@ function loreSemanticCandidates() {
     const scope = ((loreEl.querySelector('.node-head .label') || {}).textContent || 'Лорбук').trim();
     const model = embedderModelOf(loreEl);
     (loreEl._entries || []).forEach((e) => {
-      if (e.trigger === 'semantic' && (e.semTrigger || '').trim())
-        out.push({ name: loreLabel(e), scope, phrase: e.semTrigger.trim(), content: e.content || '', threshold: semThrScale(e.semThreshold), kind: 'фраза-эталон', hasEmb, model });
-      else if (e.trigger === 'vectorized' && (e.content || '').trim())
-        out.push({ name: loreLabel(e), scope, phrase: e.content.trim(), content: e.content || '', threshold: semThrScale(e.vecThreshold), kind: 'текст записи', hasEmb, model });
+      // Смысловой поиск в читалке идёт по ТЕКСТУ записи: он показывает человеку похожее, а не решает,
+      // что уйдёт в промт (отбор по смыслу вырезан 2026-09-21). Порога тут нет — сортируем по баллу.
+      if ((e.content || '').trim())
+        out.push({ name: loreLabel(e), scope, phrase: e.content.trim(), content: e.content || '', threshold: 0, kind: 'текст записи', hasEmb, model });
     });
   });
   return out;
@@ -5251,7 +5480,7 @@ async function refreshSoulMemory(chatNode) {
       const model = embedderModelOf(soul);
       const [all, diary, topics] = await Promise.all([
         rlmApi('/api/rlm/soul/all', { chat }),
-        rlmApi('/api/rlm/soul/diary', { chat, query, k, model }),
+        rlmApi('/api/rlm/soul/diary', { chat, k, model }),   // БЕЗ query: дневник идёт хвостом — последние k заметок, а не «похожие по смыслу» (отбор по смыслу вырезан 2026-09-21)
         rlmApi('/api/rlm/soul/topics', { chat, query, k, model }),
       ]);
       // Собираем ЗАПИСИ по одной: у каждой — свой сопроводительный промт и своё место в промте
@@ -5267,9 +5496,19 @@ async function refreshSoulMemory(chatNode) {
       // Раньше память собиралась из файлов папки, а флаг дока не смотрелся: выключил Psyche — раздел Psyche оставался.
       const push = (name, doc, text) => { if (!(text || '').trim()) return; if (doc && !doc.enabled) return; parts.push({ name, text: text.trim(), lead: String((doc && doc.lead) || '').trim(), into: (inMu && doc && doc.into) || 'memory' }); };
       ((all && all.docs) || []).filter((d) => d.group === 'tracker' && (d.text || '').trim())
-        .forEach((d) => { const nm = d.name.replace(/\.md$/, ''); push(nm, docByName(nm), d.text); });
-      if (diary && (diary.memory || '').trim()) push('Diary (semantic)', docByKind('diary'), diary.memory);
-      if (topics && (topics.memory || '').trim()) push('Topics (semantic)', docByKind('topic'), topics.memory);
+        .forEach((d) => { const nm = d.name.replace(/\.md$/, ''); const dd = docByName(nm);
+          if (dd && dd.kind === 'lore') return;        // World/Topics живут записями в лорбуке — в «Память» их не дублируем
+          push(nm, dd, d.text); });
+      // Состав сцены для переклички лорбука берём с диска на каждом чтении памяти: так он свежий и
+      // после перезагрузки страницы, и в старых чатах, где «Status» ещё написан прозой (тогда в строку
+      // ляжет весь текст — имена всё равно найдутся, просто вместе с ушедшими).
+      try {
+        const st = ((all && all.docs) || []).find((d) => String(d.name || '').replace(/\.md$/i, '').toLowerCase() === 'status');
+        const parsed = st ? statusParse(st.text) : null;
+        soul._scene = parsed ? parsed.obj : null; soul._sceneLine = parsed ? statusSceneLine(parsed) : ''; soul._sceneKind = parsed ? parsed.kind : '';
+      } catch (_) { /* перекличка — надстройка; её сбой не должен ронять сборку памяти */ }
+      if (diary && (diary.memory || '').trim()) push('Diary', docByKind('diary'), diary.memory);
+      if (topics && (topics.memory || '').trim()) push('Topics', docByKind('topic'), topics.memory);
       soul._memParts = parts;
       const memBlocks = parts.filter((p) => p.into === 'memory').map((p) => `## ${p.name}\n${p.lead ? p.lead + '\n' : ''}${p.text}`);
       soul._memory = memBlocks.length ? ('[CHARACTER MEMORY]\n' + memBlocks.join('\n\n')) : '';
@@ -5394,7 +5633,7 @@ function characterBaseline(chatNode) {
     });
     if (chunks.length) parts.push((name ? ('## ' + name + '\n') : '') + chunks.join('\n'));
   });
-  return parts.join('\n\n').slice(0, 6000);                          // ~потолок, чтобы память не съедала весь лимит
+  return parts.join('\n\n');   // без обрезки (было 6000 знаков): человек сам знает, что кладёт в карточку
 }
 // Отправные данные ИГРОКА для его Души: нода «Персона», подключённая к ряду мультипользователя. Первая запись
 // (Inventory/Standing) должна рождаться из персоны — что на нём надето и как его видят, а не с чистого листа.
@@ -5411,7 +5650,7 @@ function soulPersonaBaseline(soul) {
   if (!desc || (typeof isPlaceholder === 'function' && isPlaceholder(desc))) return '';
   return 'PLAYER SHEET — who this character is and how they appear to others (the baseline). Build the memory FROM this: '
     + 'what they wear and carry starts here, and everyone in the world sees them as described.\n'
-    + (name ? name + ': ' : '') + desc.slice(0, 1500) + '\n\n';
+    + (name ? name + ': ' : '') + desc + '\n\n';   // без обрезки (было 1500 знаков): человек сам знает, что кладёт в Персону
 }
 // ИИ пишет/обновляет доки на диск: дневник (append), трекеры (перезапись), темы (Archivist).
 // Ручное обновление памяти Души — кнопки «⟳ Обновить память сейчас» и ⟳ у отдельного дока.
@@ -5596,6 +5835,13 @@ async function updateMemory(chatNode, only) {
           user = `${pcard}${side}${dcard}CURRENT VERSION of "${d.name}":\n${((prev && prev.text) || '').trim() || '(empty)'}\n\nRECENT CONVERSATION:\n${convo}\n\nOutput ONLY the full updated version of "${d.name}" (no preface).`;
         } else if (d.kind === 'diary') {
           user = `${pcard}${side}${dcard}RECENT CONVERSATION:\n${convo}\n\nWrite the diary entry now.`;
+        } else if (d.kind === 'lore') {
+          // Док-лорбук: показываем модели, что в «Лорбуке чата» уже есть — иначе она заведёт вторую
+          // запись про того же человека вместо того, чтобы дополнить прежнюю (сущность = одна запись).
+          const loreEl = (typeof loreNodeByScope === 'function') ? loreNodeByScope('chat') : null;
+          const have = ((loreEl && loreEl._entries) || []).filter((e) => !e.mm && !e.npc && !e.guest && (e.content || '').trim())
+            .slice(-40).map((e) => `ENTRY: ${e.name}\nkeys: ${e.keys || ''}\n${String(e.content).trim().slice(0, 400)}`).join('\n\n');
+          user = `${pcard}${side}EXISTING ENTRIES (reuse a name exactly to overwrite that entry):\n${have || '(none yet)'}\n\nRECENT CONVERSATION:\n${convo}\n\nWrite the entries now.`;
         } else {
           // Формат «файл на тему»: ПРЕЖДЕ чем решить — дополнить существующую тему или завести новую — писарь
           // читает три темы, ближайшие к сцене (тот же смысловой поиск, что на чтении). Без этого он не видел
@@ -5609,15 +5855,21 @@ async function updateMemory(chatNode, only) {
           user = `${pcard}${side}${dcard}${shelf}RECENT CONVERSATION:\n${convo}\n\nFor EACH topic you write, start it with a line "FILE: <short_snake_case>.md" (the subject), then the topic content. Several topics = several FILE blocks. Output only FILE blocks, nothing else.`;
         }
         const messages = [{ role: 'system', content: instr }, { role: 'user', content: substituteMacros(user, mctx) }];
-        const r = await rlmApi('/api/rlm/generate', { _ctxKey: '.soul-maxtok@.node-soul', _ctxNode: soul, base: api.base, key: api.key, model: api.model, messages, params: { max_tokens: maxtok + tokVal('soul.think', MEM_THINK_BUDGET_DEF), temperature: temp } });   // лимит записи + запас на размышления (иначе мысли съедают лимит и запись обрывается)
+        const r = await rlmApi('/api/rlm/generate', { _ctxKey: '.soul-maxtok@.node-soul', _ctxNode: soul, base: api.base, key: api.key, model: api.model, messages, params: Object.assign({ max_tokens: maxtok + tokVal('soul.think', MEM_THINK_BUDGET_DEF), temperature: temp }, soulReasonParams(soul)) });   // лимит записи + запас на размышления (иначе мысли съедают лимит и запись обрывается)
         const text = memCleanReply(r);
         if (chatNode._procAbort) break;   // ✕ нажали, пока модель писала этот док: ответ пришёл — не записываем (раньше отмена проверялась только ДО запроса, и док всё равно ложился на диск)
         if (!text) { setNote(soul, `«${d.name}»: пусто/ошибка — ${(r && r.error) || '—'}`); continue; }
         if (d.kind === 'diary') await rlmApi('/api/rlm/soul/append', { chat, text });
         else if (d.kind === 'tracker') {
-          const w = await rlmApi('/api/rlm/soul/tracker', { chat, name: d.name, text });
+          const text2 = statusIsSceneDoc(d) ? soulTakeScene(soul, api, text) : text;   // «Status» — разбор сцены, как в пачке
+          const w = await rlmApi('/api/rlm/soul/tracker', { chat, name: d.name, text: text2 });
           if (w && w.ok === false && w.skipped) memKeepNote(soul, d.name, w, chat);   // прежняя версия сохранена — говорим почему
           else if (w && w.ok !== false) { memKeepClear(soul, d.name, chat); await soulSqueezeDoc(chatNode, soul, chat, d, text, mctx); }   // World длиннее лимита — ужать
+        }
+        else if (d.kind === 'lore') {
+          const r2 = soulWriteLoreEntries(soul, d.name, text);
+          if (!r2) setNote(soul, `«${d.name}»: нет ноды «Лорбук чата» — записям некуда лечь`);
+          else setNote(soul, `«${d.name}»: записей ${r2.added ? '+' + r2.added : ''}${r2.added && r2.updated ? ', ' : ''}${r2.updated ? 'обновлено ' + r2.updated : ''}`.trim());
         }
         else {
           // Ответ режем по КАЖДОЙ строке «FILE: имя.md» — каждый кусок в свой файл. Раньше бралась только
@@ -5665,7 +5917,7 @@ function ngWorldSheet(el) {
   if (!parts.length) return '';
   return 'WORLD SHEET — the setting this game already runs on, from the game master card. Everyone in the game has it '
     + 'already: NEVER copy any of it into your documents. Write only what play has added, changed, or contradicted.' + BSN
-    + parts.join(BSN).slice(0, 2000) + BSN + BSN;
+    + parts.join(BSN) + BSN + BSN;   // без обрезки: 2000 знаков отрезали сценарий большой карточки (Ептенбург — описание 5160)
 }
 // Боковые блоки для движка памяти: СЦЕНА (пишет Душа мира — обновляется первой) и ЧИСЛА (нода «Состояние»).
 // Оба — только КОНТЕКСТ: их нельзя переписывать в свои доки, иначе рождаются дубли (сцена в Standing, золото в Inventory).
@@ -5693,7 +5945,232 @@ function soulDocWordLimit(d) {
   const m = String((d && d.prompt) || '').match(/\b(?:up to|under)\s*~?\s*(\d{2,4})\s*words\b/i);
   return m ? parseInt(m[1], 10) : 0;
 }
+// Док сцены — это «Status» (имя дока, набор один на все пресеты). Разбираем его особо: из него
+// лорбук узнаёт, кто сейчас в комнате, — перекличка. См. plan-lorebook-vector.md, 2026-09-21.
+function statusIsSceneDoc(d) { return String((d && d.name) || '').trim().toLowerCase() === 'status'; }
+// Разобрать ответ модели по доку «Status»: положить сцену в ноду «Душа», подсветить формат в ноде
+// «API» и вернуть текст, который пойдёт в док (разобранный вид или исходный, если разбор не удался).
+function soulTakeScene(soul, api, raw) {
+  const parsed = statusParse(raw);
+  try {
+    if (soul) { soul._scene = parsed.obj || null; soul._sceneLine = statusSceneLine(parsed); soul._sceneKind = parsed.kind; }
+    const apiEl = api && (api.apiEl || api.node || api.el); if (apiEl) apiMarkFormat(apiEl, parsed.kind);
+  } catch (_) { /* подсветка и сцена — удобства, запись важнее */ }
+  return parsed.text || String(raw || '');
+}
+// ── Ключи существующим записям: генератор на всю книгу + прогон по истории ─────────────────────
+// Записи, приехавшие из смыслового режима (и из карточек SW), ключей не имеют — без них они немы.
+// Просим модель дать ключи ПАЧКОЙ, видя всю книгу: так два досье не получат одинаковые слова.
+// Ключи = имена собственные и редкие слова; общие («man», «sword») запись дёргают каждый ход.
+function loreEntriesWithoutKeys(loreEl) {
+  return (loreEl._entries || []).filter((e) => e && e.trigger === 'keyword' && (e.content || '').trim() && !String(e.keys || '').trim() && !e.hiddenBy);
+}
+// Ключи для ОДНОЙ записи (кнопка ✨ в редакторе): тот же промт, что и для всей книги, но об одном
+// субъекте. Нажали руками — значит переписываем, даже если ключи уже стояли.
+async function loreGenKeysOne(loreEl, entry, chatNode) {
+  if (!entry || !(entry.content || '').trim()) return 0;
+  const api = (typeof chatApi === 'function' && chatNode) ? chatApi(chatNode) : null;
+  if (!api || !api.model) { if (typeof chatToast === 'function' && chatNode) chatToast(chatNode, 'нет ноды «API» с моделью — ключи генерировать нечем', 'err'); return 0; }
+  const sys = 'You assign lookup keys to a lorebook entry. A key is a word that would actually be SPOKEN in a scene '
+    + 'where this entry matters: a proper name, a nickname, a place name, a rare distinctive word. '
+    + 'Never generic words (man, woman, girl, sword, house, city, road, magic, love, fear). '
+    + 'Answer with 2 to 5 keys, comma separated, and nothing else.';
+  const user = 'ENTRY: ' + (entry.name || '') + String.fromCharCode(10) + String(entry.content).trim().slice(0, 900);
+  const r = await rlmApi('/api/rlm/generate', { _ctxKey: 'lore.keys', base: api.base, key: api.key, model: api.model,
+    messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
+    params: { max_tokens: 120, temperature: 0.2, reasoning: { enabled: false } } });
+  const line = String((r && (r.text || r.content)) || '').split(String.fromCharCode(10)).map((x) => x.trim()).filter(Boolean).pop() || '';
+  const keys = line.replace(/^[^:]*:\s*/, '').replace(/[`*]/g, '').trim();
+  if (!keys) return 0;
+  entry.keys = keys; entry.trigger = 'keyword';
+  loreRenderList(loreEl); loreRenderEditor(loreEl); persistCurrentGraph();
+  return 1;
+}
+async function loreGenKeys(loreEl, chatNode) {
+  const need = loreEntriesWithoutKeys(loreEl);
+  const say = (t) => { const c = loreEl.querySelector('.lb-count'); if (c) c.title = t; if (typeof chatToast === 'function' && chatNode) chatToast(chatNode, t); };
+  if (!need.length) { say('ключи есть у всех записей'); return 0; }
+  const api = (typeof chatApi === 'function' && chatNode) ? chatApi(chatNode) : null;
+  if (!api || !api.model) { say('нет ноды «API» с моделью — ключи генерировать нечем'); return 0; }
+  const list = need.map((e, i) => (i + 1) + '. ' + (e.name || 'entry') + ' :: ' + String(e.content).trim().replace(/\s+/g, ' ').slice(0, 300)).join(String.fromCharCode(10));
+  const sys = 'You assign lookup keys to lorebook entries. A key is a word that would actually be SPOKEN in a scene '
+    + 'where this entry matters: a proper name, a nickname, a place name, a rare distinctive word. '
+    + 'Never generic words (man, woman, girl, sword, house, city, road, magic, love, fear) — they fire every turn and crowd out what matters. '
+    + '2 to 5 keys per entry, comma separated, in the language of the entry.';
+  const user = 'ENTRIES:' + String.fromCharCode(10) + list + String.fromCharCode(10) + String.fromCharCode(10)
+    + 'Return ONLY strict JSON: {"keys": [{"n": number, "keys": string}]} — one item per entry, "n" is its number above. No text outside the JSON.';
+  const r = await rlmApi('/api/rlm/generate', { _ctxKey: 'lore.keys', base: api.base, key: api.key, model: api.model,
+    messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
+    params: { max_tokens: Math.max(400, need.length * 40), temperature: 0.2, reasoning: { enabled: false } } });
+  const txt = String((r && (r.text || r.content)) || '');
+  const m = txt.match(/\{[\s\S]*\}/); if (!m) { say('модель ответила не по форме — ключи не проставлены'); return 0; }
+  let got = null; try { got = JSON.parse(m[0]); } catch (_) { say('ответ модели не разобрался — ключи не проставлены'); return 0; }
+  const rows = (got && Array.isArray(got.keys)) ? got.keys : [];
+  let done = 0;
+  rows.forEach((row) => {
+    const idx = (parseInt(row && row.n, 10) || 0) - 1;
+    const keys = String((row && row.keys) || '').trim();
+    if (idx < 0 || idx >= need.length || !keys) return;
+    need[idx].keys = keys; done++;
+  });
+  if (done) { loreRenderList(loreEl); loreRenderEditor(loreEl); persistCurrentGraph(); }
+  say(done ? ('ключи проставлены записям: ' + done + ' из ' + need.length) : 'модель не вернула ни одного ключа');
+  return done;
+}
+// Прогон по истории (без модели): сколько раз каждая запись сработала бы на последних ходах.
+// Две-три срабатывания на сотню сообщений — норма; восемьдесят означает, что ключи слишком общие.
+function loreDryRun(loreEl, chatNode) {
+  const msgs = (typeof chatTurns === 'function' && chatNode) ? chatTurns(chatNode) : [];
+  const texts = msgs.map((m) => String((m && (m.text || m.content)) || '')).filter(Boolean).slice(-100);
+  const rows = [];
+  (loreEl._entries || []).forEach((e) => {
+    if (!e || e.hiddenBy || !(e.content || '').trim()) return;
+    if (e.trigger !== 'keyword') { rows.push({ name: loreLabel(e), hits: e.trigger === 'always_on' ? texts.length : 0, always: e.trigger === 'always_on' }); return; }
+    let hits = 0; texts.forEach((t) => { if (loreKeywordMatch(e, t)) hits++; });
+    rows.push({ name: loreLabel(e), hits, keys: e.keys });
+  });
+  rows.sort((a, b) => b.hits - a.hits);
+  return { turns: texts.length, rows };
+}
+// ── Доки вида «lore»: ИИ пишет не файл памяти, а ЗАПИСИ в «Лорбук чата» ─────────────────────────
+// Так к ним сами собой применяются ключи, липкость и бюджет — то, чего у файлов памяти нет
+// (решение 2026-09-21). Сущность — одна запись, она переписывается; события копит Хроника.
+// Формат ответа модели: блоки «ENTRY: <имя>» + строка «keys: a, b» + текст записи.
+function splitLoreEntries(text) {
+  const out = [];
+  const lines = String(text || '').split(String.fromCharCode(10));
+  let cur = null;
+  const flush = () => { if (cur && cur.body.join(' ').trim()) out.push({ name: cur.name, keys: cur.keys, body: cur.body.join(String.fromCharCode(10)).trim() }); cur = null; };
+  for (const ln of lines) {
+    const h = ln.match(/^[ \t]*[*`_#]*\s*ENTRY:\s*(.+?)\s*[*`_]*[ \t]*$/i);
+    if (h) { flush(); cur = { name: h[1].replace(/[.:;]+$/, '').trim().slice(0, 60), keys: '', body: [] }; continue; }
+    if (cur) {
+      const k = ln.match(/^[ \t]*[*`_]*\s*keys:\s*(.+?)\s*[*`_]*[ \t]*$/i);
+      if (k && !cur.keys) { cur.keys = k[1].trim(); continue; }
+      cur.body.push(ln);
+    }
+  }
+  flush();
+  return out;
+}
+// Записать разобранные блоки в «Лорбук чата». Имя записи — ключ поиска: та же сущность
+// переписывается, новая заводится. Возвращает { added, updated } или null, если лорбука нет.
+function soulWriteLoreEntries(soul, docName, text) {
+  const lore = (typeof loreNodeByScope === 'function') ? loreNodeByScope('chat') : null;
+  if (!lore) return null;
+  const parts = splitLoreEntries(text);
+  if (!parts.length) return { added: 0, updated: 0 };
+  const norm = (x) => String(x || '').trim().toLowerCase();
+  let added = 0, updated = 0;
+  parts.forEach((part) => {
+    const keys = part.keys || part.name;                       // ключей не дала — ловим по имени записи
+    const old = (lore._entries || []).find((e) => norm(e.name) === norm(part.name) && !e.mm);
+    if (old) { old.content = part.body; if (part.keys) old.keys = keys; old.trigger = 'keyword'; updated++; return; }
+    lore._entries.push(loreNormEntry({ name: part.name, keys, trigger: 'keyword', injection: 'lore', content: part.body, src: docName }));
+    added++;
+  });
+  try { loreRenderList(lore); loreRenderEditor(lore); redrawWires(); persistCurrentGraph(); } catch (_) {}
+  return { added, updated };
+}
+// ── Док «Status» — разбор структуры сцены ───────────────────────────────────────────────────────
+// Просим у модели строгий JSON, но принимаем и список, и обычную прозу: формат решает, насколько
+// точно мы узнаем сцену, а не будет ли запись вообще. Три ступени, каждая мягче предыдущей:
+//   json → поля разобраны, знаем и присутствующих, и ушедших;
+//   list → те же поля, вынутые из подписанных строк (модель почти справилась);
+//   text → как пришло; перекличка тогда ищет имена прямо по тексту.
+// Возвращает { kind, obj, text } — text уже готов к отправке в промт.
+function statusParse(raw) {
+  const src = String(raw || '').trim();
+  if (!src) return { kind: 'text', obj: null, text: '' };
+  // 1) JSON — вырезаем блок в скобках (модели любят обрамлять его ```json … ```)
+  const m = src.match(/\{[\s\S]*\}/);
+  if (m) {
+    try {
+      const o = JSON.parse(m[0]);
+      if (o && (o.location != null || Array.isArray(o.present))) {
+        const obj = statusNormalize(o);
+        return { kind: 'json', obj, text: statusRender(obj) };
+      }
+    } catch (_) { /* не json — идём дальше */ }
+  }
+  // 2) Список подписанных строк
+  const lines = src.split(String.fromCharCode(10));
+  const head = (ln, key) => { const r = new RegExp('^\\s*' + key + '\\s*:\\s*(.*)$', 'i'); const x = ln.match(r); return x ? x[1].trim() : null; };
+  const o = { location: '', time: '', present: [], departed: [], atmosphere: '' };
+  let section = '', cur = null, hit = 0;
+  for (const ln of lines) {
+    const loc = head(ln, 'location'), tm = head(ln, 'time'), dep = head(ln, 'departed'), atm = head(ln, 'atmosphere');
+    if (loc != null) { o.location = loc; section = ''; hit++; continue; }
+    if (tm != null) { o.time = tm; section = ''; hit++; continue; }
+    if (atm != null) { o.atmosphere = atm; section = ''; hit++; continue; }
+    if (dep != null) { o.departed = dep.split(',').map((x) => x.trim()).filter(Boolean); section = ''; hit++; continue; }
+    if (/^\s*present\s*:/i.test(ln)) { section = 'present'; hit++; continue; }
+    if (section === 'present') {
+      const name = ln.match(/^\s*[-*•]\s*(.+?)\s*$/);
+      if (name && !/^(pose|state)\s*:/i.test(name[1])) { cur = { name: name[1].replace(/[:,.]+$/, '').trim(), pose: '', state: '' }; o.present.push(cur); continue; }
+      const ps = head(ln, 'pose'), st = head(ln, 'state');
+      if (cur && ps != null) { cur.pose = ps; continue; }
+      if (cur && st != null) { cur.state = st; continue; }
+    }
+  }
+  if (hit >= 2 && (o.location || o.present.length)) { const obj = statusNormalize(o); return { kind: 'list', obj, text: statusRender(obj) }; }
+  // 3) Проза — оставляем как есть
+  return { kind: 'text', obj: null, text: src };
+}
+function statusNormalize(o) {
+  const str = (x) => String(x == null ? '' : x).replace(/\s+/g, ' ').trim();
+  const people = Array.isArray(o.present) ? o.present : [];
+  return {
+    location: str(o.location), time: str(o.time), atmosphere: str(o.atmosphere),
+    present: people.map((x) => (typeof x === 'string' ? { name: str(x), pose: '', state: '' }
+      : { name: str(x && x.name), pose: str(x && x.pose), state: str(x && x.state) })).filter((x) => x.name),
+    departed: (Array.isArray(o.departed) ? o.departed : String(o.departed || '').split(',')).map(str).filter(Boolean),
+    inventory: Array.isArray(o.inventory) ? o.inventory.map((x) => (typeof x === 'string' ? { name: str(x), who: '' }
+      : { name: str(x && x.name), who: str(x && x.who) })).filter((x) => x.name) : [],
+  };
+}
+// Текст дока для промта. Имя и его свойства — РАЗНЫМИ строками: слитая строка «Borin, at the anvil»
+// на следующем ходу читается моделью как имя, и в сцене заводится второй персонаж (грабли Aventuras).
+function statusRender(o) {
+  const L = [];
+  if (o.location) L.push('LOCATION: ' + o.location);
+  if (o.time) L.push('TIME: ' + o.time);
+  if (o.present.length) {
+    L.push('PRESENT:');
+    o.present.forEach((c) => { L.push('- ' + c.name); if (c.pose) L.push('  pose: ' + c.pose); if (c.state) L.push('  state: ' + c.state); });
+  }
+  if (o.departed.length) L.push('DEPARTED: ' + o.departed.join(', '));
+  if (o.inventory && o.inventory.length) L.push('CARRIED: ' + o.inventory.map((x) => x.who ? (x.name + ' (' + x.who + ')') : x.name).join(', '));
+  if (o.atmosphere) L.push('ATMOSPHERE: ' + o.atmosphere);
+  return L.join(String.fromCharCode(10));
+}
+// Строка-«стог сена» для переклички лорбука: имена тех, кто в сцене, и место. Разбор не удался —
+// отдаём весь текст: имена записей всё равно ищутся в нём тем же keyword-матчем, просто грубее.
+function statusSceneLine(parsed) {
+  if (!parsed) return '';
+  if (!parsed.obj) return String(parsed.text || '');
+  const o = parsed.obj;
+  return [o.location].concat(o.present.map((c) => c.name)).concat((o.inventory || []).map((x) => x.name)).filter(Boolean).join(' · ');
+}
+// Чем ответил провайдер в последний раз — видно в ноде «API» (бейдж `.api-fmt`).
+function apiMarkFormat(apiEl, kind) {
+  const el = (typeof apiMasterOf === 'function') ? apiMasterOf(apiEl) : apiEl;
+  [el, apiEl].forEach((n) => {
+    const b = n && n.querySelector && n.querySelector('.api-fmt'); if (!b) return;
+    b.dataset.kind = kind;
+    b.textContent = kind === 'json' ? 'JSON' : kind === 'list' ? 'список' : 'текст';
+    b.title = kind === 'json' ? 'Модель отвечает строгим JSON — сцена разбирается точно (кто в сцене, кто ушёл).'
+      : kind === 'list' ? 'Строгий JSON не пришёл, но ответ разобран по подписанным строкам — сцена известна.'
+      : 'Ответ пришёл обычным текстом: в промт идёт как есть, но состав сцены точно не известен.';
+  });
+}
 const soulWords = (t) => String(t || '').split(/\s+/).filter(Boolean).length;
+// Рассуждение при записи памяти (ноды «Душа»): «Авто» — ничего не шлём, как было всегда; остальное — как у Критика.
+function soulReasonParams(soul) {
+  const v = ((soul && soul.querySelector('.soul-reason')) || {}).value || 'auto';
+  if (v === 'auto') return {};
+  return { reasoning: v === 'off' ? { enabled: false } : { effort: v } };
+}
 async function soulSqueezeDoc(chatNode, soul, chat, d, text, mctx) {
   try {
     if (!soulDocSqueeze(soul, d)) return;
@@ -5716,7 +6193,7 @@ async function soulSqueezeDoc(chatNode, soul, chat, d, text, mctx) {
       + 'Output only the shortened document, no preface.';
     const r = await rlmApi('/api/rlm/generate', { _ctxKey: '.soul-maxtok@.node-soul', _ctxNode: soul, base: api.base, key: api.key, model: api.model,
       messages: [{ role: 'system', content: 'You shorten one memory document to fit its word limit, keeping what matters most.' }, { role: 'user', content: substituteMacros(user, mctx || {}) }],
-      params: { max_tokens: Math.max(maxtok, limit * 2) + tokVal('soul.think', MEM_THINK_BUDGET_DEF), temperature: temp } });
+      params: Object.assign({ max_tokens: Math.max(maxtok, limit * 2) + tokVal('soul.think', MEM_THINK_BUDGET_DEF), temperature: temp }, soulReasonParams(soul)) });
     if (chatNode && chatNode._procAbort) return;   // ✕ нажали, пока модель ужимала: ужатое не пишем
     const out = memCleanReply(r); const got = soulWords(out);
     if (!out || got >= words) { note('«' + d.name + '» длиннее лимита (' + words + ' слов при ' + limit + '), ужать не вышло — ' + (out ? 'ответ не короче' : ((r && r.error) || 'пустой ответ')) + '; записанное оставлено.'); return; }
@@ -5769,7 +6246,7 @@ async function updateMemoryBatch(chatNode, soul, charName, opts) {
     + docs.map((d) => '### ' + d.name + BSN + (d.kind === 'diary' ? '<the new diary entry>' : '<the updated document>')).join(BSN);
   const r = await rlmApi('/api/rlm/generate', { _ctxKey: '.soul-maxtok@.node-soul', _ctxNode: soul, base: api.base, key: api.key, model: api.model,
     messages: [{ role: 'system', content: sys }, { role: 'user', content: substituteMacros(user, mctx) }],
-    params: { max_tokens: maxtok * docs.length + tokVal('soul.think', MEM_THINK_BUDGET_DEF), temperature: temp } });
+    params: Object.assign({ max_tokens: maxtok * docs.length + tokVal('soul.think', MEM_THINK_BUDGET_DEF), temperature: temp }, soulReasonParams(soul)) });
   const out = memCleanReply(r); if (!out) return null;
   if (chatNode._procAbort) return null;   // ✕ нажали, пока модель писала: результат НЕ пишем (сокет в Electron не рвётся — ждём, но выбрасываем)
   // Раскладываем ответ по документам: заголовком считаем строку, где стоит имя дока в любом оформлении
@@ -5791,9 +6268,10 @@ async function updateMemoryBatch(chatNode, soul, charName, opts) {
   // по одному. Раньше пачка отвечала «успех», если записался хоть один, и пропавшие доки молча не обновлялись.
   const wrote = new Set();
   for (const d of docs) {
-    const text = (bag[d.name] || []).join(String.fromCharCode(10)).trim();
+    let text = (bag[d.name] || []).join(String.fromCharCode(10)).trim();
     if (!text) continue;
     if (d.kind === 'diary') { const w = await rlmApi('/api/rlm/soul/append', { chat, text }); if (w && w.ok !== false) wrote.add(d.id); continue; }
+    if (statusIsSceneDoc(d)) text = soulTakeScene(soul, api, text);   // «Status» — разбираем сцену (кто здесь, где), в док кладём разобранный вид
     const w = await rlmApi('/api/rlm/soul/tracker', { chat, name: d.name, text });
     if (w && w.ok === false && w.skipped) memKeepNote(soul, d.name, w, chat);
     else if (w && w.ok !== false) { memKeepClear(soul, d.name, chat); await soulSqueezeDoc(chatNode, soul, chat, d, text, mctx); }   // World длиннее лимита — ужать
@@ -7646,7 +8124,6 @@ async function directorPlanEvents(el, opts) {
     // Память Душ и семантический лорбук наполняются перед ходом — планировщику даём тот же свежий срез,
     // иначе он «не помнит» дневники и темы (в ноде они пусты, пока не собран промт).
     try { if (typeof refreshSoulMemory === 'function') await refreshSoulMemory(chatNode); } catch (_) { /* нет сети/эмбеддера — работаем без RAG */ }
-    try { if (typeof refreshSemanticLore === 'function') await refreshSemanticLore(chatNode); } catch (_) { /* то же */ }
     const ngStates = (chatNode.classList.contains('node-netgame') && typeof tgNgStateBlock === 'function') ? (tgNgStateBlock(chatNode) || '') : '';
     const material = [
       dirPlanChronicle(chatNode),
@@ -7784,7 +8261,22 @@ async function runDirectorCore(node, dir, gen, apiEl, forceType, manual, ownerEl
   if (gen.npc && plan.npc_remove) directorRemoveNpc(node, plan.npc_remove);   // персонаж ушёл со сцены → убрать его запись
 }
 // Авто-хук — из generateReply ДО сборки промта (событие впрыснется этим же ходом), раз в N ответов.
+// Отработавшие события Режиссёра удаляются сами (Leon, 2026-09-21: «это же событие»): окно `range` кончилось —
+// запись больше никогда не сработает, а в книге остаётся и мешает искать. Окно «до конца» (msgMax = 0) не трогаем.
+function directorPruneExpired(node) {
+  const dir = directorNodeForChat(node); if (!dir || !Array.isArray(dir._entries)) return 0;
+  const msgNo = (typeof chatTurnCount === 'function') ? chatTurnCount(node) : 0; if (!msgNo) return 0;
+  const before = dir._entries.length;
+  const left = dir._entries.filter((e) => !(e && e.trigger === 'range' && (parseInt(e.msgMax, 10) || 0) > 0 && msgNo > (parseInt(e.msgMax, 10) || 0)));
+  const gone = before - left.length; if (!gone) return 0;
+  dir._entries.length = 0; left.forEach((e) => dir._entries.push(e));          // in-place: массив общий с видом-в-чате
+  if (dir._sel && !left.some((e) => e.id === dir._sel)) dir._sel = left.length ? left[0].id : null;
+  try { loreRenderList(dir); loreRenderEditor(dir); } catch (_) {}
+  try { persistCurrentGraph(); } catch (_) {}
+  return gone;
+}
 async function maybeRunDirector(node, apiEl) {
+  directorPruneExpired(node);                                  // сперва вымести отыгранные события
   const dir = directorNodeForChat(node);
   if (!dir || !dir._gen || !dir._gen.enabled || !apiEl) return;
   const gen = dir._gen;
@@ -8462,7 +8954,6 @@ async function criticJudge(node, critic, opts) {
     let mem = '', evidence = '', stateBlk = '', playerSheets = '';
     try {
       await refreshSoulMemory(node);
-      if (typeof refreshSemanticLore === 'function') await refreshSemanticLore(node);   // semantic-лорбук успевает посчитаться
       const isNg = node.classList && node.classList.contains('node-netgame');
       // Комплитер — ЧАТА, а не API критика: у критика бывает своя нода API, комплитера за ней нет, и улики молча пропадали.
       const chatA = (typeof chatApi === 'function') ? chatApi(node) : null;
@@ -8931,11 +9422,9 @@ function buildChronicleNode() {
   loadStylePrompt('summary');                                // старт: промт текущего пресета в поле
   if (stylePromptField) stylePromptField.addEventListener('input', () => { el._stylePrompts[styleDD.value] = stylePromptField.value; });   // правку — как override пресета
   const modeDD = describedDropdown([
-    { value: 'keyword',    label: 'По ключам',    desc: 'Запись включается, когда её ключ всплыл в сцене (как в ST).' },
-    { value: 'semantic',   label: 'По смыслу',    desc: 'Срабатывает по близости смысла сцены к ФРАЗЕ-ЭТАЛОНУ — её генерирует модель прямо при записи. Нужен «Эмбеддер».' },
-    { value: 'vectorized', label: 'Векторизация', desc: 'Срабатывает по близости смысла к тексту САМОЙ записи, без фразы. Нужен «Эмбеддер».' },
-    { value: 'always_on',  label: 'Всегда',       desc: 'Запись всегда в промте (константа).' },
-  ], 'semantic', () => {});   // дефолт — «По смыслу»: надёжнее подставляет сцену взамен скрытых сообщений (нужен «Эмбеддер»)
+    { value: 'keyword',   label: 'По ключам', desc: 'Запись включается, когда её ключ всплыл в сцене (как в ST). Ключи к главе пишет сама модель.' },
+    { value: 'always_on', label: 'Всегда',    desc: 'Запись всегда в промте (константа).' },
+  ], 'keyword', () => {});
   modeDD.classList.add('chr-mode');
   el.querySelector('.chr-mode-mount').replaceWith(modeDD);
   const hideDD = describedDropdown([
@@ -9196,10 +9685,7 @@ function chroniclePreview(chatNode, data) {
           <input class="pv-inp">
           <div class="pv-lbl">${escapeConsole(data.lblContent || 'Текст записи')}</div>
           <textarea class="pv-text" spellcheck="false"></textarea>
-          ${data.semantic ? `
-          <div class="pv-lbl">Фраза-эталон <span class="pv-keys-hint">краткая суть сцены — по ней всплывёт запись</span></div>
-          <textarea class="pv-phrase" spellcheck="false" placeholder="краткая фраза смысла сцены"></textarea>
-          ` : data.noKeys ? '' : `
+          ${data.noKeys ?  '' : `
           <div class="pv-lbl pv-lbl-keys"><span>Ключи</span><span class="pv-keys-hint">клик — править · ✕ — удалить</span><span class="tr-btns pv-keys-tr"><button class="tr-b pv-ktr" data-k="ru" type="button" title="Перевести все ключи на русский">RU</button><button class="tr-b pv-ktr" data-k="en" type="button" title="Перевести все ключи на английский">EN</button></span></div>
           <div class="pv-keys"></div>
           <button class="pv-key-add" type="button" title="Добавить свой ключ">＋ ключ</button>
@@ -9219,14 +9705,11 @@ function chroniclePreview(chatNode, data) {
     const gpBox = ov.querySelector('.pv-genprompt');                 // блок «Промт генерации» (только если передан data.genPrompt)
     const gpText = ov.querySelector('.pv-gp-text'); if (gpText) gpText.value = data.genPrompt || '';
     if (gpText && data.genTranslate) attachFieldTranslate(gpText);   // «Запрос» правится и переводится RU/EN, как обычное поле
-    const phraseEl = ov.querySelector('.pv-phrase');   // semantic-режим: поле фразы(фраз)-эталона вместо ключей
-    if (phraseEl) phraseEl.value = Array.isArray(data.phrase) ? data.phrase.join(', ') : (data.phrase || '');
     const keysBox = ov.querySelector('.pv-keys');
     // Чип ключа: текст РЕДАКТИРУЕМ по клику (contenteditable) + ✕ на удаление.
     const chipHtml = (k) => `<span class="pv-key"><span class="pv-key-txt" contenteditable="true" spellcheck="false">${escapeConsole(k)}</span><button class="pv-key-x" type="button" title="Удалить ключ">✕</button></span>`;
     if (keysBox) keysBox.innerHTML = (data.keywords || []).map(chipHtml).join('');
     attachFieldTranslate(inp); attachFieldTranslate(txt);   // перевод заголовка/текста — те же кнопки RU/EN, что и на полях
-    if (phraseEl) attachFieldTranslate(phraseEl);           // и у фразы-эталона RU/EN, как у ключей/полей
     ov.querySelectorAll('input, textarea, button').forEach((c) => c.addEventListener('pointerdown', (e) => e.stopPropagation()));
     if (keysBox) {
       keysBox.addEventListener('pointerdown', (e) => e.stopPropagation());   // клики по чипам (в т.ч. добавленным) не таскают ноду
@@ -9257,7 +9740,7 @@ function chroniclePreview(chatNode, data) {
     const onKey = (e) => {
       if (e.key !== 'Escape') return;
       const ae = document.activeElement;
-      if (ae && (ae.isContentEditable || ae === inp || ae === txt || ae === phraseEl)) { e.stopPropagation(); ae.blur(); return; }
+      if (ae && (ae.isContentEditable || ae === inp || ae === txt)) { e.stopPropagation(); ae.blur(); return; }
       e.stopPropagation(); finish({ action: 'cancel' });
     };
     document.addEventListener('keydown', onKey, true);
@@ -9272,7 +9755,7 @@ function chroniclePreview(chatNode, data) {
           else { gpBox.setAttribute('hidden', ''); b.classList.remove('on'); } }
         return;
       }
-      if (act === 'accept') { finish({ action: 'accept', title: (trSafeVal(inp) || '').trim() || data.title, content: (trSafeVal(txt) || '').trim() || data.content, keys: collectKeys(), phrase: phraseEl ? (trSafeVal(phraseEl) || phraseEl.value || '').trim() : undefined }); return; }
+      if (act === 'accept') { finish({ action: 'accept', title: (trSafeVal(inp) || '').trim() || data.title, content: (trSafeVal(txt) || '').trim() || data.content, keys: collectKeys() }); return; }
       if (act === 'retry') { finish({ action: 'retry', prompt: gpText ? ((trSafeVal(gpText) || gpText.value || '').trim()) : undefined }); return; }   // trSafeVal: RU-предпросмотр не уедет в модель   // перегенерить — по правленому промту
       finish({ action: act });   // cancel
     });
@@ -9282,16 +9765,15 @@ function chroniclePreview(chatNode, data) {
 let chronicleBusy = false;
 // Ядро: сжать сцену и добавить запись в лорбук чата. opts.auto — авто-режим (сцена с последней обработки).
 // Поля триггера записи Хроники по режиму (общее для записи сцены и сводок консолидации):
-//   keyword → ключи; semantic → фраза-эталон (её генерит модель); vectorized → по тексту (ни ключей, ни фразы);
 //   always_on → константа. Движок лорбука (refreshSemanticLore/loreText) сам читает нужные поля по e.trigger.
 function chrEntryTrigger(mode, parts) {
   parts = parts || {};
+  // Ключи модель присылает вместе с главой — раньше они тут стирались во всех режимах, кроме «по ключам»,
+  // и запись оставалась немой (2026-09-21). Теперь кладём всегда; фолбэк — заголовок записи.
   return {
-    trigger: mode,
+    trigger: mode === 'always_on' ? 'always_on' : 'keyword',
     constant: mode === 'always_on',
-    keys: mode === 'keyword' ? (parts.keys || '') : '',
-    // «По смыслу» — фраза-эталон из ответа модели (фолбэк — заголовок записи, если модель фразу не дала).
-    semTrigger: mode === 'semantic' ? ((parts.phrase || parts.title || '').trim()) : '',
+    keys: (parts.keys || parts.title || '').trim(),
   };
 }
 async function chronicleWrite(chrEl, opts) {
@@ -9324,15 +9806,9 @@ async function chronicleWrite(chrEl, opts) {
     const maxtok = Math.max(200, parseInt((chrEl.querySelector('.chr-maxtok') || {}).value, 10) || 4000);
     const titleFmt = (chrEl.querySelector('.chr-title') || {}).value;
     const mode = (chrEl.querySelector('.chr-mode') || {}).value || 'keyword';
-    // Режим «по смыслу» (semantic) ищет по ФРАЗЕ-ЭТАЛОНУ — просим модель вернуть её (trigger) прямо по
-    // создаваемой главе; для остальных режимов эталон не нужен (ключи — только для «по ключам»).
-    const semantic = mode === 'semantic';
-    const schema = semantic
-      ? '{"title": string, "content": string, "keywords": string[], "trigger": string}'
-      : '{"title": string, "content": string, "keywords": string[]}';
-    const triggerReq = semantic
-      ? ' The "trigger" is a short natural phrase (5–12 words) capturing the CORE MEANING of this scene — it will be used to semantically recall this memory later (a phrase, not keywords).'
-      : '';
+    // Ключи к главе пишет сама модель — они и ловят запись в сцене (смысловой режим вырезан 2026-09-21).
+    const schema = '{"title": string, "content": string, "keywords": string[]}';
+    const triggerReq = '';
     // Промт стиля — из РЕДАКТИРУЕМОГО поля (правки/пресет); RU-предпросмотр в промт не утекает (trSafeVal). JSON-схему добавляем сами.
     const styleText = (trSafeVal(chrEl.querySelector('.chr-style-prompt')) || '').trim() || chrStyleDefault(style);
     const sys = styleText +
@@ -9349,7 +9825,7 @@ async function chronicleWrite(chrEl, opts) {
     const num = (nums.length ? Math.max(...nums) : 0) + 1;
 
     // Ручная запись → ПРЕВЬЮ (Принять / Поправить / Перегенерить / Отмена). Авто — пишет молча + тост.
-    let finalTitle, finalContent, finalKeys, finalPhrase = '';
+    let finalTitle, finalContent, finalKeys;
     while (true) {
       note('Сжимаю сцену…'); chatNode._procAbort = false; chatNode._procCancel = () => { chatNode._procAbort = true; chatProc(chatNode, 'cancel', 'Прервано'); }; chatProc(chatNode, 'pulse', 'Суммаризация сцены', { cancelable: true });
       const r = await rlmApi('/api/rlm/generate', { _ctxKey: '.chr-maxtok@.node-chronicle', _ctxNode: chrEl, base: api.base, key: api.key, model: api.model, messages, params: { max_tokens: maxtok, temperature: 0.7 } });
@@ -9357,23 +9833,20 @@ async function chronicleWrite(chrEl, opts) {
       const parsed = chronicleParse(r.text);
       if (!parsed || !parsed.content) { note('⚠ Модель вернула не-JSON (не смог разобрать запись).'); chatToast(chatNode, 'не разобрал ответ модели', 'err'); chatProc(chatNode, 'idle'); return; }
       if (chatNode._procAbort) { chatNode._procCancel = null; return; }   // ✕ — отменили суммаризацию (запись не пишем)
-      finalPhrase = parsed.trigger || '';   // фраза-эталон для semantic (для прочих режимов не используется)
       const composed = chronicleTitle(titleFmt, parsed.title, num, mctx);
       if (opts.auto) { finalTitle = composed; finalContent = parsed.content; finalKeys = parsed.keywords; break; }
       note('Превью — подтверди запись…');
-      // В semantic-режиме превью правит ФРАЗУ-ЭТАЛОН (не ключи — они тут не срабатывают); иначе — ключи.
-      const act = await chroniclePreview(chatNode, { num, title: composed, content: parsed.content, keywords: parsed.keywords, semantic, phrase: finalPhrase });
+      const act = await chroniclePreview(chatNode, { num, title: composed, content: parsed.content, keywords: parsed.keywords });
       if (act.action === 'cancel') { note('Запись отменена.'); chatToast(chatNode, 'запись отменена', 'err'); chatProc(chatNode, 'idle'); return; }
       if (act.action === 'retry') continue;   // «Перегенерить» — заново к модели
       finalTitle = act.title || composed; finalContent = act.content || parsed.content;
       finalKeys = Array.isArray(act.keys) ? act.keys : parsed.keywords;   // ключи могли быть отредактированы/удалены/переведены в превью
-      if (semantic && act.phrase != null) finalPhrase = act.phrase;       // правленая фраза(ы)-эталон
       break;
     }
 
     const entry = loreNormEntry({
       name: finalTitle,
-      ...chrEntryTrigger(mode, { keys: finalKeys.join(', '), phrase: finalPhrase, title: finalTitle }),
+      ...chrEntryTrigger(mode, { keys: finalKeys.join(', '), title: finalTitle }),
       content: finalContent,
       mm: true, mmNum: num, mmStart: from, mmEnd: to,
       order: num,   // свежее (больший №) = выше order = переживает бюджет среди глав; ручные записи всегда выше по правилу сортировки
@@ -9390,7 +9863,7 @@ async function chronicleWrite(chrEl, opts) {
     chrMarkScene(msgs, from, to, { num, name: finalTitle }, hideMode, hideLeave);
     chrMarkSceneSave(chatNode);   // пометки лежат В ИСТОРИИ — сохраняем сразу, иначе после перезахода сцены снова видны
     renderChatLogs(chatNode);   // показать призраков/подписи сразу (и сохранить лог с флагами)
-    const trigNote = semantic ? 'по смыслу (фраза-эталон)' : `ключей: ${finalKeys.length}`;
+    const trigNote = `ключей: ${finalKeys.length}`;
     note(`✓ Записано в «${(lore.querySelector('.node-head .label') || {}).textContent || 'лорбук'}»: «${finalTitle}» (${trigNote}).`);
     chatToast(chatNode, `записана сцена ${num} · «${finalTitle}»`, 'ok');
     chatNode._procCancel = null; if (!chatNode._procAbort) chatProc(chatNode, 'done', 'Сцена записана');
@@ -9454,13 +9927,12 @@ function maybeUpdateChronicle(chatNode) {
 // ── Консолидация: свернуть N записей уровня K в одну запись уровня K+1 (Сцена→Арка→Глава→…), дети прячутся.
 // Модель группирует пачку в 1+ сводок (member_ids) и оставляет несшитое в unassigned. Каскад: снизу вверх —
 // свернули сцены в арки, арок стало ≥N → сворачиваем в главы, и так до эпоса. Ref: Memory Books.
-const CHR_CONSOLIDATE_PROMPT = (tierLabel, semantic) =>
+const CHR_CONSOLIDATE_PROMPT = (tierLabel) =>
   `You consolidate lower-tier memory records into higher-tier "${tierLabel}" summaries. ` +
   `Group the given records CHRONOLOGICALLY into ONE or a few ${tierLabel} summaries — merge related records, keep continuity. ` +
   `Preserve major plot turns, decisions, character changes, promises, consequences, unresolved threads and key names. ` +
   `Records that don't belong with the others go to "unassigned" (leave them out of summaries). ` +
-  `Return ONLY strict JSON: {"summaries":[{"title":string,"summary":string,"keywords":string[],${semantic ? '"trigger":string,' : ''}"member_ids":string[]}],"unassigned":[{"id":string,"reason":string}]}. ` +
-  (semantic ? `Each "trigger" is a short natural phrase (5–12 words) capturing the CORE MEANING of that summary — it will be used to semantically recall this memory later (a phrase, not keywords). ` : '') +
+  `Return ONLY strict JSON: {"summaries":[{"title":string,"summary":string,"keywords":string[],"member_ids":string[]}],"unassigned":[{"id":string,"reason":string}]}. ` +
   `Each member_ids MUST be item ids taken from the input. No text outside the JSON.`;
 function chronicleParseConsolidation(text) {
   const m = String(text || '').match(/\{[\s\S]*\}/);
@@ -9471,7 +9943,6 @@ function chronicleParseConsolidation(text) {
       title: String(s.title || '').trim(),
       summary: String(s.summary || s.content || '').trim(),
       keywords: (Array.isArray(s.keywords) ? s.keywords : String(s.keywords || '').split(',')).map((k) => String(k).trim()).filter(Boolean),
-      trigger: String(s.trigger || '').trim(),   // фраза-эталон для режима «по смыслу» (просим только в semantic)
       member_ids: (Array.isArray(s.member_ids) ? s.member_ids : []).map(String),
     })).filter((s) => s.summary && s.member_ids.length);
     return { summaries };
@@ -9492,7 +9963,6 @@ async function chronicleConsolidate(chrEl, opts) {
   if (!api) { if (opts.manual) note('⚠ Нужен API с ключом/моделью, подключённый к чату.'); return; }
   const minN = Math.max(2, parseInt((chrEl.querySelector('.chr-consol-min') || {}).value, 10) || 5);
   const mode = (chrEl.querySelector('.chr-mode') || {}).value || 'keyword';   // сводки наследуют режим записи Хроники
-  const semantic = mode === 'semantic';                                       // в «по смыслу» просим у модели фразу-эталон на каждую сводку
   chronicleConsolidating = true;
   const mctx = chatNames(chatNode);
   const made = [];
@@ -9506,7 +9976,7 @@ async function chronicleConsolidate(chrEl, opts) {
         const batch = src.slice(0, 12);                      // до 12 записей за запрос, хронологически
         note(`Свёртка: ${chrTier(srcTier).label.toLowerCase()} → ${tierLabel.toLowerCase()}…`);
         const items = batch.map((e) => `=== item ${e.id} ===\nTitle: ${e.name}\nContents: ${e.content}\n=== end ${e.id} ===`).join('\n\n');
-        const messages = [{ role: 'system', content: CHR_CONSOLIDATE_PROMPT(tierLabel, semantic) }, { role: 'user', content: `RECORDS (chronological):\n\n${items}` }];
+        const messages = [{ role: 'system', content: CHR_CONSOLIDATE_PROMPT(tierLabel) }, { role: 'user', content: `RECORDS (chronological):\n\n${items}` }];
         const r = await rlmApi('/api/rlm/generate', { _ctxKey: 'chr.consol', base: api.base, key: api.key, model: api.model, messages, params: { max_tokens: tokVal('chr.consol', 4000), temperature: 0.5 } });
         if (!(r && r.ok)) { if (opts.manual) note('⚠ Ошибка модели: ' + ((r && r.error) || '—')); break; }
         const parsed = chronicleParseConsolidation(r.text);
@@ -9521,8 +9991,8 @@ async function chronicleConsolidate(chrEl, opts) {
           const cname = chronicleTitle(chrTier(T).title, s.title, num, mctx);
           const entry = loreNormEntry({
             name: cname,
-            // Триггер сводки = режим Хроники: keyword (по ключам, без Эмбеддера) / semantic (фраза-эталон) / vectorized / always_on.
-            ...chrEntryTrigger(mode, { keys: s.keywords.join(', '), phrase: s.trigger, title: cname }),
+            // Триггер сводки = режим Хроники: по ключам (их пишет модель) или «всегда».
+            ...chrEntryTrigger(mode, { keys: s.keywords.join(', '), title: cname }),
             content: s.summary, mm: true, mmNum: num, tier: T, members: memberIds,
             mmStart: Math.min(...members.map((e) => e.mmStart || 0)),
             mmEnd: Math.max(...members.map((e) => e.mmEnd || 0)),
@@ -9636,7 +10106,8 @@ function closeChatVision() {
   if (master && view) {
     // Досинхронить крутилки ноды (не в общем _entries): дальность сканирования и область — чтобы вид и нода не расходились.
     const ms = master.querySelector('.lb-scan'), vs = view.querySelector('.lb-scan'); if (ms && vs) ms.value = vs.value;
-    const mk = master.querySelector('.lb-semk'), vk = view.querySelector('.lb-semk'); if (mk && vk) mk.value = vk.value;   // «По смыслу — не больше» — туда же
+    const mk = master.querySelector('.lb-sticky'), vk = view.querySelector('.lb-sticky'); if (mk && vk) mk.value = vk.value;   // липкость книги — туда же
+    const mb = master.querySelector('.lb-budget'), vb = view.querySelector('.lb-budget'); if (mb && vb) mb.value = vb.value;   // и «Бюджет» — иначе правка в вижне терялась
     const msc = master.querySelector('.lb-scope-dd'), vsc = view.querySelector('.lb-scope-dd');
     if (msc && vsc && msc.value !== vsc.value) { msc.value = vsc.value; const l = master.querySelector('.node-head .label'); if (l) l.textContent = loreTitleOf(vsc.value); }
     master._sel = view._sel;
@@ -9853,14 +10324,10 @@ function openClipDialog(chatNode, selected) {
     + '<div class=\'clip-row\'><div class=\'clip-lbl\'>Куда</div><select class=\'rlm-dialog-input clip-where\'></select></div>'
     + '<div class=\'clip-row\'><div class=\'clip-lbl\'>Заголовок</div><input class=\'rlm-dialog-input clip-head\' type=\'text\' spellcheck=\'false\' placeholder=\'напр.: Гипноз — порядок этапов\'></div>'
     + '<div class=\'clip-row\'><div class=\'clip-lbl\'>Когда всплывает</div><select class=\'rlm-dialog-input clip-mode\'>'
+      + '<option value=\'keyword\' selected>По ключам — когда прозвучало слово</option>'
       + '<option value=\'always_on\'>Всегда — висит в промте постоянно</option>'
-      + '<option value=\'semantic\' selected>По смыслу — когда сцена близка к фразе</option>'
-      + '<option value=\'keyword\'>По ключам — когда прозвучало слово</option>'
-      + '<option value=\'vectorized\'>Векторизация — по смыслу самого текста</option>'
       + '</select></div>'
-    + '<div class=\'clip-row clip-sem\'><div class=\'clip-lbl\'>Фраза по смыслу<button class=\'clip-gen\' type=\'button\' data-kind=\'sem\' title=\'Пусть модель сформулирует фразу по выделенному тексту\'>✨</button></div>'
-      + '<input class=\'rlm-dialog-input clip-semtext\' type=\'text\' spellcheck=\'false\' placeholder=\'напр.: он вводит её в транс\'></div>'
-    + '<div class=\'clip-row clip-kw\' hidden><div class=\'clip-lbl\'>Ключи<button class=\'clip-gen\' type=\'button\' data-kind=\'keys\' title=\'Пусть модель подберёт ключи по выделенному тексту\'>✨</button></div>'
+    + '<div class=\'clip-row clip-kw\'><div class=\'clip-lbl\'>Ключи<button class=\'clip-gen\' type=\'button\' data-kind=\'keys\' title=\'Пусть модель подберёт ключи по выделенному тексту\'>✨</button></div>'
       + '<input class=\'rlm-dialog-input clip-keys\' type=\'text\' spellcheck=\'false\' placeholder=\'гипноз, транс, маятник\'></div>'
     + '<div class=\'clip-note\'></div>'
     + '<div class=\'rlm-dialog-btns\'><button class=\'rlm-dialog-cancel\' type=\'button\'>Отмена</button>'
@@ -9868,29 +10335,26 @@ function openClipDialog(chatNode, selected) {
   back.appendChild(box); document.body.appendChild(back);
   const q = (s) => box.querySelector(s);
   const текст = q('.clip-text'), где = q('.clip-where'), голова = q('.clip-head');
-  const режим = q('.clip-mode'), фраза = q('.clip-semtext'), ключи = q('.clip-keys'), нота = q('.clip-note');
+  const режим = q('.clip-mode'), ключи = q('.clip-keys'), нота = q('.clip-note');
   текст.value = String(selected || '').trim();
   где.innerHTML = '<option value=\'new\'>новая запись</option>'
     + клипы.map((e) => '<option value=\'' + esc(e.id) + '\'>дописать в «' + esc(clipHeadline(e.name)) + '»</option>').join('');
   // Переводчики — у каждого текстового поля, как на нодах (RU — предпросмотр, EN — заменить).
-  [текст, голова, фраза, ключи].forEach((el) => { if (typeof attachFieldTranslate === 'function') attachFieldTranslate(el); });
+  [текст, голова, ключи].forEach((el) => { if (typeof attachFieldTranslate === 'function') attachFieldTranslate(el); });
   const синк = () => {
     const сущ = где.value !== 'new';
     const e = сущ ? (lore._entries || []).find((x) => x.id === где.value) : null;
-    if (e) { голова.value = clipHeadline(e.name); режим.value = e.trigger || 'keyword'; фраза.value = e.semTrigger || ''; ключи.value = e.keys || ''; }
+    if (e) { голова.value = clipHeadline(e.name); режим.value = e.trigger || 'keyword'; ключи.value = e.keys || ''; }
     голова.disabled = !!e;
-    [режим, фраза, ключи].forEach((x) => { x.disabled = !!e; });                 // у существующей записи настройки уже свои
-    q('.clip-sem').hidden = режим.value !== 'semantic';
+    [режим, ключи].forEach((x) => { x.disabled = !!e; });                 // у существующей записи настройки уже свои
     q('.clip-kw').hidden = режим.value !== 'keyword';
     нота.textContent = e ? 'Кусок добавится пунктом в конец этой записи — её настройки не трогаем.'
       : (режим.value === 'always_on' ? 'Запись будет в промте всегда — держи её короткой.'
-      : (режим.value === 'vectorized' ? 'Всплывёт, когда сцена близка по смыслу к самому тексту (нужен «Эмбеддер»).'
-      : (режим.value === 'semantic' ? 'Всплывёт, когда сцена близка по смыслу к твоей фразе (нужен «Эмбеддер»).'
-      : 'Всплывёт, когда в сцене прозвучит один из ключей.')));
+      : 'Всплывёт, когда в сцене прозвучит один из ключей.');
   };
   где.addEventListener('change', синк); режим.addEventListener('change', синк); синк();
   box.querySelectorAll('.clip-gen').forEach((b) => b.addEventListener('click', async () => {
-    const цель = b.dataset.kind === 'keys' ? ключи : фраза;
+    const цель = ключи;
     const было = b.textContent; b.textContent = '…'; b.disabled = true;
     const v = await clipAsk(chatNode, b.dataset.kind === 'keys' ? 'keys' : 'sem', текст.value);
     b.textContent = было; b.disabled = false;
@@ -9914,10 +10378,9 @@ function openClipDialog(chatNode, selected) {
     } else {
       const h = String(голова.value || '').trim();
       if (!h) { нота.textContent = 'впиши заголовок записи'; return; }
-      if (режим.value === 'semantic' && !String(фраза.value || '').trim()) { нота.textContent = 'впиши фразу по смыслу (или нажми ✨)'; return; }
       if (режим.value === 'keyword' && !String(ключи.value || '').trim()) { нота.textContent = 'впиши ключи (или нажми ✨)'; return; }
       const entry = loreNormEntry({ name: clipTitle(h), trigger: режим.value, injection: 'lore',
-        keys: ключи.value || '', semTrigger: фраза.value || '', content: clipNewContent(h, bullet),
+        keys: ключи.value || '', content: clipNewContent(h, bullet),
         constant: режим.value === 'always_on' });
       lore._entries.push(entry);
       lore._sel = entry.id;
@@ -12094,6 +12557,7 @@ async function tgHandleUpdate(el, token, u) {
   if (msg.from && msg.from.is_bot) return;        // не реагируем на других ботов (анти-петля)
   if (tgMode === 'group' && el._topicFilter != null && threadId !== el._topicFilter) return;   // читаем ТОЛЬКО выбранную тему форума
   el._lastChatId = chatId;                        // запомнить чат — для кнопки «Написать самому»
+  if (el.classList.contains('node-netgame') && pusyaTakes(msg) && pusyaInbox(el, msg, chatId, threadId, isEdit)) return;   // обращение хозяина к Пусе — мимо игры
   const from = (msg.from && (msg.from.first_name || msg.from.username)) || 'кто-то';
   const authorId = (tgMode === 'group') ? ('tg:' + ((msg.from && msg.from.id) || from)) : null;   // id участника — для mute/цвета/розетки
   // Заводим участника СРАЗУ (до вычисления `muted`): иначе его ПЕРВАЯ реплика проскакивает в контекст,
@@ -12173,6 +12637,28 @@ async function tgNgTranslateGlossary(el, persona) {
 }
 
 // Адресовано ли сообщение боту: reply на его сообщение ИЛИ @упоминание его username в тексте.
+// ── Совместный режим «Пуся» (тест игр, Leon 2026-09-15) ──
+// Хозяин (номер аккаунта Telegram в `rlm.pusya` → boss, НЕ ник) пишет в игровой теме «Пуся, …» — это разговор с
+// сессией Claude Code, а не ход: реплика не идёт ни в ход, ни в историю, ни в ленту кандидатов. Каждое обращение —
+// отдельный ключ `rlm.pusya.in.<id>`: клиент пишет его один раз и больше не трогает, сессия читает с диска и удаляет
+// (следов не остаётся). Ответ сессия шлёт от имени бота и удаляет сама; бот своих сообщений не получает — в контекст
+// они не попадают. Нет `boss` — режим выключен. Любая ошибка режима — реплика идёт обычным путём (ноду не ломаем).
+const PUSYA_KEY = 'rlm.pusya';
+function pusyaTakes(msg) {
+  try {
+    const cfg = lsGet(PUSYA_KEY, null); const boss = cfg && cfg.boss;
+    if (!boss || !msg || !msg.from || String(msg.from.id) !== String(boss)) return false;
+    return /^\s*@?пус[яьеюи](?![а-яё])/i.test(String(msg.text || ''));
+  } catch (_) { return false; }
+}
+function pusyaInbox(el, msg, chatId, threadId, isEdit) {
+  try {
+    const at = Date.now();
+    lsSet(PUSYA_KEY + '.in.' + msg.message_id + (isEdit ? '-' + at : ''), { id: msg.message_id, at, chatId, threadId, text: String(msg.text || ''), edit: !!isEdit });
+    if (el._setStatus) el._setStatus('Пуся: обращение принято — в игру не идёт', 'ok');
+    return true;
+  } catch (e) { console.error('[RLM] Пуся: обращение не записано', e); return false; }
+}
 function tgIsAddressed(el, msg) {
   if (msg.reply_to_message && msg.reply_to_message.from && msg.reply_to_message.from.id === el._botId) return true;
   const uname = (el._botName || '').toLowerCase();
@@ -12204,8 +12690,9 @@ function tgNgPersonaName(el, authorId, fallback) {
   if (!row) return fallback;   // не привязан → своим ником, чужую персону не подставляем
   return muRowPersonaName(row) || fallback;
 }
-// «Это персонаж»: разглушить участника + завести ему ряд в слоте мультипользователя (связь по authorId)
-// + создать и подключить Персону/Душу/Состояние. Ряд ищем: уже связанный → свободный пустой → новый.
+// «Это персонаж» (одобрение админом): разглушить участника + его ряд в слоте мультипользователя — уже связанный с
+// ним (по номеру аккаунта) или новый в конце списка: порядок рядов = порядок одобрения. Ноды не создаём — их раздаёт
+// кнопка «Раздать ноды» в комплитере (Leon 2026-09-14: «после одобрения появился ник — всё, там кнопка раздать ноды»).
 function tgNgMakeCharacter(el, p) {
   if (!p) return;
   p.muted = false; tgSyncPartRow(el, p);   // разглушить участника
@@ -12213,37 +12700,57 @@ function tgNgMakeCharacter(el, p) {
   const feed = el.querySelector('.tg-feed'); if (feed) feed.querySelectorAll('.tg-line[data-author="' + p.id + '"]').forEach((r) => r.classList.remove('muted'));
   const mu = tgNgMuser(el);
   if (!mu) { if (el._setStatus) el._setStatus('нет слота мультипользователя в комплитере', 'err'); return; }
-  const rows0 = [...mu.querySelectorAll('.pm-mu-row')];
-  const nick = (p.name || '').trim().toLowerCase();
-  // имя ряда = имя ПОДКЛЮЧЁННОЙ персоны, иначе имя ряда (.pm-mu-nm)
-  const rowName = (r) => {
-    const port = r.querySelector('.port.in[data-field="persona"]');
-    const conn = port && connections.find((c) => c.to === port && c.from.closest && c.from.closest('.node-persona, .node-char'));
-    if (conn) { const nm = ((conn.from.closest('.node-persona, .node-char').querySelector('.ch-name-input') || {}).value || '').trim(); if (nm && nm !== 'User') return nm; }
-    return ((r.querySelector('.pm-mu-nm') || {}).textContent || '').trim();
-  };
-  // Ряд: уже привязанный к ЭТОМУ участнику → ИНАЧЕ ряд, чья персона/имя СОВПАДАЕТ с ником участника (автоподбор по имени) →
-  //      ИНАЧЕ первый свободный пустой ряд → ИНАЧЕ новый.
-  let row = rows0.find((r) => r.dataset.author === p.id)
-    || (nick && rows0.find((r) => !r.dataset.author && rowName(r).toLowerCase() === nick))
-    || rows0.find((r) => !r.dataset.author && !((r.querySelector('.pm-mu-nm') || {}).textContent || '').trim());
-  if (!row) { const add = mu.querySelector('.mu-add-row'); if (add) add.click(); const r1 = mu.querySelectorAll('.pm-mu-row'); row = r1[r1.length - 1]; }
+  const row = tgNgRowOf(el, p) || (mu._addRow ? mu._addRow({ id: muNewPlayerId(), name: p.name || '', author: p.id }) : null);
   if (!row) return;
-  row.dataset.author = p.id;   // связать ряд с участником Telegram
-  const nm = row.querySelector('.pm-mu-nm');
-  if (nm && !nm.textContent.trim()) { nm.textContent = p.name || ''; const a = row.querySelector('.mu-ava'); if (a) a.textContent = (p.name || '＋').slice(0, 1); }
-  const soulPort = row.querySelector('.port.in[data-field="soul"]');   // ноды уже есть?
-  const hasNodes = soulPort && connections.some((c) => c.to === soulPort);
-  if (!hasNodes && typeof muCreateNodesForRow === 'function') muCreateNodesForRow(row);
-  else if (hasNodes) {
-    // Ноды у ряда уже стоят (создавались раньше) — Душу всё равно ставим на набор «игрок»,
-    // если её ещё не переключали (иначе ручные правки набора остались бы затёрты).
-    const sc = connections.find((c) => c.to === soulPort && c.from.closest && c.from.closest('.node-soul'));
-    const soul = sc ? sc.from.closest('.node-soul') : null;
-    if (soul && soul._promptMode !== 'player' && typeof applyNetgameSoulDocs === 'function') applyNetgameSoulDocs(soul);
-  }
+  muSetRowNick(row, p.name);
+  const soulPort = row.querySelector('.port.in[data-field="soul"]');
+  const sc = soulPort && connections.find((c) => c.to === soulPort && c.from.closest && c.from.closest('.node-soul'));
+  const soul = sc ? sc.from.closest('.node-soul') : null;
+  // Ноды у ряда уже стоят (игрока одобряют повторно) — Душу всё равно ставим на набор «игрок»,
+  // если её ещё не переключали (иначе ручные правки набора остались бы затёрты).
+  if (soul && soul._promptMode !== 'player' && typeof applyNetgameSoulDocs === 'function') applyNetgameSoulDocs(soul);
+  tgSyncPartRow(el, p);   // «#N» у участника — по его новому ряду
   redrawWires();
-  if (typeof persistCurrentGraph === 'function') persistCurrentGraph();   // СОХРАНИТЬ привязку персоны к игроку — иначе слетает при заходе в сохранённую сессию
+  if (typeof persistCurrentGraph === 'function') persistCurrentGraph();   // СОХРАНИТЬ ряд игрока — иначе слетает при заходе в сохранённую сессию
+}
+// Новая партия — без игроков прошлой: участники Telegram, ряды слота и их Персона / Душа / Состояние убираются
+// (Leon 2026-09-14: «в стартовых сразу ники», «а зачем ноды к ним остаются»).
+function tgNgClearPlayers(ng) {
+  if (!ng) return;
+  for (let i = connections.length - 1; i >= 0; i--) {   // провода в розетки участников — вместе с розетками
+    const c = connections[i];
+    if (c.to && c.to.closest && c.to.closest('.tg-part') && ng.contains(c.to)) { removeConnectionEls(c); connections.splice(i, 1); }
+  }
+  ng._cast = []; ng._castById = {};
+  const list = ng.querySelector('.tg-cast-list'); if (list) list.innerHTML = '';
+  tgSyncCastCount(ng);
+  const mu = tgNgMuser(ng); if (!mu) return;
+  [...mu.querySelectorAll('.pm-mu-row')].forEach((row) => {
+    const own = new Set();
+    connections.forEach((c) => { if (c.to && c.to.closest && c.to.closest('.pm-mu-row') === row && c.from && c.from.closest) { const n = c.from.closest('.node-persona, .node-soul, .node-state'); if (n) own.add(n); } });
+    muDelRow(row);
+    own.forEach((n) => removeNode(n));
+  });
+}
+// То же для сохраняемого снимка (пресет): игроков партии в пресет не пишем — ни участников, ни рядов, ни их нод.
+function stripPlayersFromGraph(g) {
+  if (!g || !Array.isArray(g.nodes) || !Array.isArray(g.connections)) return g;
+  if (!g.nodes.some((n) => n && n.type === 'netgame')) return g;
+  const rowWire = (c) => typeof c.to[1] === 'string' && c.to[1].indexOf('muser:') === 0;
+  const legWire = (c) => typeof c.to[1] === 'string' && c.to[1].indexOf('in:cast:') === 0;
+  const drop = new Set(g.connections.filter(rowWire).map((c) => c.from[0]).filter((i) => g.nodes[i] && ['persona', 'soul', 'state'].includes(g.nodes[i].type)));
+  const remap = new Map(), nodes = [];
+  g.nodes.forEach((n, i) => { if (drop.has(i)) return; remap.set(i, nodes.length); nodes.push(n); });
+  g.connections = g.connections
+    .filter((c) => !drop.has(c.from[0]) && !drop.has(c.to[0]) && !rowWire(c) && !legWire(c))
+    .map((c) => Object.assign({}, c, { from: [remap.get(c.from[0]), c.from[1]], to: [remap.get(c.to[0]), c.to[1]] }));
+  g.nodes = nodes;
+  g.nodes.forEach((n) => {
+    if (!n || !n.data) return;
+    if (n.type === 'netgame') n.data.cast = [];
+    if ((n.type === 'prompt' || n.type === 'mprompt') && Array.isArray(n.data.plates)) n.data.plates.forEach((p) => { if (p && p.kind === 'muser') p.players = []; });
+  });
+  return g;
 }
 // Накопить реплику игрока в буфер текущего хода (ник подменён на костюм-персону). msgId — id сообщения Telegram (для правок).
 function tgNgAccum(el, authorId, from, text, msgId) {
@@ -12348,7 +12855,7 @@ async function tgNgSeedPlayerDocs(el) {
           messages: [{ role: 'system', content: instr }, { role: 'user', content: substituteMacros(user, mctx) }],
           params: { max_tokens: maxtok + tokVal('soul.think', MEM_THINK_BUDGET_DEF), temperature: temp } });
         const text = memCleanReply(rr);
-        if (text) { await rlmApi('/api/rlm/soul/tracker', { chat, name: d.name, text }); wrote = true; }
+        if (text) { await rlmApi('/api/rlm/soul/tracker', { chat, name: d.name, text: statusIsSceneDoc(d) ? soulTakeScene(soul, api, text) : text }); wrote = true; }
         else say('«' + d.name + '» · ' + (charName || 'игрок') + ': модель вернула пусто');
       }
     }
@@ -13482,7 +13989,6 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
   // этим же ходом (как в ноде «Чат»). Не на перекатах Критика/редактуры — там не новый ход.
   if (!opts.directive) await maybeRunDirector(el, apiEl).catch(() => {});
   await refreshSoulMemory(el);
-  await refreshSemanticLore(el);
   // Полный режим — комплитер; простой — нода «Систем промт»; иначе только диалог.
   let messages, sysEl = null;
   if (compEl) messages = assembleMessages(compEl, el, ctxText);
@@ -13532,7 +14038,7 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
     // температура. Промт тот же, что у хода. Пусто в таблице — работает как обычный ответ чата.
     const kk = (directive && !opts.fromCritic) ? 'chat.rewrite' : 'chat.reply';   // критик — обычный ход
     const pp = (directive && tokHas('chat.rewrite')) ? Object.assign({}, params, { max_tokens: tokVal('chat.rewrite', 512) }) : params;   // не вписано своё — лимит как у обычного хода
-    const rr = await sendTurn(apiEl, { _ctxKey: kk, base, key, model, messages: msgs, params: pp }, mctx);
+    const rr = await sendTurn(apiEl, { _ctxKey: kk, base, key, model, messages: msgs, params: pp, prefill: !!prefill }, mctx);   // prefill — серверу: продолжить префилл (Kimi на Featherless)
     let t = (rr && rr.ok) ? (chatReplyText(rr) || '(пустой ответ)') : ('⚠ ' + ((rr && rr.error) || 'ошибка'));   // мысли модели репликой не бывают
     if (rr && rr.ok && prefill) { const pf = String(prefill).trim(); const ot = t.replace(/^\s+/, ''); if (pf && ot.startsWith(pf)) t = ot.slice(pf.length).replace(/^\s+/, ''); }   // префилл — только запуск, вырезаем из ответа
     return { rr, t };
@@ -13841,7 +14347,14 @@ function tgEnsureParticipant(el, id, name) {
   if (!el._cast) { el._cast = []; el._castById = {}; }
   const isNg = !!(el.classList && el.classList.contains('node-netgame'));
   let p = el._castById[id];
-  if (p) { if (name && p.name !== name) { p.name = name; if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); tgSyncPartRow(el, p); } return p; }
+  if (p) {
+    if (name && p.name !== name) {
+      p.name = name; tgSyncPartRow(el, p);
+      if (isNg) muSetRowNick(tgNgRowOf(el, p), name);   // сменил ник в Telegram — ник его ряда в комплитере тоже (узнаём по номеру)
+      if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
+    }
+    return p;
+  }
   p = { id, name: name || id, color: TG_PART_COLORS[el._cast.length % TG_PART_COLORS.length], muted: isNg };   // сетевая игра: новый участник ЗАГЛУШЁН — станет игроком через «Это персонаж»
   el._cast.push(p); el._castById[id] = p;
   tgAddCastLeg(el, p); tgSyncCastCount(el);
@@ -14205,6 +14718,8 @@ function tgBoundName(p) {
 }
 function tgSyncCastCount(el) { const n = el.querySelector('.tg-cast-n'); if (n) n.textContent = (el._cast || []).length; }
 function tgToggleMute(el, p) {
+  // Сетевая игра: вернуть в контекст участника без ряда = одобрить его (ряд в комплитере), как «Это персонаж».
+  if (p.muted && el.classList.contains('node-netgame') && !tgNgRowOf(el, p)) { tgNgMakeCharacter(el, p); return; }
   p.muted = !p.muted; tgSyncPartRow(el, p);
   const feed = el.querySelector('.tg-feed');   // приглушить/вернуть уже показанные строки этого автора в логе
   if (feed) feed.querySelectorAll('.tg-line[data-author="' + p.id + '"]').forEach((r) => r.classList.toggle('muted', p.muted));
@@ -14258,7 +14773,7 @@ function tgOpenPartMenu(el, p, anchor) {
     '<div class="tg-pm-head"><b style="color:' + p.color + '">' + esc(p.name) + '</b>' +
       '<span>' + (boundName ? 'играет за «' + esc(boundName) + '»' : (isNg && p.muted ? 'ждёт — не игрок' : 'персонаж не задан')) + '</span></div>' +
     (isNg
-      ? '<button class="tg-pm-item" data-act="mkchar"><span class="ic">🎭</span><span><b>Это персонаж</b><i>Разглушить и создать ему Персону + Душу + Состояние в слоте мультипользователя.</i></span></button>'
+      ? '<button class="tg-pm-item" data-act="mkchar"><span class="ic">🎭</span><span><b>Это персонаж</b><i>Разглушить и добавить в комплитер. Персону, Душу и Состояние даёт кнопка «Раздать ноды».</i></span></button>'
       : '<button class="tg-pm-item" data-act="persona"><span class="ic">🎭</span><span><b>' +
         (boundName ? 'Персонаж: «' + esc(boundName) + '»' : 'Это — Персона / Персонаж') +
         '</b><i>Подключи ноду «Персонаж»/«Персона» к розетке у строки этого участника (слева).</i></span></button>') +
@@ -15991,8 +16506,10 @@ function chGreetSync(el) {
   if (!Number.isInteger(el._greetIdx) || el._greetIdx < 0 || el._greetIdx >= g.length) el._greetIdx = 0;
   if (g.length && ta && document.activeElement !== ta) ta.value = g[el._greetIdx] || '';
   if (nav) {
-    nav.style.display = g.length > 1 ? '' : 'none';
-    const c = nav.querySelector('.ch-greet-count'); if (c) c.textContent = (el._greetIdx + 1) + ' / ' + g.length;
+    nav.style.display = '';   // ＋ нужен и когда приветствие одно (или его ещё нет) — прячем только листалку и ✕
+    const one = g.length < 2;
+    nav.querySelectorAll('.ch-greet-prev, .ch-greet-next, .ch-greet-del').forEach((b) => { b.style.display = one ? 'none' : ''; });
+    const c = nav.querySelector('.ch-greet-count'); if (c) c.textContent = (el._greetIdx + 1) + ' / ' + Math.max(1, g.length);
   }
 }
 function seedGreeting(node, force) {
@@ -16047,7 +16564,12 @@ function postRender(frame, node) {                                  // прок�
   const group = (typeof isGroupChat === 'function' && isGroupChat(node)) ? { started: !!node._groupStarted, scene: node._groupScene || '', auto: !!node._grpAuto } : null;
   const rndNode = (typeof randomNodeForChat === 'function') ? randomNodeForChat(node) : null;   // «Рандомайзер» этого чата
   const randomOn = !!(rndNode && (rndNode.querySelector('.rnd-on') || {}).checked && randomNext(rndNode));
-  frame.contentWindow.postMessage({ type: 'render', msgs: node._msgs, names: chatNames(node), avatars: chatAvatars(node), slotAvatars: chatSlotAvatars(node), stateDefs, party: chatPartyData(node), group, randomOn }, '*');
+  // Пресеты ноды API (модель + сэмплеры) — окно фидбека 💬 даёт выбрать их прямо из чата.
+  // Относятся к ОСНОВНОМУ API чата (тот, чей выход воткнут в ноду «Чат»), его же метку и шлём.
+  const apiN = (typeof chatApiNode === 'function') ? chatApiNode(node) : null;
+  const apiPresets = (typeof getApiPresets === 'function') ? getApiPresets().map((p) => ({ id: p.id, name: p.name })) : [];
+  const apiPreset = (apiN && apiN.dataset.preset) || '';
+  frame.contentWindow.postMessage({ type: 'render', msgs: node._msgs, names: chatNames(node), avatars: chatAvatars(node), slotAvatars: chatSlotAvatars(node), stateDefs, party: chatPartyData(node), group, randomOn, apiPresets, apiPreset }, '*');
 }
 function renderChatLogs(node) {
   if (!node) return;
@@ -16077,6 +16599,17 @@ function chatProc(node, state, text, opts) {
 }
 // Команды из интерфейса чата (iframe): send / newchat / regen / edit. Находим ноду по источнику.
 // Мутирующие историю команды (перед ними — синхрон лога с сервером, чтобы не затереть другое устройство).
+// Пресет, выбранный в окне фидбека 💬, → ОСНОВНОЙ API чата (и его «Опции»). Переключение насовсем:
+// дальше чат отвечает уже этой моделью, как если бы пресет выбрали в самой ноде. Тот же пресет,
+// что уже стоит на ноде, не применяем — иначе ручная правка сэмплеров молча откатывалась бы к пресету.
+function chatApplyApiPreset(node, id) {
+  const pid = String(id || '').trim(); if (!pid) return;
+  const apiEl = (typeof chatApiNode === 'function') ? chatApiNode(node) : null; if (!apiEl) return;
+  if ((apiEl.dataset.preset || '') === pid) return;
+  const p = apiPresetById(pid); if (!p) return;
+  applyApiPreset(apiEl, p);
+  chatToast(node, 'модель переключена: ' + (p.name || 'пресет'), 'ok', { title: 'ПРЕСЕТ API', icon: '⇄', autohide: 4000 });
+}
 const MUTATES_LOG = ['send', 'regen', 'swipe', 'fb-del', 'feedback', 'feedback-learn', 'critic-run', 'critic-approve-feedback', 'critic-approve-rewrite', 'edit', 'delete-mes', 'delete-from', 'branch', 'group-start', 'group-next', 'group-auto', 'translate-mes', 'mes-tr-toggle'];
 window.addEventListener('message', async (e) => {
   const m = e.data || {};
@@ -16113,10 +16646,12 @@ window.addEventListener('message', async (e) => {
   else if (m.type === 'soul-confirm') soulConfirm(node, !!m.yes);  // лента «Душа: обновить память?» → ✓ пишем / ✕ не сейчас
   else if (m.type === 'feedback') {                                              // 💬 «Переписать» → перекат с замечанием впереди, БЕЗ авто-урока (урок — отдельная кнопка «Записать в блокнот»)
     const fb = String(m.text || '').trim(); if (!fb || !fbLastOnly(m.idx)) return;
+    chatApplyApiPreset(node, m.preset);                                          // выбранный в окне пресет → основной API чата (перекат уже на новой модели)
     feedbackRegen(node, m.idx, fb, { noLesson: true, reason: m.reason, soft: m.mode === 'soft' });   // рассуждение при переписи (селектор в окне фидбека; node = как в «Опциях»)
   }
   else if (m.type === 'feedback-learn') {                                        // 💬 «Записать в блокнот» → И перекат по замечанию, И урок критику в блокнот
     const fb = String(m.text || '').trim(); if (!fb || !fbLastOnly(m.idx)) return;
+    chatApplyApiPreset(node, m.preset);                                          // тот же выбор модели, что и у «Переписать»
     feedbackRegen(node, m.idx, fb, { reason: m.reason, soft: m.mode === 'soft' });   // noLesson НЕ задан → feedbackRegen и перепишет ответ, и запишет урок (criticLearnFromFeedback)
   }
   else if (m.type === 'critic-run') criticJudge(node, null, { manual: true });   // 🔍 «Критик» под чатом → судья проверяет последний ответ ИИ
@@ -16334,6 +16869,13 @@ function semanticScore(loreEl, phrase /* , text */) {
 
 // Совпадает ли keyword-запись `e` с текстом: основной ключ + вторичные (И/НЕ), целое слово, регистр.
 // Общий для движка (loreText) и теста прозрачности (читалка 🕯). Возвращает true/false.
+// Состав сцены для переклички: строки, что положили ноды «Душа» при разборе дока «Status».
+// Разбор не удался — там лежит весь текст дока, и имена ищутся по нему тем же keyword-матчем.
+function loreSceneLine() {
+  const out = [];
+  document.querySelectorAll('.node-soul:not(.nvis)').forEach((s) => { const t = String(s._sceneLine || '').trim(); if (t && out.indexOf(t) < 0) out.push(t); });
+  return out.join(' · ');
+}
 function loreKeywordMatch(e, text) {
   const cs = !!e.case, whole = !!e.whole;
   const t = cs ? String(text || '') : String(text || '').toLowerCase();
@@ -16362,7 +16904,10 @@ function loreText(loreEl, ctx) {
   const msgs = Array.isArray(ctx) ? ctx : (ctx ? [{ text: ctx }] : []);
   const scan = parseInt((loreEl.querySelector('.lb-scan') || {}).value, 10);
   const slice = (scan > 0) ? msgs.slice(-scan) : msgs;
-  const raw = slice.map((m) => (m && m.text) || '').join(' ');
+  // ПЕРЕКЛИЧКА: к тексту последних сообщений добавляем состав сцены из дока «Status» (кто в комнате,
+  // где действие). Досье того, кто стоит рядом и молчит, иначе выпадает из промта — имя в живом
+  // диалоге звучит редко. Ушедших (`departed`) в строку не кладём: их держит только липкость.
+  const raw = [slice.map((m) => (m && m.text) || '').join(' '), loreSceneLine()].filter(Boolean).join(' · ');
   // Номер текущего сообщения (для range/chain) — счёт реплик диалога (служебные sys не в счёт).
   const msgNo = msgs.filter((m) => m && (m.role === 'user' || m.role === 'char')).length;
   // Подключён ли «Эмбеддер» боковым входом (для semantic).
@@ -16371,9 +16916,15 @@ function loreText(loreEl, ctx) {
   // Память ноды: id записи → номер сообщения ПЕРВОГО срабатывания (для якоря chain + одноразовости).
   const fired = loreEl._fired || (loreEl._fired = {});
   const firedNow = {};
+  // Липкость: сработавшая по ключу запись держится ещё N ходов и гаснет. Окно ЖЁСТКОЕ — пока оно идёт, запись
+  // в промте, но окно не продлевается (иначе запись, которая в промте по липкости, продлевает себя вечно).
+  // Хранится в памяти ноды: {id: {from, until}}; `from` защищает от перемотки назад (окно «из будущего» не считается).
+  const stick = loreEl._sticky || (loreEl._sticky = {});
+  const stickNow = {};
+  const stickyTurnsOf = (e) => { const own = parseInt(e.sticky, 10); if (own > 0) return own;
+    const book = parseInt((loreEl.querySelector('.lb-sticky') || {}).value, 10); return book > 0 ? book : LORE_STICKY_DEF; };
   // Собираем ВСЕ сработавшие записи как кандидатов; приоритет (order) и бюджет применяем ПОСЛЕ — как в ST.
   const candidates = [];
-  const semPass = [];   // смысловые записи, прошедшие порог: {score, emit} — в кандидаты попадут лучшие N
   // Режиссёр: динамически сгенерированное событие (одноразово на этот ход) — как приоритетный кандидат, мимо бюджета.
   if (loreEl._genEvent && loreEl._genEvent.text) candidates.push({ content: String(loreEl._genEvent.text).trim(), name: '🎬 Событие сцены', order: 1000, ignore: true, mm: false });
   (loreEl._entries || []).forEach((e) => {
@@ -16382,9 +16933,12 @@ function loreText(loreEl, ctx) {
     const probRaw = parseInt(e.prob, 10);
     const passProb = () => !(probRaw >= 0 && probRaw < 100) || (Math.random() * 100 < probRaw);
     // Срабатывание отмечаем сразу (якорь цепочек). В промт запись пойдёт после сортировки и бюджета.
-    const emit = () => {
+    const emit = (faded) => {
       if (fired[e.id] == null && firedNow[e.id] == null) firedNow[e.id] = msgNo;
-      candidates.push({ content, name: loreLabel(e), order: parseInt(e.order, 10) || 0, ignore: !!e.ignoreBudget, mm: !!e.mm });
+      if (!faded && e.trigger === 'keyword' && !e.npc && !e.guest) {    // поймали ключом → завести липкое окно
+        const N = stickyTurnsOf(e); if (N > 0) stickNow[e.id] = { from: msgNo, until: msgNo + N };
+      }
+      candidates.push({ content, name: loreLabel(e) + (faded ? ' ·' : ''), order: parseInt(e.order, 10) || 0, ignore: !!e.ignoreBudget, mm: !!e.mm, faded: !!faded });
     };
     // Гость/визитёр — угасание по ходам (sticky) + ручной «Позвать/Отозвать/Выключить». Бинарно: летит или нет.
     if (e.npc || e.guest) {
@@ -16405,6 +16959,8 @@ function loreText(loreEl, ctx) {
     const t = e.trigger;
     if (t === 'always_on' || e.constant) { if (passProb()) emit(); return; }
     if (t === 'keyword') {
+      const st = stick[e.id];
+      if (st && msgNo > st.from && msgNo <= st.until) { emit(true); return; }   // липкое окно идёт: держим, ключи не проверяем, окно НЕ продлеваем
       if (!loreKeywordMatch(e, raw)) return;                            // ключи: основной + вторичные (И/НЕ), целое слово, регистр
       if (passProb()) emit();
       return;
@@ -16425,47 +16981,13 @@ function loreText(loreEl, ctx) {
       if (passProb()) emit();
       return;
     }
-    if (t === 'semantic') {                                             // SW: смысл сцены ≈ фраза-эталон
-      if (!hasEmbedder) return;                                         // нет «Эмбеддера» → выкл (как ST)
-      const key = String(e.semTrigger || '').trim();
-      const score = semanticScore(loreEl, key, raw);
-      const thr = parseFloat(e.semThreshold);
-      if (score != null && score >= (isFinite(thr) ? thr : SEM_THR_DEF) && passProb()) semPass.push({ score, key, emit });   // в промт — только лучшие N (ниже)
-      return;
-    }
-    if (t === 'vectorized') {                                           // ST: смысл сцены ≈ ТЕКСТ самой записи
-      if (!hasEmbedder) return;                                         // нет «Эмбеддера» → выкл
-      const score = semanticScore(loreEl, content, raw);               // эталон — содержимое записи, без фразы
-      const thr = parseFloat(e.vecThreshold);
-      if (score != null && score >= (isFinite(thr) ? thr : SEM_THR_DEF) && passProb()) semPass.push({ score, key: content, emit });
-      return;
-    }
   });
-  // Смысловые записи соревнуются БАЛЛОМ: порог лишь отсекает совсем далёкое, а в промт идут N самых близких.
-  // Иначе (замер 2026-09-13) эмбеддер давал всем почти одинаковый балл, порог пропускал 40 из 40, и бюджет
-  // набирал записи по приоритету — в сцену в Гильдии уезжали вождиха гоблинов и ведьма.
-  const semK = Math.max(0, parseInt((loreEl.querySelector('.lb-semk') || {}).value, 10));
-  const semN = Number.isFinite(semK) ? semK : LORE_SEM_TOPK_DEF;
-  const semByPlayer = Array.isArray(loreEl._semByPlayer) && loreEl._semByPlayer.length ? loreEl._semByPlayer : null;
-  if (semByPlayer) {
-    // Сетевая игра: N делится между игроками по кругу — каждому самая близкая к ЕГО заявке запись, которую ещё не взяли.
-    const lists = semByPlayer.map((p) => semPass.filter((x) => typeof p.scores[x.key] === 'number').sort((a, b) => p.scores[b.key] - p.scores[a.key]));
-    const picked = [];
-    while (picked.length < semN) {
-      let added = false;
-      for (const list of lists) {
-        if (picked.length >= semN) break;
-        const next = list.find((x) => !picked.includes(x));
-        if (next) { picked.push(next); added = true; }
-      }
-      if (!added) break;
-    }
-    picked.forEach((x) => x.emit());
-  } else semPass.sort((a, b) => b.score - a.score).slice(0, semN).forEach((x) => x.emit());
   Object.assign(fired, firedNow);                                       // зафиксировать первые срабатывания
+  Object.assign(stick, stickNow);                                       // зафиксировать липкие окна этого хода
   // Бюджет как в ST: приоритет по order (по убыванию), лимит в токенах (оценка), ignoreBudget всегда влезает.
   // Ручные записи (не Хроника) ВСЕГДА важнее авто-глав Хроники: сначала не-mm, потом mm; внутри группы — по order.
-  candidates.sort((a, b) => (a.mm === b.mm) ? (b.order - a.order) : (a.mm ? 1 : -1));
+  // Порядок: свежесработавшие выше угасающих (липких), ручные выше авто-глав Хроники, внутри группы — по order.
+  candidates.sort((a, b) => (a.faded !== b.faded) ? (a.faded ? 1 : -1) : (a.mm === b.mm) ? (b.order - a.order) : (a.mm ? 1 : -1));
   const budgetTok = loreBudgetTokens(loreEl);
   const estTok = (s) => Math.ceil(s.length / 3.5);                      // грубая оценка токенов (без токенайзера)
   const parts = [], firedNames = []; let used = 0, dropped = 0, overflow = false;
@@ -16483,7 +17005,11 @@ function loreBudgetTokens(loreEl) {
   const abs = parseInt((loreEl.querySelector('.lb-budget') || {}).value, 10);
   if (abs > 0) return abs;
   const pct = parseInt((loreEl.querySelector('.lb-budget-pct') || {}).value, 10) || 25;
-  const opt = document.querySelector('.node-opts');
+  // Нода «Опции» ИМЕННО ЭТОГО конвейера (комплитер → API → Опции), как у счётчиков токенов.
+  // Было `document.querySelector('.node-opts')` — ПЕРВАЯ нода опций на холсте: у графа с переводом
+  // это «Опции · Перевод» с контекстом 4096, и бюджет лорбука выходил 1024 токена вместо 8000 —
+  // одна запись на 3000 символов съедала его целиком, остальные уходили в «…+N срезано бюджетом».
+  const opt = (typeof tokOptsNode === 'function' ? tokOptsNode() : null) || document.querySelector('.node-opts:not(.nvis)');
   const ins = opt ? opt.querySelectorAll('.prm input') : [];
   const maxCtx = parseInt((ins[1] || {}).value, 10) || 4096;            // 2-е поле «Опций» = «Контекст, ток.»
   let b = Math.max(1, Math.round(pct * maxCtx / 100));
@@ -17677,7 +18203,7 @@ async function generateReply(node, opts) {
   // _saveTo: сервер САМ положит ответ в лог этого чата, как только модель ответит. Нужно для телефона:
   // вкладка засыпает, запрос обрывается — раньше ответ пропадал, и в истории оставался плейсхолдер «…».
   const saveTo = (node && node._chatId) ? { key: chatlogKeyOf(node._chatId) } : null;
-  const r = await sendTurn(apiEl, { _ctxKey: tokKey, _ctxNode: node, _saveTo: saveTo, base, key, model, messages, params }, mctx);   // перекат по фидбеку идёт под своим ключом chat.rewrite
+  const r = await sendTurn(apiEl, { _ctxKey: tokKey, _ctxNode: node, _saveTo: saveTo, base, key, model, messages, params, prefill: !!prefill }, mctx);   // перекат по фидбеку идёт под своим ключом chat.rewrite; prefill — серверу: продолжить префилл (Kimi на Featherless)
   if (node._procAbort) { node._procCancel = null; node._msgs.splice(idx, 1); renderChatLogs(node); return; }   // ✕ нажали: выкинуть плейсхолдер и результат
   const grp = (typeof isGroupChat === 'function' && isGroupChat(node));
   // Группа: пустой ответ модели (частый огрех окончания массива) — НЕ засоряем историю «(пустой ответ)»:
@@ -18418,6 +18944,16 @@ buildOptions();
 // Статичные контролы (режим, ширина) — вне #opt-list, подключаем один раз.
 const modeSel = document.querySelector('#immersive [data-mode]');
 modeSel.addEventListener('change', () => { applyOpt(modeSel); buildOptions(); }); // сменить режим + перестроить панель под него
+// Подложка поля чата: ползунок в процентах, в чат уходит доля (0…1) — иначе rgba() её не примет.
+const tintInp = document.querySelector('#immersive [data-var="--rlm-sheld-tint"]');
+if (tintInp) {
+  const send = () => post({ type: 'var', name: '--rlm-sheld-tint', value: String((parseInt(tintInp.value, 10) || 0) / 100) });
+  const rd = document.createElement('span'); rd.className = 'opt-val';
+  const upd = () => (rd.textContent = tintInp.value + '%');
+  upd(); tintInp.after(rd);
+  tintInp.addEventListener('input', () => { upd(); send(); });
+  stFrame.addEventListener('load', send);   // чат перезагрузился — вернуть подложку
+}
 const widthInp = document.querySelector('#immersive [data-var="--rlm-sheld-width"]');
 if (widthInp) {
   widthInp.addEventListener('input', () => applyOpt(widthInp));
@@ -18433,6 +18969,8 @@ function resetDefaults() {
   const m = document.querySelector('#immersive [data-mode]'); if (m) m.value = 'ripplestyle';
   const w = document.querySelector('#immersive [data-var="--rlm-sheld-width"]');
   if (w) { w.value = 100; w.dispatchEvent(new Event('input')); }
+  const t = document.querySelector('#immersive [data-var="--rlm-sheld-tint"]');
+  if (t) { t.value = 45; t.dispatchEvent(new Event('input')); }
   buildOptions(); // пересоздать контролы со значениями по умолчанию (под ripple)
 }
 document.getElementById('opt-default').addEventListener('click', resetDefaults);
@@ -18835,6 +19373,7 @@ function nodeValues(el, type) {
     provList: ((el.querySelector('.f-provider') || {}).value || '').trim(),                 // «Хостеры»: список провайдеров OpenRouter через запятую
     provStrict: ((el.querySelector('.f-provider-strict') || {}).checked !== false),         // только они, без замен
     mode: el.dataset.mode || 'chat',
+    preset: el.dataset.preset || '',                                   // выбранный пресет ноды (модель + сэмплеры) — чтобы метка пережила перезаход в чат
     label: ((el.querySelector('.node-head .label') || {}).textContent || '').trim(),
   };
   if (type === 'options') return { values: [...el.querySelectorAll('.prm input')].map((i) => i.value), reason: (el.querySelector('.opt-reason') || {}).value || 'off', label: ((el.querySelector('.node-head .label') || {}).textContent || '').trim() };
@@ -18872,7 +19411,7 @@ function nodeValues(el, type) {
     avatar: el.querySelector('.persona-ava').style.backgroundImage || '',
     desc: trSafeVal(el.querySelector('.pa-desc')),
   };
-  if (type === 'lorebook' || type === 'director') return { entries: (el._entries || []).map((e) => ({ ...e })), scan: (el.querySelector('.lb-scan') || {}).value || '3', ...(el.querySelector('.lb-semk') ? { semk: el.querySelector('.lb-semk').value || String(LORE_SEM_TOPK_DEF) } : {}), scope: (el.querySelector('.lb-scope-dd') || {}).value || '', gen: el._gen ? { ...el._gen, eventDefs: { ...(el._gen.eventDefs || {}) } } : undefined };
+  if (type === 'lorebook' || type === 'director') return { entries: (el._entries || []).map((e) => ({ ...e })), scan: (el.querySelector('.lb-scan') || {}).value || '3', ...(el.querySelector('.lb-sticky') ? { sticky: el.querySelector('.lb-sticky').value || String(LORE_STICKY_DEF) } : {}), ...(el.querySelector('.lb-budget') ? { budget: el.querySelector('.lb-budget').value || '' } : {}), scope: (el.querySelector('.lb-scope-dd') || {}).value || '', gen: el._gen ? { ...el._gen, eventDefs: { ...(el._gen.eventDefs || {}) } } : undefined };
   if (type === 'critic') return {
     trigger: (el.querySelector('.crit-trigger') || {}).value || 'button',
     think: (el.querySelector('.crit-reason') || {}).value || 'low',
@@ -19000,6 +19539,7 @@ function nodeValues(el, type) {
     delta: (el.querySelector('.soul-delta') || {}).value || '14',
     topk: (el.querySelector('.soul-topk') || {}).value || '3',
     maxtok: (el.querySelector('.soul-maxtok') || {}).value || '400',
+    reason: (el.querySelector('.soul-reason') || {}).value || 'off',
     temp: (el.querySelector('.soul-temp') || {}).value || '0.3',
     promptMode: el._promptMode || 'single',
     h: el._docH || null,
@@ -19033,6 +19573,7 @@ function applyValues(el, type, d) {
       s.dataset.filled = '1';
       if (d.instruct) s.value = d.instruct;
     });
+    if (d.preset != null) { el.dataset.preset = d.preset; if (typeof fillApiPresetSelect === 'function') fillApiPresetSelect(el); }   // выбранный пресет ноды
     if (d.label) { const l = el.querySelector('.node-head .label'); if (l) l.textContent = d.label; }
   } else if (type === 'options') {
     const ins = [...el.querySelectorAll('.prm input')];
@@ -19167,7 +19708,7 @@ function applyValues(el, type, d) {
     }
     const setV = (sel, v) => { const n = el.querySelector(sel); if (n && v != null) n.value = v; };
     setV('.soul-batch', d.batch); setV('.soul-delta', d.delta); setV('.soul-topk', d.topk);
-    setV('.soul-maxtok', d.maxtok); setV('.soul-temp', d.temp);
+    setV('.soul-maxtok', d.maxtok); setV('.soul-temp', d.temp); if (d.reason != null) setV('.soul-reason', d.reason);
     el._promptMode = d.promptMode || 'single'; setV('.soul-prompt-preset', el._promptMode);   // режим набора промтов (селектор в шапке «Доки памяти»)
     if (d.h) { el._docH = d.h; el.style.setProperty('--soul-doc-h', d.h + 'px'); }
   } else if (type === 'chat' || type === 'groupchat') {
@@ -19210,7 +19751,8 @@ function applyValues(el, type, d) {
       loreRenderList(el); loreRenderEditor(el);
     }
     if (d.scan != null) { const s = el.querySelector('.lb-scan'); if (s) s.value = d.scan; }
-    if (d.semk != null) { const s = el.querySelector('.lb-semk'); if (s) s.value = d.semk; }
+    if (d.sticky != null) { const s = el.querySelector('.lb-sticky'); if (s) s.value = d.sticky; }   // липкость книги (снимок чата)
+    if (d.budget != null) { const b = el.querySelector('.lb-budget'); if (b) b.value = d.budget; }
     if (d.scope) { const sdd = el.querySelector('.lb-scope-dd'); if (sdd) { sdd.value = d.scope; const l = el.querySelector('.node-head .label'); if (l) l.textContent = loreTitleOf(d.scope); } }
     if (typeof loreWbSync === 'function') loreWbSync(el);   // кнопка «Ворлд-бук» — только у области «Мир»; область сменили напрямую → пересинхронить
     if (d.gen && el.classList.contains('node-director')) {   // восстановить опции генерации Режиссёра (недостающие ключи — из дефолтов)
@@ -19897,10 +20439,9 @@ const NETGAME_SOUL_DOCS_NOTE = `📝 ДОКИ ДУШ — кто что помн�
 Ход → Душа МИРА обновляется ПЕРВОЙ → её свежая Сцена и числа игрока уходят Душам игроков как контекст
 («это уже написано, не пересказывай»). Поэтому мир и игроки пишут разное, а не одно и то же.`;
 
-// Пресет «Сетевая игра» (телеграм-мультиплеер): комплитер со СЛОТОМ МУЛЬТИПОЛЬЗОВАТЕЛЯ (ряды игроков, у каждого
-// Персона+Душа+Состояние) → API → нода «Сетевая игра». Карточка = движок/рассказчик ({{char}}); систем-промт =
-// универсальные правила. Лорбуки/Режиссёр/Хроника/Эмбеддер — как обычно. Реальные игроки заполнят имена рядов
-// сами (обратная связь muserSyncFromNode). Живая логика хода (компиляция + пачка-души) — следующие фазы.
+// Пресет «Сетевая игра» (телеграм-мультиплеер): комплитер со СЛОТОМ МУЛЬТИПОЛЬЗОВАТЕЛЯ → API → нода «Сетевая игра».
+// Карточка = движок/рассказчик ({{char}}); систем-промт = универсальные правила. Лорбуки/Режиссёр/Хроника/Эмбеддер —
+// как обычно. Рядов игроков в пресете нет: ряд появляется, когда админ одобрил участника, ноды — «Раздать ноды».
 function buildNetgamePreset() {
   clearGraph();
   const setLbl = (n, t) => { const l = n.querySelector('.node-head .label'); if (l) l.textContent = t; };
@@ -19914,22 +20455,8 @@ function buildNetgamePreset() {
   // ── Комплитер со слотом мультипользователя ──
   const comp = createNode('prompt', 760, 40);
   const list = comp.querySelector('.pm-list');
-  const seats = ['pl1', 'pl2', 'pl3'];
-  const muPlate = makeMuserItem({ id: 'muser', name: 'Мультипользователь', kind: 'muser', on: true, custom: true, players: seats.map((id) => ({ id, name: '' })) }, list);
+  const muPlate = makeMuserItem({ id: 'muser', name: 'Мультипользователь', kind: 'muser', on: true, custom: true, players: [] }, list);
   list.appendChild(muPlate); relayoutPlates(list);
-  // ── Игроки: на каждого Персона + Душа + Состояние → его ряд слота ──
-  const playerSouls = [], playerStates = [];
-  seats.forEach((sid, i) => {
-    const y = 40 + i * 620;
-    const persona = createNode('persona', -1560, y);
-    const psoul = createNode('soul', -1180, y);
-    const pstate = createNode('state', -560, y);
-    wire(persona, 'out', comp, 'muser:muser:' + sid + ':persona');
-    wire(psoul, 'out', comp, 'muser:muser:' + sid + ':soul');
-    wire(pstate, 'out', comp, 'muser:muser:' + sid + ':state');
-    applyNetgameSoulDocs(psoul);   // Душа игрока: дефолтные доки выкл + «Inventory» (трекер)
-    playerSouls.push(psoul); playerStates.push(pstate);
-  });
   // ── Общие плашки: правила → main; карточка-движок → карточные плашки ──
   wire(char, 'field:system', sysRules, 'in');   // system_prompt карточки (правила) → Систем промт → main
   wire(sysRules, 'out', comp, 'plate:main');
@@ -19954,9 +20481,10 @@ function buildNetgamePreset() {
   wire(emb, 'out', worldSoul, 'in:embedder');
   // ── Своя модель для записи Душ (мир + игроки). В базовом пресете нода ПУСТАЯ (решение Leon: «апишки пустые»):
   //    пустая — Души пишет модель ведущего; вписал модель — пишет она (в пресетах под модель — DeepSeek, как на стенде).
+  //    Души игроков, розданные позже («Раздать ноды»), цепляются к этой же ноде (muCreateNodesForRow).
   const soulsApi = createNode('api', -1180, 1900);
   applyValues(soulsApi, 'api', NETGAME_EMPTY_API);
-  [worldSoul, ...playerSouls].forEach((s) => wire(soulsApi, 'out', s, 'in:api'));
+  wire(soulsApi, 'out', worldSoul, 'in:api');
   // ── API / нода «Сетевая игра» ──
   const api = createNode('api', 1160, 60);
   const opts = createNode('options', 1160, 620);
@@ -20010,7 +20538,7 @@ function buildNetgamePreset() {
   wire(trans, 'out', trApi, 'in:prompt');
   applyValues(trApi, 'api', NETGAME_EMPTY_API);   // пустая — переводит модель ведущего
   redrawWires();
-  return { char, sysRules, comp, api, opts, netgame, critic, criticApiEl, criticOpts, soulsApi, worldSoul, playerSouls, playerStates, trans, trApi, trOpts, rnd };
+  return { char, sysRules, comp, api, opts, netgame, critic, criticApiEl, criticOpts, soulsApi, worldSoul, trans, trApi, trOpts, rnd };
 }
 
 // Версия сида «Сетевая игра» (штамп; посев ОДНОРАЗОВЫЙ — bump НЕ пересобирает существующий пресет, ensureNetgamePreset сеет только при отсутствии).
@@ -20023,7 +20551,7 @@ const NETGAME_EMPTY_API = { base: '', model: '', mode: 'chat' };
 const NETGAME_SOULS_API = { provider: 'OpenRouter', base: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-v4-pro', mode: 'chat' };
 const NETGAME_CRITIC_API = { provider: 'OpenRouter', base: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-v4-pro', mode: 'chat', provList: 'StreamLake, Baidu, DigitalOcean', provStrict: true };
 const NETGAME_CRITIC_OPTS = { values: ['1500', '32000', '0.4', '0', '0', '0', '1', '1', '0', '-1'], reason: 'off', label: 'Опции · Критик' };
-const NETGAME_TR_API = { provider: 'OpenRouter', base: 'https://openrouter.ai/api/v1', model: 'z-ai/glm-5', mode: 'chat' };
+const NETGAME_TR_API = { provider: 'OpenRouter', base: 'https://openrouter.ai/api/v1', model: 'z-ai/glm-5', mode: 'chat', provList: 'Baidu, Novita', provStrict: true };   // хостеры строго: остальные пишут рассуждения прямо в перевод (1 из 8, 2026-09-15)
 const NETGAME_TR_OPTS = { values: ['1000', '4096', '0.5', '0', '0', '40', '0.5', '1.2', '0', '-1'], reason: 'off', label: 'Опции · перевод' };
 const NETGAME_HP_VAR = { name: 'HP', type: 'int', min: '0', max: '100', def: '100', desc: 'Health. At 0 the character is dead — permanently, no revival.', enabled: true };
 // «Правила игры» v3 — текст, на котором шли партии GLM-4.7 и Kimi на стенде 2026-09-13.
@@ -20061,25 +20589,18 @@ const NETGAME_RULES_GLM47 = `ALSO —
 // G1 жесты за игрока 7/12 · G2 одежда не по листу 4/12 · G3 бросок NPC не исполнен 2/12 · G4 лорбук против истории 5/12 и
 // новая улица из слов игрока 1/12 · G5 «голос ровный», звуки в звёздочках, каменное безразличие NPC 7/12, 4/12, 5/12 ·
 // G6 привычка NPC из лорбука не показана 2/12.
-const NETGAME_RULES_KIMI = `ALSO —
-- Use each image, simile and sound only once per game. If an earlier reply or the memory already has wind in the leaves, a rut "deep enough to…", "something sweet", "a sound like…" or a voice like an unoiled gate, pick another detail or none.
-- Each NPC keeps signs of their own. Never pass one NPC's gesture, voice or habit (hands coming apart, an untouched cup, "does not look at X, looks at Y") to another person.
-- A player's hands and eyes do only what their line says. "Looks back and huddles closer" never becomes a grip, a point or a catch.
-- Card and lorebook examples are patterns, not text: never reuse their images (a rope bridge, a forest on the left keeping pace, "mended by nobody", "a sound like a dropped…"). Never repeat an NPC's example lines word for word; give the facts in new words.
-- Do not answer a player's guess with a new fact about the world. If the entries you were given do not say it, the NPC does not know it: no new place, custom, whereabouts of a missing person, or second name for a known place.`;
-// K1 повтор образов (ветер в листве 7/10, «a sound like» 8/10) · K2 примета одного NPC у другого 5/5 после префилла ·
-// K3 руки и глаза игрока сверх строки 3/5 · K4 образы и реплики из примеров карточки и лорбука 2/5 · K5 новый факт мира
-// в ответ на догадку игрока 2/5.
+// У Kimi своего блока нет: вырезан 2026-09-15 по слову Leon («вот это всё только для Kimi вырезаем») — Kimi идёт на общих «Правилах игры».
 const netgameModelRulesText = (cfg) => NETGAME_RULES_V3 + (cfg && cfg.rules ? '\n\n' + cfg.rules : '');
-// Префилл Kimi (текстовый режим): ограничитель мыслей, с ним шли живые ходы 6–10 на стенде.
-const NETGAME_KIMI_PREFILL = '<think>\nTwo lines only. For each player: what their action meets in the world, and what the roll decides.\nDo not restate the scene, do not plan the prose.\n</think>';
 // Пресеты под модель ведущего — сборка стенда 2026-09-13 целиком (решение Leon: «два пресета GLM и Kimi», «собери стенд»).
-// Сэмплеры: GLM-4.7 — как в партии GLM (мысли выкл), Kimi — из пресета Leon «Kimi K3» (мысли «коротко», текстовый режим).
+// Сэмплеры: GLM-4.7 — как в партии GLM (мысли выкл), Kimi — из пресета Leon «Kimi K3» (мысли «коротко»).
+// Kimi — K2.6 чатом без префилла (Leon 2026-09-14: «смысла нет в thinking, если есть модель, где это опционально»; текстовый
+// режим был нужен только префиллу-ограничителю мыслей K2-Thinking). Замер через /generate: K2.6 с мыслями «низко» — 8,6 с,
+// без мыслей — 1,8 с; K2-Thinking в тесте 13.09 на Featherless числится холодной.
 const NETGAME_MODEL_PRESETS = [
   { name: 'Сетевая игра · GLM-4.7', api: { provider: 'Featherless', base: 'https://api.featherless.ai/v1', model: 'zai-org/GLM-4.7', mode: 'chat' },
     opts: { values: ['4000', '32001', '0.9', '0', '0', '0', '1', '1', '0.05', '-1'], reason: 'off', label: 'Опции · Комплитер' }, prefill: '', rules: NETGAME_RULES_GLM47 },
-  { name: 'Сетевая игра · Kimi', api: { provider: 'Featherless', base: 'https://api.featherless.ai/v1', model: 'moonshotai/Kimi-K2-Thinking', mode: 'text', instruct: 'Moonshot AI' },
-    opts: { values: ['8000', '24000', '0.65', '0', '0', '0', '0.92', '1', '0', '-1'], reason: 'low', label: 'Опции · Комплитер' }, prefill: NETGAME_KIMI_PREFILL, rules: NETGAME_RULES_KIMI },
+  { name: 'Сетевая игра · Kimi', api: { provider: 'Featherless', base: 'https://api.featherless.ai/v1', model: 'moonshotai/Kimi-K2.6', mode: 'chat' },
+    opts: { values: ['8000', '24000', '0.65', '0', '0', '0', '0.92', '1', '0', '-1'], reason: 'low', label: 'Опции · Комплитер' }, prefill: '' },
 ];
 function buildNetgameModelPreset(cfg) {
   const g = buildNetgamePreset();
@@ -20091,7 +20612,6 @@ function buildNetgameModelPreset(cfg) {
   applyValues(g.trApi, 'api', NETGAME_TR_API);
   applyValues(g.trOpts, 'options', NETGAME_TR_OPTS);
   applyValues(g.critic, 'critic', { think: 'low', ctx: '6', sysRole: true, prefill: true, tally: true });
-  g.playerStates.forEach((st, i) => applyValues(st, 'state', { vars: [{ ...NETGAME_HP_VAR, id: 'svhp' + (i + 1) }] }));
   redrawWires();
 }
 // Посев пресетов под модель: один раз на имя — свои правки пользователя в пресете не затираются.
@@ -20345,6 +20865,13 @@ function storeSetFlush(k, keepalive) {
       // Успех: если в очереди всё ещё ЭТОТ объект — новее ничего не появлялось (любой lsSet кладёт НОВЫЙ объект),
       // значит доставлено. Сравнивать с `db[k]` по ссылке нельзя: фоновое обновление зеркала подменяет объект,
       // и запись зацикливалась — старое значение бесконечно затирало свежее на сервере.
+      // Сервер вернул СЛИТЫЙ список чатов: в нашей памяти не было чата, созданного на другом
+      // устройстве (телефон отстал от ПК). Берём серверную версию себе, иначе следующая запись
+      // снова придёт без него, а меню до перезагрузки будет показывать неполный список.
+      if (r && r.ok && r.merged && k.indexOf('rlm.chats.') === 0) {
+        db[k] = r.merged; _lsSig[k] = JSON.stringify(r.merged);
+        try { if (typeof startMenuRender === 'function') startMenuRender(); } catch (_) {}
+      }
       if (r && r.ok) { if (_setPending[k] === p) delete _setPending[k]; else storeSetFlush(k); return; }
       storeSetRetry(k);
     })
@@ -20602,7 +21129,7 @@ function stripPlayFromGraph(g) {
     n.data.chatId = '';          // папка памяти партии — у новой игры она своя
     n.data.lastChatId = null;
   });
-  return g;
+  return stripPlayersFromGraph(g);   // и без игроков партии (участники, ряды слота, их ноды)
 }
 function savePresetGraph(id) { if (id) { flushVisionsBeforeSnapshot(); lsSet(presetGraphKeyOf(id), stripPlayFromGraph(serializeGraph())); } }   // слить открытый разворот в мастер ПЕРЕД снимком (иначе теряется, напр. голос Озвучки)
 function loadPresetGraph(id) {
@@ -21283,6 +21810,7 @@ function createNewChat(charId) {
     const ng = document.querySelector('.node-netgame');
     if (ng) {
       ng._chatId = cid; ng._msgs = []; ng._convos = {}; ng._ngStates = {}; ng._ngTurn = []; ng._ngTurnCount = 0; ng._lastChatId = null;
+      tgNgClearPlayers(ng);                                    // игроки прошлой партии (участники, ряды, их ноды) в новую не переходят
       const feed = ng.querySelector('.tg-feed'); if (feed) feed.innerHTML = '';
       if (typeof tgNgRenderPending === 'function') tgNgRenderPending(ng);
       applyActiveWorldbook();                                  // активный ворлд-бук → «Лорбук мира»
@@ -21332,6 +21860,7 @@ async function activateChat(charId, chatId, opts) {
 // Удалить чат (лог, снимок графа и папку памяти с сервера).
 function deleteChat(charId, chatId) {
   const chats = lsGet(chatsKeyOf(charId), []).filter((c) => c.id !== chatId);
+  allowShrink(chatsKeyOf(charId));   // намеренное удаление: сервер сливает списки и без этой метки вернул бы чат на место
   lsSet(chatsKeyOf(charId), chats); lsDel(chatlogKeyOf(chatId)); lsDel(chatgraphKeyOf(chatId));
   rlmApi('/api/rlm/soul/purge', { chat: chatId }).catch(() => {});   // стереть папку памяти чата
   if (current.chatId === chatId) setCurrent({ mode: 'chat', charId, chatId: chats[0] ? chats[0].id : null });
@@ -21367,15 +21896,30 @@ function deleteCharacter(charId) {
 let smView = 'grid';
 let smCharId = null;
 // Размер аватаров в сетке — ступенями (ширина минимальной колонки), кнопками −/＋ в шапке. Запоминается.
-const SM_AVA_SIZES = [110, 140, 170, 210, 260];
-function smAvaIdx() { let i = parseInt(lsGet('rlm.smAvaSize', 2), 10); if (isNaN(i) || i < 0 || i >= SM_AVA_SIZES.length) i = 2; return i; }
+// Ступени — ширина минимальной колонки сетки. Две мелкие (70/90) нужны телефону: на экране 375px
+// при 110px в ряд всё равно влезали только ДВЕ карточки (3×110 + gap > ширины), и кнопка «−»
+// упиралась в минимум, ничего не меняя. С 90 встают три, с 70 — четыре.
+const SM_AVA_SIZES = [70, 90, 110, 140, 170, 210, 260];
+const SM_AVA_DEF_PX = 170;
+// Храним ПИКСЕЛИ, а не номер ступени: ступени можно менять, не ломая сохранённый выбор.
+// Старый ключ (номер в прежнем массиве [110,140,170,210,260]) читается один раз и переводится.
+function smAvaIdx() {
+  let px = parseInt(lsGet('rlm.smAvaPx', 0), 10);
+  if (!px) {
+    const old = parseInt(lsGet('rlm.smAvaSize', -1), 10);
+    px = (old >= 0 && old <= 4) ? [110, 140, 170, 210, 260][old] : SM_AVA_DEF_PX;
+  }
+  let best = 0;
+  SM_AVA_SIZES.forEach((v, i) => { if (Math.abs(v - px) < Math.abs(SM_AVA_SIZES[best] - px)) best = i; });
+  return best;
+}
 function applyAvaSize() {
   const cards = document.getElementById('sm-cards'); if (cards) cards.style.setProperty('--sm-ava', SM_AVA_SIZES[smAvaIdx()] + 'px');
   const i = smAvaIdx();
   const minus = document.getElementById('sm-ava-minus'); if (minus) minus.disabled = i <= 0;
   const plus = document.getElementById('sm-ava-plus');   if (plus)  plus.disabled  = i >= SM_AVA_SIZES.length - 1;
 }
-function smAvaBump(d) { let i = Math.max(0, Math.min(SM_AVA_SIZES.length - 1, smAvaIdx() + d)); lsSet('rlm.smAvaSize', i); applyAvaSize(); }
+function smAvaBump(d) { const i = Math.max(0, Math.min(SM_AVA_SIZES.length - 1, smAvaIdx() + d)); lsSet('rlm.smAvaPx', SM_AVA_SIZES[i]); applyAvaSize(); }
 
 function startMenuRender() {
   const menu = document.getElementById('start-menu'); if (!menu) return;
@@ -21421,9 +21965,17 @@ function startMenuRender() {
   // Путь к игре ОДИН: выбрать пресет в списке слева (✓) → начать чат из карточки. Пишем прямо над
   // карточками, по какой сборке пойдёт новая игра — иначе выбор ✓ теряется среди ★ и открытой сборки.
   const apName = ((presetById(activePresetId()) || defaultPreset() || {}).name) || '(нет пресета)';
+  // Плашка живёт НАД строкой «Размер аватаров», а не внутри сетки: так она читается первой, а
+  // кнопки размера стоят вплотную к карточкам, которыми управляют. Подсказка — по месту пресетов:
+  // на телефоне список открывается кнопкой ☰ (сайдбара там нет), на десктопе он слева.
+  const mob = (typeof isMobileView === 'function') ? isMobileView() : window.innerWidth <= 720;
+  const hint = mob ? '☰ вверху — сменить пресет · двойной клик по строке — открыть сборку'
+                   : 'клик по пресету слева — сменить · двойной клик — открыть сборку';
+  const host = document.getElementById('sm-playbar-host');
   const bar = '<div class="sm-playbar">Новая игра пойдёт по пресету: <b>' + esc(apName) + '</b>'
-    + '<span class="sm-playbar-hint">клик по пресету слева — сменить · двойной клик — открыть сборку</span></div>';
-  cards.innerHTML = bar + addCard + charCards;
+    + '<span class="sm-playbar-hint">' + hint + '</span></div>';
+  if (host) { host.innerHTML = bar; cards.innerHTML = addCard + charCards; }
+  else cards.innerHTML = bar + addCard + charCards;   // старая разметка без контейнера — не роняем меню
   applyAvaSize();
   // Если открыт экран персонажа — обновить и его (данные могли поменяться); нет персонажа — назад к сетке.
   if (smView === 'char') {
@@ -21436,11 +21988,15 @@ function startMenuRender() {
 // меню персонажа и детали каталога. `card` — объект данных карточки (ch.card / card.data).
 // Имена/порядок — из CARD_FIELDS (как в ноде «Персонаж»); ключи данных — как в applyCard.
 // Карточки часто хранят текст в HTML — показываем как ЧИСТЫЙ текст (без «супа» из тегов),
-// сохраняя абзацы: блочные теги/<br> → перенос строки, остальные теги режем, сущности — назад.
+// сохраняя абзацы: блочные теги/<br> → перенос строки, остальные html-теги режем, сущности — назад.
+// Режем ТОЛЬКО известные html-теги. Авторские метки в угловых скобках — <внешность> … </внешность>,
+// <START> в примерах — часть карточки и уходят модели как есть; раньше их съедало вместе с html, и в
+// окне карточки на их месте была пустота (Leon 2026-09-16).
+const HTML_TAG_RE = new RegExp('<\\s*/?\\s*(?:a|abbr|address|article|aside|audio|b|bdi|bdo|big|blockquote|body|br|button|canvas|caption|center|cite|code|col|colgroup|data|datalist|dd|del|details|dfn|dialog|div|dl|dt|em|embed|fieldset|figcaption|figure|font|footer|form|h[1-6]|head|header|hgroup|hr|html|i|iframe|img|input|ins|kbd|label|legend|li|link|main|map|mark|menu|meta|meter|nav|noscript|object|ol|optgroup|option|output|p|param|picture|pre|progress|q|rp|rt|ruby|s|samp|script|section|select|small|source|span|strike|strong|style|sub|summary|sup|svg|table|tbody|td|template|textarea|tfoot|th|thead|time|title|tr|track|tt|u|ul|var|video|wbr)(?=[\\s/>])[^>]*>', 'gi');
 function toPlainText(s) {
   let t = String(s == null ? '' : s);
   t = t.replace(/<\s*br\s*\/?>/gi, '\n').replace(/<\/\s*(p|div|li|h[1-6]|tr|blockquote)\s*>/gi, '\n');
-  t = t.replace(/<[^>]+>/g, '');
+  t = t.replace(HTML_TAG_RE, '');   // режем ТОЛЬКО настоящие html-теги — авторские метки остаются текстом
   t = t.replace(/&(amp|lt|gt|quot|#0?39|apos|nbsp);/gi, (m) => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&#039;': "'", '&apos;': "'", '&nbsp;': ' ' }[m.toLowerCase()] || m));
   return t.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
@@ -21601,7 +22157,10 @@ function saveCharBook(charId, entries) {
 }
 function openCharBook(charId) {
   charEditFlush();
-  const ch = charById(charId); const book = ch && ch.card && ch.card.character_book; if (!book) return;
+  const ch = charById(charId); if (!ch || !ch.card) return;
+  // Нет встроенного лорбука — заводим пустой (кнопка «＋ Добавить лорбук»): дальше он живёт как обычный,
+  // записи автосохраняются в карточку тем же `saveCharBook`.
+  const book = ch.card.character_book || (ch.card.character_book = { name: (ch.name || 'Персонаж') + ' — лорбук', entries: [] });
   let host = document.getElementById('wb-host');
   if (!host) { host = document.createElement('div'); host.id = 'wb-host'; host.style.display = 'none'; document.body.appendChild(host); }
   const el = buildLorebookNode();
@@ -21641,15 +22200,25 @@ function cardFieldsHtml(card, opts) {
   // «Первое сообщение» — с листалкой ВСЕХ приветствий (first_mes + alternate_greetings): читать/проматывать.
   const greetPanel = (label) => {
     const greets = guestGreetings(card);
-    if (greets.length <= 1) return panel(label, greets.length ? greets[0] : card.first_mes, 'first_mes');
-    const dataAttr = esc(JSON.stringify(greets));   // весь список — в data-атрибут (листаем без перерисовки)
+    // В правке панель приветствий нужна всегда: ＋ добавляет новое даже когда оно пока одно.
+    // В просмотре (каталог) листалки при одном приветствии по-прежнему нет — там нечего добавлять.
+    if (greets.length <= 1 && !edit) return panel(label, greets.length ? greets[0] : card.first_mes, 'first_mes');
+    const list = greets.length ? greets : [String(card.first_mes == null ? '' : card.first_mes)];
+    const dataAttr = esc(JSON.stringify(list));   // весь список — в data-атрибут (листаем без перерисовки)
+    const arrows = list.length > 1
+      ? `<button class="sm-greet-arrow" type="button" data-greet-dir="-1" title="Предыдущее приветствие">‹</button>`
+        + `<span class="sm-greet-count">1 / ${list.length}</span>`
+        + `<button class="sm-greet-arrow" type="button" data-greet-dir="1" title="Следующее приветствие">›</button>`
+      : `<span class="sm-greet-count">1 / 1</span>`;
+    const addDel = edit
+      ? `<button class="sm-greet-arrow sm-greet-add" type="button" title="Добавить приветствие и сразу его писать">＋</button>`
+        + (list.length > 1 ? `<button class="sm-greet-arrow sm-greet-del" type="button" title="Удалить это приветствие (последнее удалить нельзя)">✕</button>` : '')
+      : '';
     return `<div class="sm-fld sm-greet-fld" data-key="greet" data-greets="${dataAttr}" data-gi="0">`
       + `<div class="sm-fld-hd"><span class="sm-fld-lbl">${esc(label)}</span>`
-      + `<span class="sm-greet-nav"><button class="sm-greet-arrow" type="button" data-greet-dir="-1" title="Предыдущее приветствие">‹</button>`
-      + `<span class="sm-greet-count">1 / ${greets.length}</span>`
-      + `<button class="sm-greet-arrow" type="button" data-greet-dir="1" title="Следующее приветствие">›</button></span>`
+      + `<span class="sm-greet-nav">${arrows}${addDel}</span>`
       + `<span class="sm-fld-btns">${trBtn}${edBtn}</span></div>`
-      + `<div class="sm-fld-body">${esc(toPlainText(greets[0]))}</div></div>`;
+      + `<div class="sm-fld-body">${esc(toPlainText(list[0]))}</div></div>`;
   };
   const nonBook = CARD_FIELDS.filter((f) => f.id !== 'book')
     .map((f) => f.id === 'first_mes' ? greetPanel(f.name) : panel(f.name, card[KEY[f.id] || f.id], KEY[f.id] || f.id)).join('');
@@ -21658,7 +22227,11 @@ function cardFieldsHtml(card, opts) {
   const bookSub = book ? `<span class="sm-fld-sub">${esc((book.name || 'встроенный лорбук') + ' · ' + entries.length + ' зап.')}</span>` : '';
   const bookBody = entries.length ? loreEntriesHtml(entries) : `<div class="sm-fld-body sm-fld-empty">— встроенного лорбука нет —</div>`;
   // Лорбук есть → кнопка открывает ЕГО ЗАПИСИ в том же редакторе, что и у ворлд-буков (правка + автосейв в карточку).
-  const bookEd = (edit && book) ? '<button class="sm-fld-book-ed" type="button" title="Открыть записи лорбука в редакторе">✎ Править записи</button>' : '';
+  // Лорбука ещё нет — даём завести его прямо отсюда: та же кнопка, тот же редактор, просто пустой.
+  const bookEd = edit
+    ? (book ? '<button class="sm-fld-book-ed" type="button" title="Открыть записи лорбука в редакторе">✎ Править записи</button>'
+            : '<button class="sm-fld-book-ed" type="button" title="Завести встроенный лорбук карточки и открыть его редактор">＋ Добавить лорбук</button>')
+    : '';
   const lorePanel = `<div class="sm-fld"><div class="sm-fld-hd"><span class="sm-fld-lbl">Лорбук персонажа</span>${bookSub}`
     + `<span class="sm-fld-btns">${bookEd}</span></div>${bookBody}</div>`;
   return about + nonBook + lorePanel;
@@ -21669,9 +22242,10 @@ function renderCharMenu(charId) {
   charEditFlush();   // недописанная правка полей — в библиотеку ДО чтения (перерисовка не должна её съесть)
   const lib = lsGet(CHAR_LIB_KEY, []); const ch = lib.find((c) => c.id === charId);
   if (!ch) { backToGrid(); return; }
+  const avaHint = 'Перетащи сюда картинку или вставь из буфера (Ctrl+V) — станет обложкой карточки';
   const ava = ch.avatar
-    ? `<div class="sm-cv-ava has-img" style="background-image:url('${ch.avatar}')">${SILHOUETTE}</div>`
-    : `<div class="sm-cv-ava">${SILHOUETTE}</div>`;
+    ? `<div class="sm-cv-ava has-img" title="${esc(avaHint)}" style="background-image:url('${ch.avatar}')">${SILHOUETTE}</div>`
+    : `<div class="sm-cv-ava" title="${esc(avaHint)}">${SILHOUETTE}</div>`;
   const rows = lsGet(chatsKeyOf(ch.id), []).map((c) => {
     const meta = (c.preset ? esc(c.preset) : '—') + ' · ' + chatMsgCount(c.id, ch.id) + ' сбщ';
     const active = current.mode === 'chat' && current.chatId === c.id;
@@ -21690,6 +22264,7 @@ function renderCharMenu(charId) {
     <div class="sm-cv-body">
       <div class="sm-cv-left">
         ${ava}
+        <button class="sm-cv-pic" id="sm-cv-pic" type="button" title="Выбрать картинку (PNG/JPG) — станет обложкой карточки">🖼 Картинка</button>
         <div class="sm-cv-chats sm-scroll">
           ${rows}
           <button class="sm-newchat" data-char="${ch.id}" title="Новый чат (дефолт-пресет)">＋ новый чат</button>
@@ -21701,26 +22276,26 @@ function renderCharMenu(charId) {
 function openCharMenu(charId) {
   smView = 'char'; smCharId = charId;
   renderCharMenu(charId);
-  ['sm-grid-view', 'sm-books-view', 'sm-browse-view'].forEach((id) => { const e = document.getElementById(id); if (e) e.classList.add('hidden'); });
+  ['sm-grid-view', 'sm-books-view', 'sm-browse-view', 'sm-create-view'].forEach((id) => { const e = document.getElementById(id); if (e) e.classList.add('hidden'); });
   const c = document.getElementById('sm-char-view'); if (c) c.classList.remove('hidden');
   updateTabs();
 }
 function backToGrid() {
   charEditFlush();   // уходим с экрана персонажа — дожать недописанную правку полей/имени
   smView = 'grid'; smCharId = null;
-  ['sm-char-view', 'sm-browse-view', 'sm-books-view'].forEach((id) => { const e = document.getElementById(id); if (e) e.classList.add('hidden'); });
+  ['sm-char-view', 'sm-browse-view', 'sm-books-view', 'sm-create-view'].forEach((id) => { const e = document.getElementById(id); if (e) e.classList.add('hidden'); });
   const g = document.getElementById('sm-grid-view'); if (g) g.classList.remove('hidden');
   updateTabs();
 }
 // Верхние вкладки Персонажи · Лорбуки · Каталог — подсветка активной по smView.
 function updateTabs() {
-  const tab = smView === 'browse' ? 'browse' : (smView === 'books') ? 'books' : 'chars';
+  const tab = smView === 'browse' ? 'browse' : (smView === 'books') ? 'books' : (smView === 'create') ? 'create' : 'chars';
   document.querySelectorAll('.sm-tab').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
 }
 // Вкладка «Лорбуки»: сетка ворлд-буков.
 function showBooks() {
   smView = 'books'; smCharId = null;
-  ['sm-grid-view', 'sm-char-view', 'sm-browse-view'].forEach((id) => { const e = document.getElementById(id); if (e) e.classList.add('hidden'); });
+  ['sm-grid-view', 'sm-char-view', 'sm-browse-view', 'sm-create-view'].forEach((id) => { const e = document.getElementById(id); if (e) e.classList.add('hidden'); });
   const b = document.getElementById('sm-books-view'); if (b) b.classList.remove('hidden');
   renderBooksGrid(); updateTabs();
 }
@@ -21748,6 +22323,7 @@ function openBrowse() {
   document.getElementById('sm-grid-view').classList.add('hidden');
   document.getElementById('sm-char-view').classList.add('hidden');
   const bv = document.getElementById('sm-books-view'); if (bv) bv.classList.add('hidden');
+  const cv = document.getElementById('sm-create-view'); if (cv) cv.classList.add('hidden');
   updateTabs();
   const host = document.getElementById('sm-browse-view'); host.classList.remove('hidden');
   const lore = smBrowseKind === 'lorebook';
@@ -21766,6 +22342,7 @@ function openBrowse() {
       <div class="sm-src-tabs">${srcTabs}</div>
     </div>
     <div class="sm-browse-body">
+      <div class="sm-browse-filters">
       <div class="sm-browse-top">
         <input id="sm-q" class="sm-q" placeholder="${lore ? 'Поиск лорбуков…' : 'Поиск карточек…'}" spellcheck="false">
         <button id="sm-q-go" class="sm-q-go">Найти</button>
@@ -21781,6 +22358,7 @@ function openBrowse() {
         </select>
       </div>
       <div id="sm-tagrow" class="sm-tagrow"></div>
+      </div><!-- /sm-browse-filters: фильтры и теги текут одним потоком, на телефоне это экономит строку -->
       <div id="sm-results" class="sm-results sm-scroll"></div>
     </div>
     <div id="sm-detail" class="sm-detail hidden"></div>`;
@@ -22129,10 +22707,29 @@ async function refreshLightKeys() {
   await fetchKeysInto(fresh, want, 6);
   Object.keys(fresh).forEach((k) => { if (_setPending[k]) return; db[k] = fresh[k]; _lsSig[k] = JSON.stringify(fresh[k]); });   // свои неотправленные правки не затираем
 }
+// Телефон: кнопки «☰ к холсту» и «🌐 сеть» живут не отдельной полосой сверху, а ПЕРВЫМИ в строке
+// вкладок. Переносим сам узел, а не рисуем его поверх: наложение абсолютом наезжало на вкладки и
+// свисало на строку «⋮ Пресеты». На десктопе узел возвращается в сайдбар, где ему и место.
+function smPlaceTools() {
+  const tools = document.querySelector('#start-menu .sm-side-tools');
+  const tabs = document.querySelector('#start-menu .sm-tabs');
+  const side = document.querySelector('#start-menu .sm-side');
+  if (!tools || !tabs || !side) return;
+  const mobile = (typeof isMobileView === 'function') ? isMobileView() : window.innerWidth <= 720;
+  const close = document.getElementById('sm-close');
+  if (mobile) {
+    if (tools.parentElement !== tabs) tabs.insertBefore(tools, tabs.firstChild);
+    if (close) close.title = 'Пресеты — выбрать, по какому пойдут новые чаты';
+  } else {
+    if (tools.parentElement !== side) side.insertBefore(tools, side.firstChild);
+    if (close) close.title = 'К холсту (закрыть меню)';
+  }
+}
+window.addEventListener('resize', () => { try { smPlaceTools(); } catch (_) {} });
 function openStartMenu() {
   const m = document.getElementById('start-menu');
   if (!m) return;
-  m.classList.remove('hidden'); backToGrid(); startMenuRender();
+  m.classList.remove('hidden'); backToGrid(); startMenuRender(); smPlaceTools();
   refreshLightKeys().then(() => { if (!m.classList.contains('hidden')) startMenuRender(); }).catch(() => {});   // подтянули свежее — перерисовали
 }
 function closeStartMenu() { charEditFlush(); const m = document.getElementById('start-menu'); if (m) m.classList.add('hidden'); }
@@ -22141,7 +22738,17 @@ function closeStartMenu() { charEditFlush(); const m = document.getElementById('
   const menu = document.getElementById('start-menu'); if (!menu) return;
   const btnChars = document.getElementById('btn-chars');
   if (btnChars) btnChars.addEventListener('click', (e) => { e.stopPropagation(); openStartMenu(); });
-  const smClose = document.getElementById('sm-close'); if (smClose) smClose.addEventListener('click', closeStartMenu);
+  // ☰ на телефоне открывает ПРЕСЕТЫ (кнопка «⋮ Пресеты» там убрана — она дублировала строку),
+  // на десктопе — как раньше, закрывает меню. Выход к холсту с телефона — соседняя кнопка ✕.
+  const smClose = document.getElementById('sm-close');
+  if (smClose) smClose.addEventListener('click', (ev) => {
+    ev.stopPropagation();   // иначе глобальный «клик мимо» тут же закроет только что открытую выпадашку
+    const mobile = (typeof isMobileView === 'function') ? isMobileView() : window.innerWidth <= 720;
+    if (!mobile) { closeStartMenu(); return; }
+    const menu = document.getElementById('sm-presets-menu');
+    if (menu) menu.classList.toggle('hidden'); else closeStartMenu();
+  });
+  const smExit = document.getElementById('sm-exit'); if (smExit) smExit.addEventListener('click', closeStartMenu);
   const smAddPreset = document.getElementById('sm-add-preset'); if (smAddPreset) smAddPreset.addEventListener('click', newPreset);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.classList.contains('hidden')) closeStartMenu(); });
 
@@ -22168,7 +22775,7 @@ function closeStartMenu() { charEditFlush(); const m = document.getElementById('
     if (e.target.closest('#sm-ava-plus'))  { smAvaBump(1);  return; }
     // Верхние вкладки: Персонажи · Лорбуки · Каталог сайтов.
     const tabBtn = e.target.closest('.sm-tab');
-    if (tabBtn) { e.stopPropagation(); const t = tabBtn.dataset.tab; if (t === 'books') showBooks(); else if (t === 'browse') openBrowse(); else backToGrid(); return; }
+    if (tabBtn) { e.stopPropagation(); const t = tabBtn.dataset.tab; if (t === 'books') showBooks(); else if (t === 'browse') openBrowse(); else if (t === 'create') openCreator(); else backToGrid(); return; }
     // Вкладка «Лорбуки»: создать / галочка-активный / обложка / удалить / открыть записи.
     if (e.target.closest('#sm-wb-add')) { e.stopPropagation(); newWorldbook(); return; }
     const wbCheck = e.target.closest('.sm-wb-check'); if (wbCheck) { e.stopPropagation(); toggleActiveWorldbook(wbCheck.dataset.wb); return; }
@@ -22191,6 +22798,34 @@ function closeStartMenu() { charEditFlush(); const m = document.getElementById('
     const tag = e.target.closest('.sm-tag'); if (tag) { tag.classList.toggle('on'); browseRenderSelected(); browseSearch(); return; }
     if (e.target.closest('#sm-dl')) { browseDownload(); return; }
     if (e.target.closest('#sm-open-site')) { openExternalUrl(browseSiteUrl(smBrowseDetail && smBrowseDetail.item)); return; }
+    // ＋ / ✕ у приветствий карточки (только в меню персонажа): добавить новое, убрать текущее.
+    // Список приветствий = first_mes + alternate_greetings, пустые в него не попадают (guestGreetings),
+    // поэтому новое заводим с многоточием и сразу открываем на правку — текст заменяется поверх.
+    const gAdd = e.target.closest('.sm-greet-add');
+    const gDel = e.target.closest('.sm-greet-del');
+    if (gAdd || gDel) {
+      e.stopPropagation();
+      charEditFlush();   // дожать правку текущего приветствия, иначе она легла бы в чужой индекс
+      const fld = (gAdd || gDel).closest('.sm-greet-fld'); if (!fld) return;
+      const ch = charById(smCharId); if (!ch) return;
+      const gi = parseInt(fld.dataset.gi, 10) || 0;
+      const cur = guestGreetings(ch.card);
+      const arr = cur.length ? cur.slice() : [String((ch.card || {}).first_mes || '')];
+      let idx = gi;
+      if (gAdd) { idx = Math.min(gi + 1, arr.length); arr.splice(idx, 0, '…'); }
+      else { if (arr.length < 2) return; arr.splice(gi, 1); idx = Math.min(gi, arr.length - 1); }
+      charCardPatch(smCharId, (c) => { c.card.first_mes = arr[0] || ''; c.card.alternate_greetings = arr.slice(1); });
+      renderCharMenu(smCharId);
+      const fld2 = document.querySelector('.sm-greet-fld'); if (!fld2) return;
+      fld2.dataset.gi = String(idx);
+      const cnt = fld2.querySelector('.sm-greet-count'); if (cnt) cnt.textContent = (idx + 1) + ' / ' + arr.length;
+      const body = fld2.querySelector('.sm-fld-body'); if (body) body.textContent = toPlainText(arr[idx]);
+      if (gAdd) {   // сразу в правку нового: текст выделен, первая же буква его заменит
+        const ed = fld2.querySelector('.sm-fld-ed'); if (ed) smFieldEdit(ed);
+        const ta = fld2.querySelector('.sm-fld-edit'); if (ta) { ta.focus(); ta.select(); }
+      }
+      return;
+    }
     // Листалка приветствий в окне карточки (библиотека/каталог): ‹ › → показать следующее/предыдущее.
     const gArrow = e.target.closest('.sm-greet-arrow');
     if (gArrow) {
@@ -22228,6 +22863,37 @@ function closeStartMenu() { charEditFlush(); const m = document.getElementById('
     const chat = e.target.closest('.sm-chat'); if (chat) { e.stopPropagation(); activateChat(chat.dataset.char, chat.dataset.chat); return; }
     const card = e.target.closest('.sm-card'); if (card && !card.classList.contains('sm-card-add')) { e.stopPropagation(); openCharMenu(card.dataset.char); return; }
   });
+  // Аватар в меню персонажа: картинку можно ПЕРЕТАЩИТЬ на него или ВСТАВИТЬ из буфера (Ctrl+V), пока курсор
+  // над ним. Пишем в библиотеку (это обложка карточки) и сразу обновляем аватар в меню и плитку в сетке.
+  const smAvaSet = (f) => {
+    if (!f || !/^image\//.test(f.type || '') || !smCharId) return false;
+    const rd = new FileReader();
+    rd.onload = () => {
+      const url = String(rd.result || '');
+      charCardPatch(smCharId, (c) => { c.avatar = url; });
+      const box = menu.querySelector('.sm-cv-ava');
+      if (box) { box.style.backgroundImage = "url('" + url + "')"; box.classList.add('has-img'); }
+      const tile = menu.querySelector('.sm-card[data-char="' + smCharId + '"] .sm-ava');
+      if (tile) { tile.style.backgroundImage = "url('" + url + "')"; tile.classList.add('has-img'); }
+    };
+    rd.readAsDataURL(f);
+    return true;
+  };
+  // «🖼 Картинка» под аватаром — обычный выбор файла (кнопкой, без перетаскивания и буфера).
+  menu.addEventListener('click', (e) => {
+    if (!(e.target.closest && e.target.closest('#sm-cv-pic'))) return;
+    e.stopPropagation();
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/*';
+    inp.addEventListener('change', () => { const f = inp.files && inp.files[0]; if (f) smAvaSet(f); });
+    inp.click();
+  });
+  const smAva = (e) => (e.target && e.target.closest) ? e.target.closest('.sm-cv-ava') : null;
+  menu.addEventListener('dragover', (e) => { const a = smAva(e); if (!a) return; e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; a.classList.add('ava-drop'); });
+  menu.addEventListener('dragleave', (e) => { const a = smAva(e); if (a) a.classList.remove('ava-drop'); });
+  menu.addEventListener('drop', (e) => { const a = smAva(e); if (!a) return; e.preventDefault(); a.classList.remove('ava-drop'); smAvaSet(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]); });
+  menu.addEventListener('mouseover', (e) => { const a = smAva(e); if (a) { a._setAvaFromFile = smAvaSet; chAvaUnderCursor = a; } });   // общий обработчик paste берёт аватар под курсором
+  menu.addEventListener('mouseout', (e) => { const a = smAva(e); if (a && chAvaUnderCursor === a) chAvaUnderCursor = null; });
   // Правка карточки в меню персонажа: имя в шапке и тексты окон пишутся в библиотеку САМИ (пауза 400 мс).
   menu.addEventListener('input', (e) => {
     const ta = e.target.closest && e.target.closest('.sm-fld-edit');
@@ -22637,6 +23303,7 @@ async function boot() {
   initUiFromDb();                 // оформление (тема/цвет/провода/затенение) из серверной базы — одна сессия
   current = loadCurrentLocal() || lsGet(CUR_KEY, CUR_DEFAULT);   // своё, иначе (первый запуск) — серверное
   ensurePresets();
+  ensureApiPresets();        // два готовых пресета ноды API («GLM 4 стандартный», «GLM 5») — один раз
   ensureGroupChatPreset();   // посеять пресет «Групповой чат» (один раз, если его ещё нет)
   ensureNetgamePreset();     // посеять пресет «Сетевая игра» (телеграм-мультиплеер)
   ensureNetgameModelPresets();   // пресеты «Сетевая игра · GLM-4.7» и «· Kimi» — сборка стенда 2026-09-13 (один раз на имя)
