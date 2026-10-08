@@ -1743,6 +1743,18 @@ html.mobile-mode .soul-next { font-size: 12px; white-space: normal; }
 .soul2-row[data-on="true"] .soul2-on::after { content: "вкл"; }
 .soul2-open:hover { color: var(--text); border-color: var(--accent); }
 .soul2-view { padding: 6px 8px 8px 11px; border-left: 3px solid var(--line); }
+.soul2-prow { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-left: 3px solid var(--corner); background: var(--inset); }   /* строка «Инструкция писарю» — как строка листа, без тумблера */
+.soul2-popen { flex: none; border: 1px solid var(--corner); background: var(--node-head); color: var(--muted); cursor: pointer; padding: 2px 6px; font-family: var(--mono); font-size: 10px; line-height: 1.2; }
+.soul2-popen:hover { color: var(--text); border-color: var(--accent); }
+.soul2-prompt { display: block; width: 100%; box-sizing: border-box; resize: vertical; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--text); background: var(--inset); border: 1px solid var(--line); padding: 6px 8px; outline: none; }
+.soul2-prompt:focus { border-color: var(--corner); }
+.soul2-view .tr-btns { margin-top: 3px; }
+html.mobile-mode .soul2-prow { flex-wrap: wrap; gap: 6px 8px; padding: 8px; }
+html.mobile-mode .soul2-prow .soul2-name { flex: 1; }
+html.mobile-mode .soul2-prow .soul2-where { flex: 1 1 100%; order: 5; }
+html.mobile-mode .soul2-popen { padding: 8px 12px; font-size: 12px; }
+html.mobile-mode .soul2-prompt { font-size: 13px; }
+html.mobile-mode .soul2-view .tr-b { padding: 6px 12px; font-size: 12px; }
 .soul2-view[hidden] { display: none; }
 .soul2-text { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--text); max-height: 260px; overflow: auto; }
 .soul2-last:empty { display: none; }

@@ -4208,6 +4208,8 @@ function buildSoulNode() {
           <div class="soul2-view" data-doc="psyche" hidden><textarea class="soul2-edit" data-doc="psyche" spellcheck="false" placeholder="— писарь ещё не писал —" title="Можно править руками: сохраняется само, когда уберёшь курсор из окошка"></textarea><div class="soul2-edit-note"></div></div>
           <div class="soul2-row" data-doc="diary"><button class="soul2-on" type="button" title="Вкл / выкл. Выключенный лист не пишется и в промт не идёт"></button><span class="soul2-name">Дневник</span><span class="soul2-where">в промт: на месте плашки «Память»</span><span class="soul2-size"></span><button class="soul2-open" type="button" title="Показать записи, которые уходят модели">открыть</button></div>
           <div class="soul2-view" data-doc="diary" hidden><div class="soul2-diary-hint"></div><div class="soul2-diary"></div><div class="soul2-edit-note"></div></div>
+          <div class="soul2-prow"><span class="soul2-name">Инструкция писарю</span><span class="soul2-where">этот текст получает модель, когда пишет все три листа (один запрос)</span><button class="soul2-popen" type="button" title="Показать и поправить инструкцию, по которой модель пишет память">открыть</button></div>
+          <div class="soul2-view soul2-pview" hidden><textarea class="soul2-prompt" spellcheck="false" rows="16" title="Можно править: сохраняется само, когда уберёшь курсор. Стёр всё — вернётся инструкция по умолчанию. {{char}} и {{user}} модель получит именами"></textarea><div class="soul2-edit-note"></div></div>
           <div class="soul2-last"></div>
         </div>
       </div>
@@ -4362,7 +4364,15 @@ function buildSoulNode() {
   // Набор «новая»: три строки листов. Тумблер — лист пишется и идёт в промт либо нет; «открыть» — показать, что в нём.
   const s2box = el.querySelector('.soul2');
   if (s2box) {
-    s2box.addEventListener('pointerdown', (e) => { if (e.target.closest('.soul2-on, .soul2-open, .soul2-view')) e.stopPropagation(); });
+    s2box.addEventListener('pointerdown', (e) => { if (e.target.closest('.soul2-on, .soul2-open, .soul2-popen, .soul2-view')) e.stopPropagation(); });
+    // Кнопки RU / EN, как на остальных полях: RU — прочитать лист по-русски (в память и в промт идёт оригинал), EN — перевести написанное и заменить.
+    s2box.querySelectorAll('textarea.soul2-edit, textarea.soul2-prompt').forEach((f) => attachFieldTranslate(f));
+    s2box.querySelector('.soul2-popen').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const view = s2box.querySelector('.soul2-pview'); view.hidden = !view.hidden;
+      e.currentTarget.textContent = view.hidden ? 'открыть' : 'закрыть';
+      if (!view.hidden) soul2Paint(el);
+    });
     s2box.addEventListener('click', (e) => {
       const row = e.target.closest('.soul2-row'); if (!row) return;
       const master = el._master || el, k = row.dataset.doc;
@@ -4382,14 +4392,31 @@ function buildSoulNode() {
       }
     });
     // Ручная правка листа: сохраняется сама, когда курсор уходит из окошка (контент — без дискет).
-    s2box.addEventListener('input', (e) => { const ta = e.target.closest('textarea.soul2-edit'); if (ta) ta._dirty = true; });
-    s2box.addEventListener('change', async (e) => {
-      const ta = e.target.closest('textarea.soul2-edit'); if (!ta) return;
+    const saveSheet = async (ta) => {
       const view = ta.closest('.soul2-view'), note = view && view.querySelector('.soul2-edit-note');
+      const say = (t, bad) => { if (note) { note.textContent = t; note.classList.toggle('err', !!bad); } };
+      // В окошке показан RU-предпросмотр: это только чтение — сохранять перевод вместо оригинала нельзя.
+      if (ta._trPreviewing) { ta._dirty = false; say('⚠ это предпросмотр перевода — правка не сохранена. Нажми RU ещё раз и правь оригинал', true); return; }
+      if (ta.classList.contains('soul2-prompt')) {   // инструкция писарю: пусто или как по умолчанию — значит «по умолчанию»
+        const master = el._master || el;
+        const v = String(ta.value || '').trim();
+        master._v2Prompt = (!v || v === SOUL2_SYS.trim()) ? '' : ta.value;
+        ta._dirty = false;
+        soul2Views(master).forEach(soul2Paint);
+        if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
+        say(master._v2Prompt ? 'сохранено — писарь получит этот текст' : 'инструкция по умолчанию');
+        return;
+      }
       const err = ta.dataset.file ? await soul2SaveDiaryFile(el, ta.dataset.file, ta.value) : await soul2SaveManual(el, ta.dataset.doc, ta.value);
       if (!err) ta._dirty = false;
-      if (note) { note.textContent = err ? ('⚠ ' + err + ' — не сохранено, текст в окошке оставлен') : 'сохранено'; note.classList.toggle('err', !!err); }
+      say(err ? ('⚠ ' + err + ' — не сохранено, текст в окошке оставлен') : 'сохранено', !!err);
+    };
+    s2box.addEventListener('input', (e) => {
+      const ta = e.target.closest('textarea.soul2-edit, textarea.soul2-prompt'); if (!ta) return;
+      ta._dirty = true;
+      if (!e.isTrusted) saveSheet(ta);   // кнопка «EN» заменила текст программно и шлёт только input — сохраняем сразу
     });
+    s2box.addEventListener('change', (e) => { const ta = e.target.closest('textarea.soul2-edit, textarea.soul2-prompt'); if (ta) saveSheet(ta); });
   }
   // Память привязана к ТЕКУЩЕМУ чату автоматически — без выбора «сохранённых душ» и без кнопки обновления:
   // всё обновляется само (движок после записи зовёт soulFillDocRecords; смена чата — soulRecLoadChats).
@@ -6667,7 +6694,8 @@ async function soul2Update(chatNode, soul, setNote) {
   const want = [on.scene ? 'scene' : '', on.psyche ? 'psyche' : '', on.diary ? 'diary' : ''].filter(Boolean).join(', ');
   const user = cardBlock + 'CURRENT MEMORY:\n' + curBlock + '\n\nRECENT CONVERSATION:\n' + convo + '\n\nOutput the JSON now. Sections to write: ' + want + '.';
   const params = Object.assign({ max_tokens: SOUL2_MAXTOK + tokVal('soul.think', MEM_THINK_BUDGET_DEF), temperature: SOUL2_TEMP }, soulReasonParams(soul));
-  const messages = [{ role: 'system', content: substituteMacros(SOUL2_SYS, mctx) }, { role: 'user', content: substituteMacros(user, mctx) }];
+  const sysText = String(soul._v2Prompt || '').trim() ? soul._v2Prompt : SOUL2_SYS;   // своя инструкция из ноды, иначе — по умолчанию
+  const messages = [{ role: 'system', content: substituteMacros(sysText, mctx) }, { role: 'user', content: substituteMacros(user, mctx) }];
   const ask = (msgs) => rlmApi('/api/rlm/generate', { _ctxKey: '.soul-maxtok@.node-soul', _ctxNode: soul, base: api.base, key: api.key, model: api.model, messages: msgs, params });
   let r = await ask(messages);
   let text = memCleanReply(r);
@@ -6734,17 +6762,29 @@ function soul2Paint(el) {
     row.dataset.on = String(!!on[k]);
     const sz = row.querySelector('.soul2-size'); if (sz) sz.textContent = t ? (soulWords(t) + ' сл.') : 'пусто';
     const ta = box.querySelector('textarea.soul2-edit[data-doc="' + k + '"]');
-    if (ta && document.activeElement !== ta && !ta._dirty) { ta.value = t; ta.rows = Math.min(18, Math.max(3, t.split('\n').length + 1)); }   // пока человек печатает или правка не принята — его текст не трогаем
+    if (ta && document.activeElement !== ta && !ta._dirty && !(ta._trPreviewing && ta._trOrig === t)) { sumSetField(ta, t); ta.rows = Math.min(18, Math.max(3, t.split('\n').length + 1)); }   // пока человек печатает, правка не принята или открыт перевод того же текста — окошко не трогаем
   });
   // Дневник: файлы по дням, каждый правится целиком. В промт идут последние записи — сколько, сказано строкой сверху.
   const dbox = box.querySelector('.soul2-diary');
-  if (dbox && !dbox.contains(document.activeElement)) {
-    const files = master._v2DiaryFiles || [];
+  const dfiles = master._v2DiaryFiles || [];
+  const dsig = JSON.stringify(dfiles.map((f) => [f.name, f.text]));
+  if (dbox && !dbox.contains(document.activeElement) && dbox._sig !== dsig) {   // те же записи — не пересобираем (иначе слетал бы открытый перевод)
+    dbox._sig = dsig;
+    const files = dfiles;
     dbox.innerHTML = files.length
       ? files.map((f) => '<div class="soul2-day"><div class="soul2-day-hd">' + esc(String(f.name).replace(/\.md$/i, '').replace(/^Diary_/i, '')) + '</div><textarea class="soul2-edit" data-file="' + esc(f.name) + '" spellcheck="false" rows="' + Math.min(14, Math.max(3, String(f.text).split('\n').length + 1)) + '">' + esc(f.text) + '</textarea></div>').join('')
       : '<div class="soul2-empty">— персонаж ещё ничего не записал —</div>';
+    dbox.querySelectorAll('textarea.soul2-edit').forEach((f) => attachFieldTranslate(f));   // RU / EN на каждом дне дневника
+  }
+  {   // подсказка над дневником — свежая при каждом показе (число берётся из поля ноды)
     const hint = box.querySelector('.soul2-diary-hint');
     if (hint) hint.textContent = 'В промт идут последние ' + Math.max(1, parseInt((master.querySelector('.soul-topk') || {}).value, 10) || 3) + ' записи (число — в поле «записей дневника в промт»). Ниже — весь дневник по дням, его можно править.';
+  }
+  {   // инструкция писарю: своя, если правили, иначе — по умолчанию
+    const pf = box.querySelector('.soul2-prompt'), pt = String(master._v2Prompt || '') || SOUL2_SYS;
+    if (pf && document.activeElement !== pf && !pf._dirty && !(pf._trPreviewing && pf._trOrig === pt)) sumSetField(pf, pt);
+    const pw = box.querySelector('.soul2-prow .soul2-where');
+    if (pw) pw.textContent = (master._v2Prompt ? 'своя — ' : 'по умолчанию — ') + 'этот текст получает модель, когда пишет все три листа (один запрос)';
   }
   const last = box.querySelector('.soul2-last');
   if (last) {
@@ -20499,6 +20539,7 @@ function nodeValues(el, type) {
     temp: (el.querySelector('.soul-temp') || {}).value || '0.3',
     promptMode: el._promptMode || 'single',
     v2on: el._v2on ? { scene: !!el._v2on.scene, psyche: !!el._v2on.psyche, diary: !!el._v2on.diary } : null,   // набор «новая»: какие листы включены
+    v2prompt: el._v2Prompt || '',                                    // набор «новая»: своя инструкция писарю (пусто — по умолчанию)
     h: el._docH || null,
   };
   return {};
@@ -20669,6 +20710,7 @@ function applyValues(el, type, d) {
     setV('.soul-maxtok', d.maxtok); setV('.soul-temp', d.temp); if (d.reason != null) setV('.soul-reason', d.reason);
     el._promptMode = d.promptMode || 'single'; setV('.soul-prompt-preset', el._promptMode);   // режим набора промтов (селектор в шапке «Доки памяти»)
     if (d.v2on && typeof d.v2on === 'object') el._v2on = { scene: d.v2on.scene !== false, psyche: d.v2on.psyche !== false, diary: d.v2on.diary !== false };
+    el._v2Prompt = (typeof d.v2prompt === 'string') ? d.v2prompt : '';
     if (typeof soul2Face === 'function') soul2Face(el);   // набор «новая» — своё лицо ноды
     if (typeof soulNextPaint === 'function') setTimeout(() => soulNextPaint(el), 0);   // счётчик «до вопроса»: ноды графа догрузились — посчитать
     if (d.h) { el._docH = d.h; el.style.setProperty('--soul-doc-h', d.h + 'px'); }
