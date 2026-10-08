@@ -254,7 +254,9 @@ html, body { height: 100%; overflow: hidden; background: var(--canvas-grad); col
 .node-api .btn { width: 100%; text-align: center; }
 
 /* Нода Telegram — две колонки: слева настройки, справа консоль-лог диалога. */
-.node-telegram { width: 600px; }
+/* «Телеграм сингл»: лента + своя панель опций справа (участников нет — уже поэтому уже сетевой). */
+.node-telegram { width: 880px; }
+.node-telegram:not(.node-netgame) .tg-main { height: 520px; }
 /* Сетевая игра: лента — главное окно ведущего, поэтому нода шире — панель участников не съедает чат. */
 .node-netgame { width: 1060px; }
 .node-netgame .tg-main { height: 520px; }
@@ -417,7 +419,18 @@ html, body { height: 100%; overflow: hidden; background: var(--canvas-grad); col
   flex: 0 0 232px; display: flex; flex-direction: column; gap: 5px;   /* разделы стоят плотно — заголовки-кнопки сами держат ритм */
   padding: 9px 10px; border-left: 1px solid var(--line); overflow-y: auto; overflow-x: hidden;
 }
-.node-telegram:not(.node-netgame) .tg-admin { display: none; }   /* панель — только у сетевой игры */
+/* Панель опций есть и у сингла (нода вбирает опции в себя), но без сетевых разделов: ГМ-меню партии,
+   «Атмосфера» (картинка/звук к ходу), промт про участников, сев Душ на старте — всё это без партии мертво. */
+.node-telegram:not(.node-netgame) .tg-gm-quick,
+.node-telegram:not(.node-netgame) .tg-adm-sec[data-sec="atm"] > .tg-adm-hint,
+.node-telegram:not(.node-netgame) .tg-atm-pick,
+.node-telegram:not(.node-netgame) .tg-atm-slot:not(.tg-bg-slot),
+.node-telegram:not(.node-netgame) .tg-atm-once,
+.node-telegram:not(.node-netgame) .tg-noseed-lbl,
+.node-telegram:not(.node-netgame) .tg-adm-sec[data-sec="prompt"] .tg-adm-t2,
+.node-telegram:not(.node-netgame) .tg-adm-sec[data-sec="prompt"] .tg-adm-t2 ~ .tg-adm-hint,
+.node-telegram:not(.node-netgame) .tg-ng-castp,
+.node-telegram:not(.node-netgame) .tg-ng-castp-reset { display: none; }
 .tg-adm-head { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--accent); }
 .tg-adm-sec { display: flex; flex-direction: column; gap: 6px; }
 .tg-adm-t, .tg-adm-sub {
@@ -1710,6 +1723,71 @@ html, body { height: 100%; overflow: hidden; background: var(--canvas-grad); col
 .soul-opt input:focus { border-color: var(--corner); }
 .soul-opt-desc { font-size: 10px; line-height: 1.35; color: var(--muted); opacity: 0.75; margin: -2px 0 2px; }
 .soul-opt-hint { font-size: 10px; color: var(--muted); opacity: 0.7; }   /* «(0 — выкл.)» рядом с «каждые N сообщ.» */
+
+/* ── Душа, набор «новая»: три строки листов (Сцена / Психика / Дневник) вместо прежних доков ── */
+.soul-v2 .soul-docs, .soul-v2 .soul-pager, .soul-v2 .soul-note-sec, .soul-v2 .soul-card-note,
+.soul-v2 .soul-heal, .soul-v2 .soul-add, .soul-v2 .soul-old { display: none !important; }   /* прежние доки и их настройки в этом наборе не действуют */
+.soul-next { font-family: var(--mono); font-size: 10px; color: var(--accent); white-space: nowrap; align-self: center; }   /* счётчик «до вопроса: N ответов» рядом с «каждые N сообщ.» */
+.soul-next:empty { display: none; }
+html.mobile-mode .soul-next { font-size: 12px; white-space: normal; }
+.soul2 { display: flex; flex-direction: column; gap: 6px; }
+.soul2[hidden] { display: none; }
+.soul2-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--inset); }
+.soul2-row[data-on="false"] { opacity: 0.45; border-left-color: var(--line); }   /* выключенный лист — приглушён */
+.soul2-name { font-size: 12px; color: var(--text); min-width: 64px; }
+.soul2-where { flex: 1; min-width: 0; font-size: 10px; color: var(--muted); }
+.soul2-size { flex: none; font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.soul2-on, .soul2-open { flex: none; border: 1px solid var(--corner); background: var(--node-head); color: var(--muted); cursor: pointer; padding: 2px 6px; font-family: var(--mono); font-size: 10px; line-height: 1.2; }
+.soul2-on::after { content: "выкл"; }
+.soul2-row[data-on="true"] .soul2-on { background: var(--accent); border-color: var(--accent); color: #0f1924; }
+.soul2-row[data-on="true"] .soul2-on::after { content: "вкл"; }
+.soul2-open:hover { color: var(--text); border-color: var(--accent); }
+.soul2-view { padding: 6px 8px 8px 11px; border-left: 3px solid var(--line); }
+.soul2-view[hidden] { display: none; }
+.soul2-text { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--text); max-height: 260px; overflow: auto; }
+.soul2-last:empty { display: none; }
+.soul2-last { margin-top: 2px; padding-left: 8px; border-left: 2px solid var(--corner); }
+.soul2-last-hd { font-size: 10px; letter-spacing: .5px; color: var(--muted); text-transform: uppercase; margin-bottom: 2px; }
+.soul2-ch { font-size: 11px; line-height: 1.4; color: var(--text); overflow-wrap: anywhere; }
+/* ручная правка листа: то же окошко, что уходит модели; сохраняется само */
+.soul2-edit { display: block; width: 100%; box-sizing: border-box; resize: vertical; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--text); background: var(--inset); border: 1px solid var(--line); padding: 6px 8px; outline: none; }
+.soul2-edit:focus { border-color: var(--corner); }
+.soul2-edit-note { font-size: 10px; line-height: 1.35; color: var(--muted); margin-top: 3px; }
+.soul2-edit-note:empty { display: none; }
+.soul2-edit-note.err { color: #e5544a; }
+.soul2-day { margin-bottom: 6px; }
+.soul2-day-hd, .soul2-diary-hint, .soul2-empty { font-size: 10px; line-height: 1.35; color: var(--muted); margin-bottom: 3px; }
+
+/* ── Нода «Суммаризация» — бегущая сводка сюжета (аналог Summarize из ST) ── */
+.node-summary { width: 340px; }
+.sum-body { display: flex; flex-direction: column; gap: 6px; }
+.sum-hint { font-size: 11px; line-height: 1.4; color: var(--muted); }
+.sum-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sum-opt { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+.sum-opt .sum-every, .sum-opt .sum-words { width: 56px; }
+.sum-count { font-family: var(--mono); font-size: 10px; color: var(--muted); flex: 1 1 100%; }   /* своя строка: слова · сведено · через сколько */
+.sum-now, .sum-reset, .sum-prompt-toggle { font-family: var(--mono); font-size: 11px; color: var(--text); background: var(--inset); border: 1px solid var(--corner); padding: 5px 9px; cursor: pointer; }
+.sum-reset, .sum-prompt-toggle { color: var(--muted); border-color: var(--line); }
+.sum-now:hover, .sum-prompt-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.sum-reset:hover { color: #e5544a; border-color: #e5544a; }
+.sum-prompt[hidden] { display: none; }
+.sum-prompt[hidden] + .tr-btns { display: none; }   /* кнопки RU/EN скрытой инструкции — тоже прочь */
+.sum-body .tr-btns { margin-top: -3px; }
+.sum-note { font-size: 10px; line-height: 1.35; color: var(--muted); }
+.sum-note:empty { display: none; }
+/* Телефон: листы новой Души и «Суммаризация» в вижне чата — кнопки под палец, текст читаемый, строка листа в два ряда */
+html.mobile-mode .soul2-row { flex-wrap: wrap; gap: 6px 8px; padding: 8px; }
+html.mobile-mode .soul2-on, html.mobile-mode .soul2-open { padding: 8px 12px; font-size: 12px; }
+html.mobile-mode .soul2-name { font-size: 14px; flex: 1; }
+html.mobile-mode .soul2-where { flex: 1 1 100%; order: 5; font-size: 11px; }
+html.mobile-mode .soul2-size { font-size: 11px; }
+html.mobile-mode .soul2-edit, html.mobile-mode .soul2-text { font-size: 13px; }
+html.mobile-mode .soul2-ch { font-size: 12px; }
+html.mobile-mode .sum-hint { font-size: 12px; }
+html.mobile-mode .sum-text, html.mobile-mode .sum-prompt { font-size: 13px; }
+html.mobile-mode .sum-now, html.mobile-mode .sum-reset, html.mobile-mode .sum-prompt-toggle { padding: 9px 12px; font-size: 12px; }
+html.mobile-mode .sum-count { flex: 1 1 100%; margin-left: 0; font-size: 11px; }
+.tg-gm-sum-state { font-size: 10px; color: var(--muted); flex: 1 1 100%; }
 
 /* ── Нода «Хроника» — авто-память в лорбук чата (референс «Механик машин») ── */
 .node-chronicle { width: 300px; }

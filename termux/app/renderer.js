@@ -252,6 +252,7 @@ ctxmenu.addEventListener('click', (e) => {
   else if (a === 'new-lore') createNode('lorebook', menuWorldPos.x, menuWorldPos.y);
   else if (a === 'new-chat') createNode('chat', menuWorldPos.x, menuWorldPos.y);
   else if (a === 'new-groupchat') createNode('groupchat', menuWorldPos.x, menuWorldPos.y);
+  else if (a === 'new-telegram') createNode('telegram', menuWorldPos.x, menuWorldPos.y);
   else if (a === 'new-netgame') createNode('netgame', menuWorldPos.x, menuWorldPos.y);
   else if (a === 'new-scanner') createNode('scanner', menuWorldPos.x, menuWorldPos.y);
   else if (a === 'new-soul') createNode('soul', menuWorldPos.x, menuWorldPos.y);
@@ -264,6 +265,7 @@ ctxmenu.addEventListener('click', (e) => {
   else if (a === 'new-state') createNode('state', menuWorldPos.x, menuWorldPos.y);
   else if (a === 'new-objective') createNode('objective', menuWorldPos.x, menuWorldPos.y);
   else if (a === 'new-note') createNode('note', menuWorldPos.x, menuWorldPos.y);
+  else if (a === 'new-summary') { const s = createNode('summary', menuWorldPos.x, menuWorldPos.y); if (s && typeof summaryAttach === 'function') summaryAttach(s); }   // сразу в промт: своя плашка «Сводка» + провод
   else if (a === 'new-random') createNode('random', menuWorldPos.x, menuWorldPos.y);
   else if (a === 'new-dry') createNode('dry', menuWorldPos.x, menuWorldPos.y);
   hideMenu();
@@ -398,11 +400,12 @@ function createNode(type, wx, wy) {
   else if (type === 'embedder') el = buildEmbedderNode();
   else if (type === 'translator') el = buildTranslatorNode();
   else if (type === 'tts') el = buildTtsNode();
-  else if (type === 'telegram') el = buildNetgameNode();   // отдельной ноды Telegram больше нет — старые сборки открываем как «Сетевую игру»
+  else if (type === 'telegram') el = buildTelegramNode();  // «Телеграм сингл» — та же нода, что была до 2026-08-28 (вернули в меню 2026-09-21)
   else if (type === 'netgame') el = buildNetgameNode();
   else if (type === 'state') el = buildStateNode();
   else if (type === 'objective') el = buildObjectiveNode();
   else if (type === 'note') el = buildNoteNode();
+  else if (type === 'summary') el = buildSummaryNode();
   else if (type === 'random') el = buildRandomNode();
   else if (type === 'dry') el = buildDryNode();
   else return;
@@ -1166,10 +1169,15 @@ function refreshApiPresetSelects() {
   document.querySelectorAll('.node-api').forEach((el) => fillApiPresetSelect(el));
 }
 
-// Настройки ноды Telegram (токен + режим). Токен в граф НЕ пишем (секрет) — он живёт в базе под своим ключом.
-const TG_CFG_KEY = 'rlm.telegram';
-const loadTgCfg = () => store.get(TG_CFG_KEY) || {};
-const saveTgCfg = (cfg) => store.set(TG_CFG_KEY, cfg);
+// Настройки телеграм-нод. Токен в граф НЕ пишем (секрет) — он живёт в базе под своим ключом.
+// У «Телеграм сингла» и «Сетевой игры» ключи РАЗНЫЕ: это разные боты, общий конфиг их сталкивал
+// (переключил голос в сингле — поехало в партии). Остальные опции нода вдобавок вбирает в себя
+// (снимок графа, см. tgCfgSnapshot) — у каждой ноды свои, и они переезжают вместе с пресетом.
+const TG_CFG_KEY = 'rlm.telegram';            // сетевая игра (ключ исторический — её настройки уже там)
+const TG_CFG_KEY_SOLO = 'rlm.telegram.solo';  // «Телеграм сингл» — свой бот, свой токен, свои опции
+const tgCfgKeyOf = (el) => ((el && el.classList && el.classList.contains('node-netgame')) ? TG_CFG_KEY : TG_CFG_KEY_SOLO);
+const loadTgCfg = (el) => store.get(tgCfgKeyOf(el)) || {};
+const saveTgCfg = (cfg, el) => store.set(tgCfgKeyOf(el), cfg);
 
 let apiNodeSeq = 0; // уникальные id для datalist моделей
 
@@ -1874,6 +1882,13 @@ function prefillOf(compEl, sysEl) {
 // «История чата» появляется сама при связи выхода с нодой чата.
 const HISTORY_PLATE = { id: 'chatHistory', name: 'История чата', kind: 'marker', on: true, fromChat: true };
 let customSeq = 0; // счётчик своих (добавленных) плашек — для уникальных id
+// Свободный id своей плашки В ЭТОМ комплитере. Счётчик после загрузки начинается с нуля, а плашки `custom-N` приезжают
+// из снимка: без проверки новая плашка получала уже занятый id, и провод `plate:<id>` мог встать не на ту из двух.
+function pmFreeCustomId(list) {
+  let id;
+  do { id = 'custom-' + (++customSeq); } while (list && [...list.querySelectorAll('.pm-item')].some((it) => it.dataset.id === id));
+  return id;
+}
 
 function buildPromptNode() {
   const el = document.createElement('div');
@@ -1906,7 +1921,7 @@ function buildPromptNode() {
     b.addEventListener('click', (e) => {
       e.stopPropagation();
       const kind = b.dataset.kind;
-      const p = { id: 'custom-' + (++customSeq), name: kind === 'text' ? 'Свой текст' : (kind === 'marker' ? 'Свой маркер' : 'Мультипользователь'), kind, on: true, custom: true };
+      const p = { id: pmFreeCustomId(list), name: kind === 'text' ? 'Свой текст' : (kind === 'marker' ? 'Свой маркер' : 'Мультипользователь'), kind, on: true, custom: true };
       list.appendChild(makePromptItem(p, list));
       relayoutPlates(list); // новая плашка (Relative) — в верхнюю зону, не под группы глубины
       types.classList.add('hidden');
@@ -1989,7 +2004,7 @@ function buildMpromptNode() {
       e.stopPropagation();
       const kind = b.dataset.kind;
       if (kind === 'slot') { mpAddSlot(list); }
-      else { const p = { id: 'custom-' + (++customSeq), name: kind === 'text' ? 'Свой текст' : 'Свой маркер', kind, on: true, custom: true }; list.appendChild(makePromptItem(p, list)); }
+      else { const p = { id: pmFreeCustomId(list), name: kind === 'text' ? 'Свой текст' : 'Свой маркер', kind, on: true, custom: true }; list.appendChild(makePromptItem(p, list)); }
       relayoutPlates(list); types.classList.add('hidden'); mpRenderSwitcher(el); mpRefreshChats(); redrawWires();
     });
   });
@@ -3629,7 +3644,9 @@ function fsCloneFor(master) {
     (master._docs || []).forEach((d) => soulAddDocRow(view, d));   // общие объекты доков
     ['.soul-batch', '.soul-delta', '.soul-topk', '.soul-maxtok', '.soul-temp', '.soul-reason', '.soul-prompt-preset'].forEach((c) => { const m = master.querySelector(c), v = view.querySelector(c); if (m && v) v.value = m.value; });
     view._master = master;   // движку памяти нужен МАСТЕР (у клона нет проводов → не найти ни слот, ни ряд игрока)
+    { const sp = view.querySelector('.soul-next'); if (sp && typeof soulNextText === 'function') sp.textContent = soulNextText(master); }   // счётчик «до вопроса» — как в ноде
     view._promptMode = master._promptMode || 'single';   // режим набора промтов — общий с мастером
+    if (typeof soul2Face === 'function') soul2Face(view);   // набор «новая» — то же лицо, данные листов общие с мастером
     view._recChat = master._recChat;
     if (typeof soulRecLoadChats === 'function') soulRecLoadChats(view);   // сама выставит папку (игрок сетевой игры / слот / общая) и покажет записи
     if (typeof instrumentTranslateFields === 'function') instrumentTranslateFields(view);
@@ -4171,6 +4188,7 @@ function buildSoulNode() {
         <div class="soul-sec-hd soul-docs-hd">
           <span>Доки памяти</span>
           <select class="soul-prompt-preset" title="Набор доков памяти: один персонаж / несколько / сетевая игра (ведущий или игрок). Наборы сетевой игры меняют и СОСТАВ доков: свои включат, чужие выключат (ничего не удаляя)">
+            <option value="v2">🕯 новая: сцена · психика · дневник</option>
             <option value="single">👤 промты: один персонаж</option>
             <option value="multi">👥 промты: несколько</option>
             <option value="gm">🎬 сетевая: ведущий (мир)</option>
@@ -4183,6 +4201,15 @@ function buildSoulNode() {
           <button class="soul-pg-next" type="button" title="Следующий док (→)">›</button>
         </div>
         <div class="soul-docs"></div>
+        <div class="soul2" hidden>
+          <div class="soul2-row" data-doc="scene"><button class="soul2-on" type="button" title="Вкл / выкл. Выключенный лист не пишется и в промт не идёт"></button><span class="soul2-name">Сцена</span><span class="soul2-where">в промт: перед последней репликой</span><span class="soul2-size"></span><button class="soul2-open" type="button" title="Показать, что сейчас лежит в листе и уходит модели">открыть</button></div>
+          <div class="soul2-view" data-doc="scene" hidden><textarea class="soul2-edit" data-doc="scene" spellcheck="false" placeholder="— писарь ещё не писал —" title="Можно править руками: сохраняется само, когда уберёшь курсор из окошка"></textarea><div class="soul2-edit-note"></div></div>
+          <div class="soul2-row" data-doc="psyche"><button class="soul2-on" type="button" title="Вкл / выкл. Выключенный лист не пишется и в промт не идёт"></button><span class="soul2-name">Психика</span><span class="soul2-where">в промт: перед последней репликой</span><span class="soul2-size"></span><button class="soul2-open" type="button" title="Показать, что сейчас лежит в листе и уходит модели">открыть</button></div>
+          <div class="soul2-view" data-doc="psyche" hidden><textarea class="soul2-edit" data-doc="psyche" spellcheck="false" placeholder="— писарь ещё не писал —" title="Можно править руками: сохраняется само, когда уберёшь курсор из окошка"></textarea><div class="soul2-edit-note"></div></div>
+          <div class="soul2-row" data-doc="diary"><button class="soul2-on" type="button" title="Вкл / выкл. Выключенный лист не пишется и в промт не идёт"></button><span class="soul2-name">Дневник</span><span class="soul2-where">в промт: на месте плашки «Память»</span><span class="soul2-size"></span><button class="soul2-open" type="button" title="Показать записи, которые уходят модели">открыть</button></div>
+          <div class="soul2-view" data-doc="diary" hidden><div class="soul2-diary-hint"></div><div class="soul2-diary"></div><div class="soul2-edit-note"></div></div>
+          <div class="soul2-last"></div>
+        </div>
       </div>
       <div class="soul-sec soul-note-sec" hidden>
         <div class="soul-sec-hd">📌 Заметка автора <span class="soul-note-hint">(рычаг «прямо сейчас», рядом с законами)</span></div>
@@ -4198,12 +4225,13 @@ function buildSoulNode() {
       <div class="soul-sec soul-sec-engine">
         <div class="soul-sec-hd">Как ИИ ведёт память</div>
         <div class="soul-opts-row">
-          <label class="soul-opt" title="Через сколько новых реплик ИИ перечитывает диалог и переписывает память. 0 — авто-обновление выключено (только вручную, кнопкой «⟳ Обновить память сейчас»)">каждые<input class="soul-batch" value="4">сообщ. <span class="soul-opt-hint">(0 — выкл.)</span></label>
+          <label class="soul-opt" title="Через сколько новых ответов ИИ Душа берётся обновлять память. В обычной игре она сначала спрашивает в ленте чата (✓ / ✕) и без твоего ✓ ничего не пишет. 0 — выключено (только вручную, кнопкой «⟳ Обновить память сейчас»)">каждые<input class="soul-batch" value="4">сообщ. <span class="soul-opt-hint">(0 — выкл.)</span></label>
+          <span class="soul-next" title="Счётчик: сколько ответов ИИ осталось до вопроса «Душа: обновить память?» в ленте чата"></span>
           <label class="soul-opt" title="Окно контекста для записи памяти: сколько последних сообщений ИИ перечитывает, когда переписывает доки (Дневник/Статус/Мир/Психика)">глубина<input class="soul-delta" value="14">посл. сообщ.</label>
-          <label class="soul-opt" title="Сколько тем-файлов подтягивать по смыслу в промт (нужен «Эмбеддер»)">тем<input class="soul-topk" value="3"></label>
-          <label class="soul-opt" title="Лимит на САМУ запись — сколько токенов ИИ пишет в каждый док. На размышления модели запас добавляется сверху автоматически (мысли в документ не попадают)">лимит, ток.<input class="soul-maxtok" value="400"></label>
-          <label class="soul-opt" title="Температура при записи памяти: 0 — строго/точно, выше — свободнее. Доки памяти — факты, им нужна стабильность: 0.2–0.3">темп.<input class="soul-temp" value="0.3"></label>
-          <label class="soul-opt soul-reason-lbl" title="Скрытое размышление модели при записи памяти. «Авто» — как решит сама модель (так было всегда); «Выкл» — запретить (дешевле и быстрее); остальное — задать длину. Запас токенов на мысли добавляется сверху автоматически">рассуждение<span class="soul-reason-mount"></span></label>
+          <label class="soul-opt" title="Старые наборы: сколько тем-файлов подтягивать в промт. Набор «новая»: сколько последних записей дневника идёт в промт"><span class="soul-topk-lbl">тем</span><input class="soul-topk" value="3"></label>
+          <label class="soul-opt soul-old" title="Лимит на САМУ запись — сколько токенов ИИ пишет в каждый док. На размышления модели запас добавляется сверху автоматически (мысли в документ не попадают)">лимит, ток.<input class="soul-maxtok" value="400"></label>
+          <label class="soul-opt soul-old" title="Температура при записи памяти: 0 — строго/точно, выше — свободнее. Доки памяти — факты, им нужна стабильность: 0.2–0.3">темп.<input class="soul-temp" value="0.3"></label>
+          <label class="soul-opt soul-old soul-reason-lbl" title="Скрытое размышление модели при записи памяти. «Авто» — как решит сама модель (так было всегда); «Выкл» — запретить (дешевле и быстрее); остальное — задать длину. Запас токенов на мысли добавляется сверху автоматически">рассуждение<span class="soul-reason-mount"></span></label>
         </div>
         <div class="soul-card-note">🪪 Карточка (описание · сценарий · примеры диалогов) подаётся в доки «Psyche» и «Diary» как отправные данные.</div>
         <button class="soul-refresh" type="button">⟳ Обновить память сейчас</button>
@@ -4227,6 +4255,15 @@ function buildSoulNode() {
     dd.addEventListener('change', () => { try { persistCurrentGraph(); } catch (_) {} });
   }
   el.querySelectorAll('.soul-batch, .soul-delta, .soul-topk, .soul-maxtok, .soul-temp').forEach((i) => i.addEventListener('pointerdown', (e) => e.stopPropagation()));
+  {
+    const bf = el.querySelector('.soul-batch');
+    bf.addEventListener('input', () => {   // вижн: значение сразу в настоящую ноду (раньше доезжало только на закрытии вижна)
+      const m = el._master || el;
+      if (m !== el) { const f = m.querySelector('.soul-batch'); if (f) f.value = bf.value; }
+      soulNextPaint(m);
+    });
+    bf.addEventListener('change', () => { try { persistCurrentGraph(); } catch (_) { /* игнор */ } });
+  }
   const soulRefresh = el.querySelector('.soul-refresh');
   soulRefresh.addEventListener('pointerdown', (e) => e.stopPropagation());
   soulRefresh.addEventListener('click', (e) => { e.stopPropagation(); runSoulRefresh(el, null); });
@@ -4243,6 +4280,8 @@ function buildSoulNode() {
     if (!confirm('Стереть все записи памяти этой Души (' + chat + ')? Доки и промты останутся.')) return;
     await rlmApi('/api/rlm/soul/purge', { chat });
     [master, el].forEach((n) => { n._memory = ''; n._memParts = []; n._memoryUsed = []; n._sinceMem = 0; n._keep = {}; });
+    master._memTop = ''; master._memEnd = []; master._v2State = null; master._v2Diary = ''; master._v2Last = null; master._sceneLine = '';   // набор «новая»: листы лежали в той же папке
+    if (typeof soul2Views === 'function') soul2Views(master).forEach(soul2Face);
     if (typeof soulFillDocRecords === 'function') { await soulFillDocRecords(master); if (el !== master) await soulFillDocRecords(el); }
     if (note) note.textContent = 'Записи стёрты.';
   });
@@ -4291,8 +4330,19 @@ function buildSoulNode() {
       e.stopPropagation();
       // Применяем СРАЗУ, без модального confirm: Chromium/Electron глушит повторные нативные диалоги
       // (после пары подряд возвращают «отмену») — из-за этого не удавалось вернуться на «один».
-      applySoulPromptPreset(el, preSel.value);
       const note = el.querySelector('.soul-refresh-note');
+      const master = el._master || el;
+      if (preSel.value === 'v2') {
+        // Набор «новая»: прежние доки не трогаем (вернёшься на старый набор — они на месте), меняется лицо и движок.
+        soul2Views(master).forEach((n) => { n._promptMode = 'v2'; const s = n.querySelector('.soul-prompt-preset'); if (s) s.value = 'v2'; soul2Face(n); });
+        soulRecResolve(el); soul2Load(el);
+        if (note) note.textContent = 'Набор «новая»: Сцена · Психика · Дневник одним запросом. Сцена и психика встают перед последней репликой, дневник — на месте плашки «Память».';
+        if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
+        return;
+      }
+      const wasV2 = master._promptMode === 'v2';
+      applySoulPromptPreset(el, preSel.value);
+      if (wasV2) soul2Views(master).forEach((n) => { n._promptMode = master._promptMode; soul2Face(n); if (typeof soulFillDocRecords === 'function') soulFillDocRecords(n); });   // вернуть прежнее лицо и записи под доками
       const NOTES = {
         multi:  'Набор «несколько персонажей»: Diary · Status · World · Psyche · Topics, промты под группу.',
         single: 'Набор «один персонаж»: Diary · Status · World · Psyche · Topics, промты под одного героя.',
@@ -4309,6 +4359,38 @@ function buildSoulNode() {
   [pgPrev, pgNext].forEach((b) => b.addEventListener('pointerdown', (e) => e.stopPropagation()));
   pgPrev.addEventListener('click', (e) => { e.stopPropagation(); soulPagerGo(el, -1); });
   pgNext.addEventListener('click', (e) => { e.stopPropagation(); soulPagerGo(el, +1); });
+  // Набор «новая»: три строки листов. Тумблер — лист пишется и идёт в промт либо нет; «открыть» — показать, что в нём.
+  const s2box = el.querySelector('.soul2');
+  if (s2box) {
+    s2box.addEventListener('pointerdown', (e) => { if (e.target.closest('.soul2-on, .soul2-open, .soul2-view')) e.stopPropagation(); });
+    s2box.addEventListener('click', (e) => {
+      const row = e.target.closest('.soul2-row'); if (!row) return;
+      const master = el._master || el, k = row.dataset.doc;
+      if (e.target.closest('.soul2-on')) {
+        e.stopPropagation();
+        const on = soul2On(master); on[k] = !on[k];
+        soul2Views(master).forEach(soul2Paint);
+        if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
+        return;
+      }
+      if (e.target.closest('.soul2-open')) {
+        e.stopPropagation();
+        const view = s2box.querySelector('.soul2-view[data-doc="' + k + '"]'); if (!view) return;
+        view.hidden = !view.hidden;
+        e.target.closest('.soul2-open').textContent = view.hidden ? 'открыть' : 'закрыть';
+        if (!view.hidden) soul2Load(el);   // открыл — показать то, что на диске сейчас
+      }
+    });
+    // Ручная правка листа: сохраняется сама, когда курсор уходит из окошка (контент — без дискет).
+    s2box.addEventListener('input', (e) => { const ta = e.target.closest('textarea.soul2-edit'); if (ta) ta._dirty = true; });
+    s2box.addEventListener('change', async (e) => {
+      const ta = e.target.closest('textarea.soul2-edit'); if (!ta) return;
+      const view = ta.closest('.soul2-view'), note = view && view.querySelector('.soul2-edit-note');
+      const err = ta.dataset.file ? await soul2SaveDiaryFile(el, ta.dataset.file, ta.value) : await soul2SaveManual(el, ta.dataset.doc, ta.value);
+      if (!err) ta._dirty = false;
+      if (note) { note.textContent = err ? ('⚠ ' + err + ' — не сохранено, текст в окошке оставлен') : 'сохранено'; note.classList.toggle('err', !!err); }
+    });
+  }
   // Память привязана к ТЕКУЩЕМУ чату автоматически — без выбора «сохранённых душ» и без кнопки обновления:
   // всё обновляется само (движок после записи зовёт soulFillDocRecords; смена чата — soulRecLoadChats).
   // Записи памяти: правка сохраняется на диск; RU — предпросмотр EN→RU (обратимо), EN — перевод RU→EN
@@ -5189,6 +5271,7 @@ async function soulRecLoadChats(el) {
 // соответствующего дока. Дневник → по дате; трекер (Статус/Мир/Психика) → по имени дока; темы → все.
 async function soulFillDocRecords(el) {
   soulRecResolve(el);   // папка беседы могла смениться с прошлой отрисовки — пересчитываем, иначе показываем чужую (старую) папку
+  if (soul2Is(el)) { await soul2Load(el); return; }   // набор «новая»: под доками показывать нечего — листы рисует soul2Paint
   const setRow = (row, html) => { const box = row && row.querySelector('.soul-doc-records'); if (box) box.innerHTML = html; };
   const empty = '<div class="soul-doc-rec-empty">— ИИ ещё не писал —</div>';
   const emptyManual = '<div class="soul-doc-rec-empty">— ведущий ещё не вписал —</div>';   // ручную запись ИИ и не пишет
@@ -5474,6 +5557,7 @@ async function refreshSoulMemory(chatNode) {
   if (!souls.length || !chatNode) return;
   const query = sceneQuery(chatNode, 6);
   for (const soul of souls) {
+    if (soul2Is(soul)) { await soul2Refresh(chatNode, soul); continue; }   // набор «новая»: листы из данных, без подбора по смыслу
     const chat = soulMemChat(chatNode, soul);   // у каждой Души — СВОЯ папка (игрок сетевой игры / слот группы / общая)
     const k = Math.max(1, parseInt((soul.querySelector('.soul-topk') || {}).value, 10) || 3);
     try {
@@ -5665,6 +5749,11 @@ async function runSoulRefresh(el, docId) {
   const chat = document.querySelector('.node-chat');
   const tg = chat ? null : (document.querySelector('.node-netgame') || document.querySelector('.node-telegram'));
   if (!chat && !tg) { say('⚠ Нет ноды «Чат» или «Телеграм сетевая игра».'); return; }
+  if (soul2Is(soul)) {   // набор «новая»: один запрос на все три листа, отдельных доков нет
+    if (!chat) { say('⚠ Набор «новая» пока работает только с нодой «Чат».'); return; }
+    try { await updateMemory(chat, { soul }); } catch (err) { say('⚠ ' + String(err)); }
+    return;
+  }
   const picked = docId ? (soul._docs || []).find((d) => d.id === docId) : null;
   if (picked && picked.kind === 'manual') { say('✎ Это ручная запись — её пишет ведущий, ИИ не трогает.'); return; }
   const docs = (soul._docs || []).filter((d) => d.enabled && d.kind !== 'manual' && (!docId || d.id === docId));
@@ -5793,13 +5882,15 @@ async function updateMemory(chatNode, only) {
   const cardBlock = baseline
     ? 'CHARACTER SHEET — who the character(s) truly are (the baseline). Build memory FROM this and evolve it with the conversation below; do not contradict it without an in-scene reason. Anyone who appears but is NOT described here is a secondary NPC.\n' + baseline + '\n\n'
     : '';
-  const procTotal = souls.reduce((n, s) => n + ((s._docs || []).filter((d) => d.enabled && d.kind !== 'manual' && (!only || d.id === only.docId)).length), 0);   // ручные — мимо движка
+  const procTotal = souls.reduce((n, s) => n + (soul2Is(s) ? 0 : (s._docs || []).filter((d) => d.enabled && d.kind !== 'manual' && (!only || d.id === only.docId)).length), 0);   // ручные — мимо движка; набор «новая» ведёт свою ленту сам
   let procN = 0;
   if (procTotal) { chatNode._procAbort = false; chatNode._procCancel = () => { chatNode._procAbort = true; chatProc(chatNode, 'cancel', 'Прервано'); }; chatProc(chatNode, 'fill', 'Формирование Души', { frac: 0, cancelable: true }); }
   try {
     for (const soul of souls) {
       if (chatNode._procAbort) break;   // ✕ — прервать между Душами
       soulKeepFor(soul, chat);          // подписи «НЕ перезаписан» от другой папки памяти (сменился чат) — снять
+      // Набор «новая»: три листа одним JSON — свой путь записи (soul2Update), прежние доки не участвуют.
+      if (soul2Is(soul)) { if (await soul2Update(chatNode, soul, setNote)) soul._sinceMem = 0; continue; }   // неудача: счётчик не сбрасываем — вопрос вернётся на следующем ответе
       const api = soulApi(soul, chatNode);
       if (!api) { setNote(soul, '⚠ Нужен API с ключом/моделью: свой (вход «API» Души) или у чата.'); continue; }
       const delta = Math.max(2, parseInt((soul.querySelector('.soul-delta') || {}).value, 10) || 14);
@@ -5893,7 +5984,7 @@ async function updateMemory(chatNode, only) {
     renderScanners();
     souls.forEach((s) => soulFillDocRecords(s));   // обновить записи под доками (память изменилась)
     chatNode._procCancel = null; if (procTotal && !chatNode._procAbort) chatProc(chatNode, 'done', 'Душа собрана');
-  } finally { soulBusy = false; }
+  } finally { soulBusy = false; soulNextPaintAll(); }   // счётчик «до вопроса» — заново после записи
 }
 // Правило писарю Душ СЕТЕВОЙ игры (наборы «ведущий»/«игрок»): писать только то, что сказано в сцене. Status там главнее
 // истории (решение Leon 2026-09-13), и догадка писаря становится фактом: после хода 1 DeepSeek решил, что «мужик у доски,
@@ -6283,6 +6374,27 @@ async function updateMemoryBatch(chatNode, soul, charName, opts) {
   }
   return wrote.size ? wrote : null;
 }
+// Счётчик Души «через сколько»: сколько ответов ИИ осталось до вопроса «обновить память?» (обычная игра — всегда через
+// подтверждение ✓ / ✕ в ленте) или до само-обновления (групповой чат, «Телеграм сингл»). Число — поле ноды `_sinceMem`.
+const soulAns = (k) => { const d = k % 10, h = k % 100; return k + ' ' + ((d === 1 && h !== 11) ? 'ответ' : ((d >= 2 && d <= 4 && (h < 12 || h > 14)) ? 'ответа' : 'ответов')); };
+function soulNextText(master) {
+  const host = document.querySelector('#world .node-chat') || document.querySelector('#world .node-telegram');
+  if (!host || host.classList.contains('node-netgame')) return '';   // сетевая игра ведёт Души по своему счётчику ходов (панель ведущего)
+  const v = parseInt((master.querySelector('.soul-batch') || {}).value, 10);
+  const batch = Number.isFinite(v) ? v : 4;
+  if (batch <= 0) return 'сама не спрашивает';
+  const left = batch - (master._sinceMem || 0);
+  const asks = (typeof sumAsksFirst === 'function') && sumAsksFirst(host);   // там же, где есть вопрос в ленте
+  if (left > 0) return (asks ? 'до вопроса: ' : 'до обновления: ') + soulAns(left);
+  if (asks) return host._soulAsk ? 'ждёт твоего ✓ / ✕ в ленте чата' : 'спросит после следующего ответа';
+  return 'обновление — после следующего ответа';
+}
+function soulNextPaint(soul) {
+  const master = (soul && soul._master) || soul; if (!master || !master.querySelector) return;
+  const t = soulNextText(master);
+  [master].concat([...document.querySelectorAll('.soul-view')].filter((x) => x._master === master)).forEach((x) => { const sp = x.querySelector('.soul-next'); if (sp) sp.textContent = t; });
+}
+function soulNextPaintAll() { document.querySelectorAll('#world .node-soul').forEach(soulNextPaint); }
 // Планировщик: после ответа копим реплики; раз в «batch» — авто-обновление памяти (фоном).
 // «каждые 0 сообщ.» = авто-обновление ВЫКЛЮЧЕНО (память пишется только вручную, кнопкой ⟳).
 function maybeUpdateMemory(chatNode, opts) {
@@ -6295,6 +6407,7 @@ function maybeUpdateMemory(chatNode, opts) {
   const batch = Number.isFinite(n) ? n : 4;      // пусто/мусор → 4; ЯВНЫЙ 0 доходит сюда нулём (0 || 4 давал 4 — из-за этого ноль не выключал)
   if (batch <= 0) return;
   soul._sinceMem = (soul._sinceMem || 0) + 1;
+  soulNextPaint(soul);
   if (soul._sinceMem < batch) return;
   // СИНГЛ: не стартуем сами — спрашиваем в ленте внизу «Душа: обновить память? ✓ / ✕». Причина (Leon):
   // ответ модели мог не подойти, а память уже пишется по нему. ✕ = «не сейчас»: счётчик не сбрасываем,
@@ -6306,6 +6419,7 @@ function maybeUpdateMemory(chatNode, opts) {
   if (!single) { updateMemory(chatNode).catch(() => {}); return; }
   chatNode._soulAsk = true;
   chatProc(chatNode, 'ask', 'Душа: обновить память по этому ответу?');
+  soulNextPaint(soul);
 }
 // Ответ на вопрос ленты «Душа: обновить память?» (из кадра чата: ✓ / ✕).
 function soulConfirm(chatNode, yes) {
@@ -6313,6 +6427,424 @@ function soulConfirm(chatNode, yes) {
   chatNode._soulAsk = false;
   if (yes) updateMemory(chatNode).catch(() => {});
   else chatProc(chatNode, 'idle');   // «не сейчас» — счётчик остаётся, спросим на следующем новом ответе
+  soulNextPaintAll();
+}
+// ══ ДУША «НОВАЯ» (набор v2): три листа — Сцена / Психика / Дневник — одним запросом и одним JSON ══
+// Решения и замер — docs/plan-soul-rebuild.md. Розетки прежние: тип ноды, updateMemory / refreshSoulMemory /
+// maybeUpdateMemory, поля _memory / _memParts / _memoryUsed / _sceneLine. Другая только начинка:
+//   • истина — данные (`_state.json` в папке памяти чата, /api/rlm/soul/state-*), текст для промта печатается из них;
+//   • писарь присылает ТОЛЬКО ИЗМЕНЕНИЯ; чего не назвал — остаётся как было; ответ не по форме память не трогает;
+//   • Сцена и Психика идут в промт перед последней репликой, Дневник — на месте плашки «Память»;
+//   • в лорбук Душа не пишет, порогов и подбора по похожести нет: лист включён — идёт целиком.
+// Включается набором «новая» в шапке ноды. Остальные наборы (один / несколько / сетевые) работают по-старому.
+const SOUL2_END_DEPTH = 1;       // «перед последней репликой»: замер 2026-10-08 — взаимное положение тел модель берёт только отсюда
+const SOUL2_MAXTOK = 900;        // лимит ответа писаря на весь JSON; запас на мысли добавляется сверху, как у прежней Души
+const SOUL2_TEMP = 0.3;          // писарь ведёт факты, а не прозу
+const SOUL2_FIELD_MAX = 240;     // потолок одного поля, знаков
+const SOUL2_DIARY_MAX = 900;     // потолок одной записи дневника, знаков
+const SOUL2_PEOPLE_MAX = 8;
+const SOUL2_BELIEFS_MAX = 5;
+const SOUL2_TRUST = ['Distrustful', 'Wary', 'Neutral', 'Developing Trust', 'Deeply Bound', 'Unstable'];
+const SOUL2_PERSON_FIELDS = ['where', 'pose', 'wearing', 'holding', 'condition'];
+const SOUL2_PSY_FIELDS = ['emotion', 'tension', 'hidden_goal', 'hides'];
+const SOUL2_RU = { location: 'место', time: 'время', where: 'где', pose: 'поза', wearing: 'одежда', holding: 'в руках', condition: 'состояние',
+  emotion: 'эмоция', intensity: 'сила эмоции', tension: 'напряжение', hidden_goal: 'скрытая цель', trust: 'доверие', hides: 'скрывает' };
+const SOUL2_LEAD_SCENE = 'The scene as it stands RIGHT NOW — place, positions, clothing, condition, what is at hand. This is the present moment: trust it over anything older in the log and stay consistent with it.';
+const SOUL2_LEAD_PSYCHE = "{{char}}'s inner state and true feelings toward {{user}} — subtext, not speech. Let it shape tone, reactions and what {{char}} hides; never state it outright and never have {{char}} narrate their own psychology.";
+const SOUL2_LEAD_DIARY = "{{char}}'s own private diary entries from earlier scenes — how things felt to them, not a log of facts. Use them for emotional continuity; {{char}} never quotes them aloud and {{user}} does not know they exist.";
+const SOUL2_SYS = [
+  'You keep the working memory of an ongoing roleplay as structured data. You are an analyst, not a storyteller: you never continue the story.',
+  '',
+  'You receive the CURRENT MEMORY and the RECENT CONVERSATION. Output ONE JSON object that states ONLY WHAT CHANGED, and nothing outside the JSON.',
+  '',
+  '{',
+  '  "scene": {',
+  '    "location": "where the scene takes place right now",',
+  '    "time": "time of day, weather, light",',
+  '    "people": [',
+  '      { "name": "bare name", "where": "exact spot and position relative to the others", "pose": "body posture", "wearing": "clothing and its state", "holding": "what is in their hands, or nothing", "condition": "wounds, tiredness, visible state" }',
+  '    ],',
+  '    "gone": ["name of someone who left the scene"]',
+  '  },',
+  '  "psyche": {',
+  '    "emotion": "{{char}}\'s dominant emotion right now",',
+  '    "intensity": 3,',
+  '    "tension": "{{char}}\'s inner conflict or dilemma",',
+  '    "hidden_goal": "what {{char}} is really after in this conversation",',
+  '    "trust": "Distrustful | Wary | Neutral | Developing Trust | Deeply Bound | Unstable",',
+  '    "hides": "what {{char}} keeps from {{user}}",',
+  '    "beliefs_add": ["a core belief or flaw of {{char}} newly revealed"],',
+  '    "beliefs_remove": ["text of a stored belief that no longer holds"]',
+  '  },',
+  '  "diary": "a new private diary entry by {{char}}, or null"',
+  '}',
+  '',
+  'RULES',
+  '- PATCH, NOT REWRITE. Include only the fields whose value changed since CURRENT MEMORY. Leave out everything that is still true: an omitted field keeps its stored value. If nothing changed, output {}.',
+  '- scene.people lists everyone physically present, INCLUDING {{user}}. Reuse the exact names from CURRENT MEMORY. For each person give only the fields that changed. Every field: present tense, under 20 words.',
+  '- "where" must make the layout unambiguous: who is beside, above, below, behind or facing whom, and next to what.',
+  '- psyche is about {{char}} only. Read the subtext from hints; it is not a recap of lines. "intensity" is an integer from 1 to 5.',
+  '- CHANGE PSYCHE SLOWLY. One exchange nudges a person, it does not flip them. The trust scale runs Distrustful → Wary → Neutral → Developing Trust → Deeply Bound: move "trust" at most ONE step per update and "intensity" by at most 1 ("Unstable" is off the scale — only for a bond that is genuinely volatile). Jump further only at a real turning point shown in the conversation: betrayal, rescue, confession, violence. Keep "tension", "hidden_goal" and "hides" as stored until the scene clearly resolves or replaces them; do not reword a field that is still true.',
+  '- diary: write an entry only when something happened that {{char}} would privately dwell on; otherwise null. First person as {{char}}, plain prose about feelings, no dialogue, no quotation marks. HARD LIMIT: 4 sentences at most.',
+  '- Record only what the conversation shows or the character sheet states. Never invent.',
+].join('\n');
+function soul2Is(soul) { const m = soul && (soul._master || soul); return !!(m && m._promptMode === 'v2'); }
+function soul2On(soul) { const m = soul._master || soul; if (!m._v2on) m._v2on = { scene: true, psyche: true, diary: true }; return m._v2on; }
+function soul2Empty() { return { v: 1, scene: { location: '', time: '', people: [] }, psyche: { emotion: '', intensity: 0, tension: '', hidden_goal: '', trust: '', hides: '', beliefs: [] } }; }
+function soul2Str(x, max) { return String(x == null ? '' : x).replace(/\s+/g, ' ').trim().slice(0, max || SOUL2_FIELD_MAX); }
+// Привести то, что лежит на диске, к известной форме: чужие и битые поля отбрасываются молча (на диск они не вернутся).
+function soul2Norm(raw) {
+  const st = soul2Empty();
+  if (!raw || typeof raw !== 'object') return st;
+  const sc = (raw.scene && typeof raw.scene === 'object') ? raw.scene : {};
+  st.scene.location = soul2Str(sc.location); st.scene.time = soul2Str(sc.time);
+  (Array.isArray(sc.people) ? sc.people : []).slice(0, SOUL2_PEOPLE_MAX).forEach((p) => {
+    if (!p || typeof p !== 'object') return; const name = soul2Str(p.name, 80); if (!name) return;
+    const o = { name }; SOUL2_PERSON_FIELDS.forEach((f) => { o[f] = soul2Str(p[f]); }); st.scene.people.push(o);
+  });
+  const ps = (raw.psyche && typeof raw.psyche === 'object') ? raw.psyche : {};
+  SOUL2_PSY_FIELDS.forEach((f) => { st.psyche[f] = soul2Str(ps[f]); });
+  const n = Math.round(Number(ps.intensity)); st.psyche.intensity = (isFinite(n) && n >= 1) ? Math.min(5, n) : 0;
+  st.psyche.trust = SOUL2_TRUST.find((t) => t.toLowerCase() === soul2Str(ps.trust, 40).toLowerCase()) || '';
+  st.psyche.beliefs = (Array.isArray(ps.beliefs) ? ps.beliefs : []).map((b) => soul2Str(b)).filter(Boolean).slice(-SOUL2_BELIEFS_MAX);
+  if (raw.updated) st.updated = String(raw.updated);
+  return st;
+}
+function soul2HasData(st) { return !!(st && (st.scene.location || st.scene.people.length || st.psyche.emotion || st.psyche.beliefs.length)); }
+// «Mia» и «Mia Hartley» — один человек: иначе писарь, назвав полное имя, заводит в сцене двойника.
+function soul2SameName(a, b) {
+  a = String(a || '').toLowerCase().trim(); b = String(b || '').toLowerCase().trim();
+  if (!a || !b) return false; if (a === b) return true;
+  const s = a.length <= b.length ? a : b, l = a.length <= b.length ? b : a;
+  return s.length >= 3 && (l.indexOf(s + ' ') === 0 || l.slice(-(s.length + 1)) === ' ' + s);
+}
+// Текст листа для промта. Имя и его свойства — РАЗНЫМИ строками (слитую строку модель читает как имя — грабли Aventuras).
+function soul2RenderScene(sc) {
+  if (!sc) return '';
+  const L = [];
+  if (sc.location) L.push('LOCATION: ' + sc.location);
+  if (sc.time) L.push('TIME: ' + sc.time);
+  if (sc.people && sc.people.length) {
+    L.push('PRESENT:');
+    sc.people.forEach((p) => { L.push('- ' + p.name); SOUL2_PERSON_FIELDS.forEach((f) => { if (p[f]) L.push('  ' + f + ': ' + p[f]); }); });
+  }
+  return L.join('\n');
+}
+function soul2RenderPsyche(ps) {
+  if (!ps) return '';
+  const L = [];
+  if (ps.emotion) L.push('- Dominant emotion: ' + ps.emotion + (ps.intensity ? ' (' + ps.intensity + '/5)' : ''));
+  if (ps.tension) L.push('- Inner tension: ' + ps.tension);
+  if (ps.hidden_goal) L.push('- Hidden goal: ' + ps.hidden_goal);
+  if (ps.trust) L.push('- Trust toward {{user}}: ' + ps.trust);
+  if (ps.hides) L.push('- Hides: ' + ps.hides);
+  if (ps.beliefs && ps.beliefs.length) L.push('- Core beliefs: ' + ps.beliefs.join('; '));
+  return L.join('\n');
+}
+// Строка-«стог сена» для переклички лорбука (К-26): место и имена тех, кто в сцене.
+function soul2SceneLine(sc) { return sc ? [sc.location].concat((sc.people || []).map((p) => p.name)).filter(Boolean).join(' · ') : ''; }
+// Достать JSON из ответа писаря. Не JSON-объект → null (память останется как была).
+function soul2ParsePatch(text) {
+  const src = String(text || '').trim(); if (!src) return null;
+  const a = src.indexOf('{'), b = src.lastIndexOf('}'); if (a < 0 || b <= a) return null;
+  const body = src.slice(a, b + 1);
+  const tryParse = (s) => { try { const o = JSON.parse(s); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : null; } catch (_) { return null; } };
+  return tryParse(body) || tryParse(body.replace(/,\s*([}\]])/g, '$1'));   // вторая попытка — без висячих запятых
+}
+// Внести изменения в состояние. Возвращает список того, что реально поменялось (он же — строка в чате).
+function soul2Apply(state, patch, on) {
+  const changes = []; let diary = '';
+  if (!patch || typeof patch !== 'object') return { changes, diary };
+  const sc = patch.scene;
+  if (on.scene && sc && typeof sc === 'object') {
+    const cur = state.scene;
+    ['location', 'time'].forEach((f) => { const v = soul2Str(sc[f]); if (v && v !== cur[f]) { changes.push({ doc: 'scene', who: '', f, from: cur[f], to: v }); cur[f] = v; } });
+    (Array.isArray(sc.gone) ? sc.gone : []).forEach((n) => {
+      const nm = soul2Str(n, 80); if (!nm) return;
+      const i = cur.people.findIndex((p) => soul2SameName(p.name, nm));
+      if (i >= 0) { changes.push({ doc: 'scene', who: cur.people[i].name, f: 'gone', from: '', to: '' }); cur.people.splice(i, 1); }
+    });
+    (Array.isArray(sc.people) ? sc.people : []).forEach((pp) => {
+      if (!pp || typeof pp !== 'object') return; const name = soul2Str(pp.name, 80); if (!name) return;
+      let p = cur.people.find((x) => soul2SameName(x.name, name));
+      if (!p) {
+        if (cur.people.length >= SOUL2_PEOPLE_MAX) return;
+        p = { name }; SOUL2_PERSON_FIELDS.forEach((f) => { p[f] = ''; }); cur.people.push(p);
+        changes.push({ doc: 'scene', who: name, f: 'new', from: '', to: '' });
+      }
+      SOUL2_PERSON_FIELDS.forEach((f) => { const v = soul2Str(pp[f]); if (v && v !== p[f]) { changes.push({ doc: 'scene', who: p.name, f, from: p[f], to: v }); p[f] = v; } });
+    });
+  }
+  const ps = patch.psyche;
+  if (on.psyche && ps && typeof ps === 'object') {
+    const cur = state.psyche;
+    SOUL2_PSY_FIELDS.forEach((f) => { const v = soul2Str(ps[f]); if (v && v !== cur[f]) { changes.push({ doc: 'psyche', who: '', f, from: cur[f], to: v }); cur[f] = v; } });
+    if (ps.intensity != null && ps.intensity !== '') {
+      const n = Math.round(Number(ps.intensity));
+      if (isFinite(n)) { const c = Math.max(1, Math.min(5, n)); if (c !== cur.intensity) { changes.push({ doc: 'psyche', who: '', f: 'intensity', from: cur.intensity ? String(cur.intensity) : '', to: String(c) }); cur.intensity = c; } }
+    }
+    // Шаг доверия и силы эмоции код НЕ ограничивает (Leon 2026-10-08: резкий поворот сюжета должен доходить сразу);
+    // «меняй плавно» — только просьба в SOUL2_SYS, а сдерживает то, что Душа пишется не каждый ход.
+    const tr = SOUL2_TRUST.find((t) => t.toLowerCase() === soul2Str(ps.trust, 40).toLowerCase());   // чужое слово вместо ступени — не принимаем
+    if (tr && tr !== cur.trust) { changes.push({ doc: 'psyche', who: '', f: 'trust', from: cur.trust, to: tr }); cur.trust = tr; }
+    const nrm = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N} ]+/gu, ' ').replace(/\s+/g, ' ').trim();
+    (Array.isArray(ps.beliefs_remove) ? ps.beliefs_remove : []).forEach((b) => {
+      const k = nrm(soul2Str(b)); if (!k) return;
+      const i = cur.beliefs.findIndex((x) => { const xn = nrm(x); return xn === k || (k.length >= 8 && xn.indexOf(k) >= 0); });
+      if (i >= 0) { changes.push({ doc: 'psyche', who: '', f: 'belief-', from: cur.beliefs[i], to: '' }); cur.beliefs.splice(i, 1); }
+    });
+    (Array.isArray(ps.beliefs_add) ? ps.beliefs_add : []).forEach((b) => {
+      const v = soul2Str(b); if (!v || cur.beliefs.some((x) => nrm(x) === nrm(v))) return;
+      cur.beliefs.push(v); changes.push({ doc: 'psyche', who: '', f: 'belief+', from: '', to: v });
+    });
+    while (cur.beliefs.length > SOUL2_BELIEFS_MAX) { const gone = cur.beliefs.shift(); changes.push({ doc: 'psyche', who: '', f: 'belief-', from: gone, to: '', cap: true }); }   // потолок — на виду, а не молча
+  }
+  if (on.diary && typeof patch.diary === 'string') {
+    const d = patch.diary.trim();
+    if (d && !/^(null|none|n\/a|-)$/i.test(d)) diary = d.slice(0, SOUL2_DIARY_MAX);
+  }
+  return { changes, diary };
+}
+function soul2ChangeText(c) {
+  if (c.f === 'new') return c.who + ' — в сцене';
+  if (c.f === 'gone') return c.who + ' — ушёл из сцены';
+  if (c.f === 'belief+') return 'убеждение + ' + c.to;
+  if (c.f === 'belief-') return 'убеждение − ' + c.from + (c.cap ? ' (потолок ' + SOUL2_BELIEFS_MAX + ')' : '');
+  return (c.who ? c.who + ' · ' : '') + (SOUL2_RU[c.f] || c.f) + ': ' + (c.from ? c.from + ' → ' : '') + c.to;
+}
+// Нода и её открытые вижны (у клона нет проводов — данные общие с мастером).
+function soul2Views(master) { return [master].concat([...document.querySelectorAll('.soul-view')].filter((v) => v._master === master)); }
+// ЧТЕНИЕ в промт: состояние с диска → три текста. Сцена и Психика — в `_memEnd` (их ставит перед последней репликой
+// assembleMessages), Дневник — в `_memTop` (его отдаёт плашке sourceText). `_memory` — всё вместе: его читают Критик и счётчики.
+async function soul2Refresh(chatNode, soul) {
+  const chat = soulMemChat(chatNode, soul);
+  const on = soul2On(soul);
+  const k = Math.max(1, parseInt((soul.querySelector('.soul-topk') || {}).value, 10) || 3);
+  try {
+    const [got, di] = await Promise.all([
+      rlmApi('/api/rlm/soul/state-get', { chat }),
+      on.diary ? rlmApi('/api/rlm/soul/diary', { chat, k }) : Promise.resolve(null),   // без query: последние k записей, не «похожие»
+    ]);
+    const state = soul2Norm(got && got.state);
+    const diary = String((di && di.memory) || '').trim();
+    soul._v2State = state; soul._v2Diary = diary;
+    const end = [];
+    const psy = on.psyche ? soul2RenderPsyche(state.psyche) : '';
+    if (psy) end.push({ name: 'Психика', src: 'Душа · психика', text: '[{{char}} — INNER STATE]\n' + SOUL2_LEAD_PSYCHE + '\n' + psy });
+    const scn = on.scene ? soul2RenderScene(state.scene) : '';
+    if (scn) end.push({ name: 'Сцена', src: 'Душа · сцена', text: '[SCENE RIGHT NOW]\n' + SOUL2_LEAD_SCENE + '\n' + scn });   // сцена — последней: ближе всех к ответу
+    soul._memTop = diary ? ('[CHARACTER MEMORY]\n## Diary\n' + SOUL2_LEAD_DIARY + '\n' + diary) : '';
+    soul._memEnd = end;
+    soul._memory = [soul._memTop].concat(end.map((p) => p.text)).filter(Boolean).join('\n\n');
+    soul._memParts = (diary ? [{ name: 'Diary', text: diary, lead: SOUL2_LEAD_DIARY, into: 'memory' }] : []).concat(end.map((p) => ({ name: p.name, text: p.text, lead: '', into: 'memory' })));
+    soul._memoryUsed = (diary ? ['Дневник'] : []).concat(end.map((p) => p.name));
+    soul._scene = state.scene; soul._sceneLine = on.scene ? soul2SceneLine(state.scene) : ''; soul._sceneKind = 'json';
+  } catch (e) { soul._memory = soul._memory || ''; soul._memTop = soul._memTop || ''; soul._memEnd = soul._memEnd || []; soul._memParts = soul._memParts || []; }
+  soul2Views(soul).forEach(soul2Paint);
+}
+// ЗАПИСЬ: один запрос писарю → один JSON с изменениями → проверка формы → применение. true — память обновлена (или менять нечего).
+async function soul2Update(chatNode, soul, setNote) {
+  const api = soulApi(soul, chatNode);
+  if (!api) { setNote(soul, '⚠ Нужен API с ключом/моделью: свой (вход «API» Души) или у чата.'); return false; }
+  const on = soul2On(soul);
+  if (!on.scene && !on.psyche && !on.diary) { setNote(soul, '⚠ Все три листа выключены — писать нечего.'); return false; }
+  const delta = Math.max(2, parseInt((soul.querySelector('.soul-delta') || {}).value, 10) || 14);
+  const convo = memTranscript(chatNode, delta);
+  if (!convo.trim()) { setNote(soul, 'Пусто — нечего записывать.'); return false; }
+  const chat = soulMemChat(chatNode, soul);
+  const mctx = chatNames(chatNode);
+  chatNode._procAbort = false;
+  chatNode._procCancel = () => { chatNode._procAbort = true; chatProc(chatNode, 'cancel', 'Прервано'); };
+  chatProc(chatNode, 'pulse', 'Душа: пишу память', { cancelable: true });
+  setNote(soul, 'Пишу память…');
+  const got = await rlmApi('/api/rlm/soul/state-get', { chat }).catch(() => null);
+  const state = soul2Norm(got && got.state);
+  const baseline = characterBaseline(chatNode);
+  const cardBlock = baseline ? ('CHARACTER SHEET — who {{char}} truly is (the baseline; do not contradict it without an in-scene reason):\n' + baseline + '\n\n') : '';
+  const curBlock = soul2HasData(state)
+    ? JSON.stringify({ scene: state.scene, psyche: state.psyche }, null, 1)
+    : '(empty — this is the first update: fill in every field the conversation and the character sheet support)';
+  const want = [on.scene ? 'scene' : '', on.psyche ? 'psyche' : '', on.diary ? 'diary' : ''].filter(Boolean).join(', ');
+  const user = cardBlock + 'CURRENT MEMORY:\n' + curBlock + '\n\nRECENT CONVERSATION:\n' + convo + '\n\nOutput the JSON now. Sections to write: ' + want + '.';
+  const params = Object.assign({ max_tokens: SOUL2_MAXTOK + tokVal('soul.think', MEM_THINK_BUDGET_DEF), temperature: SOUL2_TEMP }, soulReasonParams(soul));
+  const messages = [{ role: 'system', content: substituteMacros(SOUL2_SYS, mctx) }, { role: 'user', content: substituteMacros(user, mctx) }];
+  const ask = (msgs) => rlmApi('/api/rlm/generate', { _ctxKey: '.soul-maxtok@.node-soul', _ctxNode: soul, base: api.base, key: api.key, model: api.model, messages: msgs, params });
+  let r = await ask(messages);
+  let text = memCleanReply(r);
+  let patch = soul2ParsePatch(text);
+  if (!patch && !chatNode._procAbort && r && r.ok) {   // один повтор: вернуть писарю его же ответ и попросить форму
+    r = await ask(messages.concat([{ role: 'assistant', content: String(text || '').slice(0, 1500) || '(empty)' }, { role: 'user', content: 'That was not a valid JSON object in the required form. Output ONLY the JSON object, nothing else.' }]));
+    text = memCleanReply(r); patch = soul2ParsePatch(text);
+  }
+  chatNode._procCancel = null;
+  if (chatNode._procAbort) { setNote(soul, 'Запись памяти прервана — память не тронута.'); return false; }
+  if (!patch) {
+    const why = (r && !r.ok) ? ('ошибка модели — ' + String(r.error || '—')) : 'писарь ответил не по форме';
+    setNote(soul, '⚠ ' + why + '. Память не тронута.');
+    chatProc(chatNode, 'idle');
+    if (typeof chatToast === 'function') chatToast(chatNode, 'Душа: ' + why + ' — память не тронута', 'err');
+    return false;
+  }
+  const res = soul2Apply(state, patch, on);
+  if (res.changes.length) {
+    state.updated = new Date().toISOString();
+    const w = await rlmApi('/api/rlm/soul/state-save', { chat, state }).catch(() => null);
+    if (!w || w.ok === false) {
+      setNote(soul, '⚠ Не удалось сохранить память на диск. Память не тронута.');
+      chatProc(chatNode, 'idle');
+      if (typeof chatToast === 'function') chatToast(chatNode, 'Душа: память не сохранилась на диск', 'err');
+      return false;
+    }
+  }
+  if (res.diary) await rlmApi('/api/rlm/soul/append', { chat, text: res.diary }).catch(() => null);
+  const nScene = res.changes.filter((c) => c.doc === 'scene').length, nPsy = res.changes.filter((c) => c.doc === 'psyche').length;
+  soul._v2Last = { at: Date.now(), lines: res.changes.map(soul2ChangeText).concat(res.diary ? ['дневник + ' + res.diary] : []) };
+  const pl = (k) => { const d = k % 10, h = k % 100; return k + ' ' + ((d === 1 && h !== 11) ? 'правка' : ((d >= 2 && d <= 4 && (h < 12 || h > 14)) ? 'правки' : 'правок')); };   // число = сколько строк листа изменилось
+  const sum = [nScene ? 'сцена: ' + pl(nScene) : '', nPsy ? 'психика: ' + pl(nPsy) : '', res.diary ? 'дневник: новая запись' : ''].filter(Boolean).join(' · ');
+  setNote(soul, sum ? ('Готово: ' + sum + '.') : 'Готово: изменений нет.');
+  chatProc(chatNode, 'done', sum ? ('Душа обновлена · ' + sum) : 'Душа: изменений нет');
+  return true;
+}
+// Показ в ноде: что лежит в листах сейчас (вне хода — по папке текущего чата).
+async function soul2Load(el) {
+  const master = el._master || el;
+  const chat = el._recChat || master._recChat;
+  if (!chat) { master._v2State = soul2Empty(); master._v2Diary = ''; master._v2DiaryFiles = []; soul2Views(master).forEach(soul2Paint); return; }
+  const k = Math.max(1, parseInt((master.querySelector('.soul-topk') || {}).value, 10) || 3);
+  const [got, di, all] = await Promise.all([
+    rlmApi('/api/rlm/soul/state-get', { chat }).catch(() => null),
+    rlmApi('/api/rlm/soul/diary', { chat, k }).catch(() => null),
+    rlmApi('/api/rlm/soul/all', { chat }).catch(() => null),   // файлы дневника по дням — для ручной правки
+  ]);
+  master._v2State = soul2Norm(got && got.state); master._v2Diary = String((di && di.memory) || '').trim();
+  master._v2DiaryFiles = ((all && all.docs) || []).filter((d) => d && d.group === 'diary').map((d) => ({ name: String(d.name || ''), text: String(d.text || '').trim() })).sort((a, b) => b.name.localeCompare(a.name));
+  soul2Views(master).forEach(soul2Paint);
+}
+function soul2Paint(el) {
+  const master = el._master || el;
+  const box = el.querySelector('.soul2'); if (!box) return;
+  const on = soul2On(master), st = master._v2State || soul2Empty();
+  // В ноде показываем ровно то, что уйдёт модели: {{char}} / {{user}} — уже именами (как после сборки промта).
+  const host = document.querySelector('.node-chat') || document.querySelector('.node-netgame') || document.querySelector('.node-telegram');
+  const mctx = host ? chatNames(host) : null;
+  const named = (t) => (t && mctx) ? substituteMacros(t, mctx) : t;
+  const texts = { scene: named(soul2RenderScene(st.scene)), psyche: named(soul2RenderPsyche(st.psyche)), diary: String(master._v2Diary || '') };
+  box.querySelectorAll('.soul2-row').forEach((row) => {
+    const k = row.dataset.doc, t = texts[k] || '';
+    row.dataset.on = String(!!on[k]);
+    const sz = row.querySelector('.soul2-size'); if (sz) sz.textContent = t ? (soulWords(t) + ' сл.') : 'пусто';
+    const ta = box.querySelector('textarea.soul2-edit[data-doc="' + k + '"]');
+    if (ta && document.activeElement !== ta && !ta._dirty) { ta.value = t; ta.rows = Math.min(18, Math.max(3, t.split('\n').length + 1)); }   // пока человек печатает или правка не принята — его текст не трогаем
+  });
+  // Дневник: файлы по дням, каждый правится целиком. В промт идут последние записи — сколько, сказано строкой сверху.
+  const dbox = box.querySelector('.soul2-diary');
+  if (dbox && !dbox.contains(document.activeElement)) {
+    const files = master._v2DiaryFiles || [];
+    dbox.innerHTML = files.length
+      ? files.map((f) => '<div class="soul2-day"><div class="soul2-day-hd">' + esc(String(f.name).replace(/\.md$/i, '').replace(/^Diary_/i, '')) + '</div><textarea class="soul2-edit" data-file="' + esc(f.name) + '" spellcheck="false" rows="' + Math.min(14, Math.max(3, String(f.text).split('\n').length + 1)) + '">' + esc(f.text) + '</textarea></div>').join('')
+      : '<div class="soul2-empty">— персонаж ещё ничего не записал —</div>';
+    const hint = box.querySelector('.soul2-diary-hint');
+    if (hint) hint.textContent = 'В промт идут последние ' + Math.max(1, parseInt((master.querySelector('.soul-topk') || {}).value, 10) || 3) + ' записи (число — в поле «записей дневника в промт»). Ниже — весь дневник по дням, его можно править.';
+  }
+  const last = box.querySelector('.soul2-last');
+  if (last) {
+    const L = master._v2Last;
+    last.innerHTML = (L && L.lines && L.lines.length)
+      ? ('<div class="soul2-last-hd">что изменилось в последний раз</div>' + L.lines.map((s) => '<div class="soul2-ch">' + esc(s) + '</div>').join(''))
+      : '';
+  }
+}
+// Лицо ноды по набору: «новая» — три строки листов, остальные наборы — прежние доки.
+function soul2Face(el) {
+  const v2 = soul2Is(el);
+  el.classList.toggle('soul-v2', v2);
+  const box = el.querySelector('.soul2'); if (box) box.hidden = !v2;
+  const lab = el.querySelector('.soul-topk-lbl'); if (lab) lab.textContent = v2 ? 'записей дневника в промт' : 'тем';
+  if (v2) soul2Paint(el);
+}
+// РУЧНАЯ ПРАВКА листа: текст в окошке — тот же, что уходит модели («поле: значение»). Правишь — лист заменяется целиком
+// тем, что написано: убрал строку — поля нет. Строка, которую не удалось понять, не теряется молча: правка не сохраняется.
+function soul2ParseSceneText(text) {
+  const scene = { location: '', time: '', people: [] }, bad = []; let cur = null;
+  String(text || '').split(/\r?\n/).forEach((raw) => {
+    const ln = raw.trim(); if (!ln) return;
+    let m;
+    if ((m = ln.match(/^location\s*:\s*(.*)$/i))) { scene.location = m[1].trim(); cur = null; return; }
+    if ((m = ln.match(/^time\s*:\s*(.*)$/i))) { scene.time = m[1].trim(); cur = null; return; }
+    if (/^present\s*:?\s*$/i.test(ln)) { cur = null; return; }
+    const body = ln.replace(/^[-*•]\s*/, '');
+    if ((m = body.match(/^([a-z_]+)\s*:\s*(.*)$/i)) && SOUL2_PERSON_FIELDS.indexOf(m[1].toLowerCase()) >= 0) {
+      if (!cur) { bad.push(ln.slice(0, 60) + ' (сначала строка с именем: «- Имя»)'); return; }
+      cur[m[1].toLowerCase()] = m[2].trim(); return;
+    }
+    if (/^[-*•]\s*\S/.test(ln)) {
+      const name = body.replace(/[:,.]+$/, '').trim();
+      cur = { name }; SOUL2_PERSON_FIELDS.forEach((f) => { cur[f] = ''; }); scene.people.push(cur); return;
+    }
+    bad.push(ln.slice(0, 60));
+  });
+  return { scene, bad };
+}
+function soul2ParsePsycheText(text) {
+  const ps = soul2Empty().psyche, bad = [];
+  String(text || '').split(/\r?\n/).forEach((raw) => {
+    const ln = raw.trim().replace(/^[-*•]\s*/, ''); if (!ln) return;
+    const i = ln.indexOf(':'); if (i < 0) { bad.push(ln.slice(0, 60)); return; }
+    const lab = ln.slice(0, i).trim().toLowerCase(), val = ln.slice(i + 1).trim();
+    if (lab.indexOf('dominant emotion') === 0 || lab === 'emotion') {
+      const m = val.match(/^(.*?)\s*\((\d)\s*\/\s*5\)\s*$/);
+      ps.emotion = m ? m[1].trim() : val; if (m) ps.intensity = Math.max(1, Math.min(5, parseInt(m[2], 10)));
+      return;
+    }
+    if (lab.indexOf('inner tension') === 0 || lab === 'tension') { ps.tension = val; return; }
+    if (lab.indexOf('hidden goal') === 0) { ps.hidden_goal = val; return; }
+    if (lab.indexOf('trust') === 0) {
+      const t = SOUL2_TRUST.find((x) => x.toLowerCase() === val.toLowerCase());
+      if (val && !t) { bad.push('доверие должно быть одним из: ' + SOUL2_TRUST.join(' / ')); return; }
+      ps.trust = t || ''; return;
+    }
+    if (lab === 'hides') { ps.hides = val; return; }
+    if (lab.indexOf('core beliefs') === 0 || lab === 'beliefs') { ps.beliefs = val.split(';').map((s) => s.trim()).filter(Boolean).slice(0, SOUL2_BELIEFS_MAX); return; }
+    bad.push(ln.slice(0, 60));
+  });
+  return { psyche: ps, bad };
+}
+// Сохранить правку листа «Сцена» / «Психика». Возвращает текст ошибки или '' (сохранено).
+async function soul2SaveManual(el, kind, text) {
+  const master = el._master || el;
+  soulRecResolve(el);
+  const chat = el._recChat || master._recChat;
+  if (!chat) return 'не вижу папку памяти — открой чат';
+  const parsed = (kind === 'scene') ? soul2ParseSceneText(text) : soul2ParsePsycheText(text);
+  if (parsed.bad.length) return /^доверие /.test(parsed.bad[0]) ? parsed.bad[0] : ('не понял строку «' + parsed.bad[0] + '»');
+  const got = await rlmApi('/api/rlm/soul/state-get', { chat }).catch(() => null);
+  const state = soul2Norm(got && got.state);
+  if (kind === 'scene') state.scene = parsed.scene; else state.psyche = parsed.psyche;
+  const clean = soul2Norm(state); clean.updated = new Date().toISOString();
+  const w = await rlmApi('/api/rlm/soul/state-save', { chat, state: clean }).catch(() => null);
+  if (!w || w.ok === false) return 'не удалось сохранить на диск';
+  master._v2State = clean;
+  master._v2Last = { at: Date.now(), lines: ['ручная правка: ' + (kind === 'scene' ? 'Сцена' : 'Психика')] };
+  soul2Views(master).forEach((v) => { v.querySelectorAll('textarea.soul2-edit[data-doc="' + kind + '"]').forEach((t) => { t._dirty = false; }); soul2Paint(v); });
+  return '';
+}
+// Сохранить правку дневника: файл дня целиком (записи в нём — абзацами с меткой времени).
+async function soul2SaveDiaryFile(el, file, text) {
+  const master = el._master || el;
+  soulRecResolve(el);
+  const chat = el._recChat || master._recChat;
+  if (!chat) return 'не вижу папку памяти — открой чат';
+  const w = await rlmApi('/api/rlm/soul/doc-save', { chat, group: 'diary', name: file, text: String(text || '') }).catch(() => null);
+  if (!w || w.ok === false) return 'не удалось сохранить на диск';
+  master._v2Last = { at: Date.now(), lines: ['ручная правка: Дневник'] };
+  await soul2Load(el);
+  return '';
+}
+// Чат очищен или начат новый: листы в памяти ноды — пустые (папка на диске уже стёрта или новая).
+function soul2Reset(soul) {
+  const master = soul._master || soul;
+  master._memTop = ''; master._memEnd = []; master._v2State = null; master._v2Diary = ''; master._v2DiaryFiles = []; master._v2Last = null; master._sceneLine = '';
+  soul2Views(master).forEach(soul2Paint);
 }
 // Строка-док: имя + вид + СВОЙ вход-коннектор. Порт биндим вручную — createNode биндит только
 // порты, что есть в момент создания ноды; динамически добавленный док иначе бы не тянул провод.
@@ -6741,6 +7273,284 @@ function noteTick() {
     el._noteLeft = left - 1;
     if (typeof el._notePaint === 'function') el._notePaint();
   });
+}
+// ── Нода «Суммаризация» ────────────────────────────────────────────────────────────
+// Бегущая сводка сюжета — аналог расширения Summarize из SillyTavern. Раз в N реплик модель получает прошлую
+// сводку и новые реплики и возвращает обновлённую. Сводка — содержимое ноды (правится руками), в промт уходит
+// всегда и целиком через свою плашку «Сводка» (сверху, до истории). Хронику не заменяет и не трогает, в Душу
+// не входит (решение Leon 2026-10-08, docs/plan-soul-rebuild.md, раздел 3в). Работает с любым чатом сборки:
+// обычный, групповой, Telegram, сетевая игра.
+// Умолчания — из исходника ST (server/public/scripts/extensions/memory/index.js): каждые 10 сообщений, 200 слов,
+// текст инструкции и обёртка `[Summary: …]`.
+const SUM_EVERY_DEF = 10;
+const SUM_WORDS_DEF = 200;
+const SUM_CHUNK = 60;            // не больше стольких реплик модели за один запрос…
+const SUM_CHUNK_CHARS = 24000;   // …и не больше стольких знаков: длинная история сводится в несколько заходов
+const SUM_PROMPT_DEFAULT = 'Ignore previous instructions. Summarize the most important facts and events in the story so far. If a summary already exists in your memory, use that as a base and expand with new facts. Limit the summary to {{words}} words or less. Your response should include nothing but the summary.';
+const SUM_TEMPLATE = '[Summary: {{summary}}]';
+const SUM_PRESET_RISE = 420;     // в сборках нода стоит НАД комплитером: на столько выше его верха (её высота — 364)
+function buildSummaryNode() {
+  const el = document.createElement('div');
+  el.className = 'node panel node-summary';
+  el.innerHTML = `
+    ${corners()}
+    <span class="port out" data-dir="out" title="Сводка → плашка «Сводка» комплитера (сверху, до истории)"></span>
+    ${head('🧾', 'Суммаризация')}
+    <div class="node-body sum-body">
+      <div class="sum-hint">Короткая страница «что было до сих пор». Модель дописывает её раз в несколько реплик, а в промт она уходит всегда и целиком — через плашку «Сводка» комплитера. Хронику не заменяет. Историю чата не трогает: сообщения не прячет и не удаляет, только читает. Текст можно править руками.</div>
+      <textarea class="field ta sum-text" rows="7" spellcheck="false" placeholder="— сводки пока нет —"></textarea>
+      <div class="sum-row">
+        <label class="sum-opt" title="Сама следит за счётчиком реплик. В обычной игре перед обновлением спрашивает в ленте чата (✓ / ✕), как Душа; в групповом чате, Telegram и сетевой игре обновляет без вопроса"><input type="checkbox" class="sum-auto" checked> сама</label>
+        <label class="sum-opt" title="Через сколько новых реплик обновлять сводку">каждые<input class="field num sum-every" type="number" min="2" max="250" value="${SUM_EVERY_DEF}" spellcheck="false">реплик</label>
+        <label class="sum-opt" title="Потолок длины сводки">до<input class="field num sum-words" type="number" min="25" max="1000" value="${SUM_WORDS_DEF}" spellcheck="false">слов</label>
+        <span class="sum-count" title="Сколько слов в сводке, сколько реплик чата в неё уже вошло и через сколько реплик следующее обновление"></span>
+      </div>
+      <div class="sum-row">
+        <button class="sum-now" type="button" title="Довести сводку до последней реплики прямо сейчас. Если в чате накопилась большая история, которой сводка не видела, — пересказать её всю (в несколько запросов). Сами сообщения остаются в истории как были">⟳ Обновить сейчас</button>
+        <button class="sum-reset" type="button" title="Стереть сводку и начать заново">↺ сброс</button>
+        <button class="sum-prompt-toggle" type="button" title="Показать / скрыть инструкцию, которая уходит модели">инструкция ▾</button>
+      </div>
+      <textarea class="field ta sum-prompt" rows="5" spellcheck="false" hidden></textarea>
+      <div class="sum-note"></div>
+    </div>`;
+  el.querySelectorAll('.sum-body textarea, .sum-body input, .sum-body button').forEach((c) => c.addEventListener('pointerdown', (e) => e.stopPropagation()));
+  el._sumUpto = 0;
+  const save = () => { sumMirror(el); if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); };
+  el.querySelector('.sum-prompt').value = SUM_PROMPT_DEFAULT;
+  el.querySelectorAll('.sum-text, .sum-every, .sum-words, .sum-auto, .sum-prompt').forEach((c) => c.addEventListener('change', save));
+  // Кнопка «EN» (перевод с заменой) меняет поле программно и шлёт только input — такую правку сохраняем сразу.
+  el.querySelectorAll('.sum-text, .sum-prompt').forEach((c) => c.addEventListener('input', (e) => { if (!e.isTrusted) save(); }));
+  el.querySelector('.sum-now').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const m = sumMaster(el);
+    if (m._sumBusy) { m._sumStop = true; return; }              // идёт сведение — эта же кнопка его останавливает
+    summaryUpdate(m, sumHost(), { all: true }).catch(() => {});
+  });
+  el.querySelector('.sum-reset').addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!confirm('Стереть сводку сюжета? Она начнётся заново с первой реплики.')) return;
+    const m = sumMaster(el);
+    sumSetField(el.querySelector('.sum-text'), ''); m._sumUpto = 0; m._sumBigNo = false;
+    sumSay(m, 'Сводка стёрта.');
+    save();
+  });
+  el.querySelector('.sum-prompt-toggle').addEventListener('click', (e) => { e.stopPropagation(); const p = el.querySelector('.sum-prompt'); p.hidden = !p.hidden; e.target.textContent = p.hidden ? 'инструкция ▾' : 'инструкция ▴'; });
+  sumPaint(el);
+  return el;
+}
+// Чат, чью историю сводим: обычный или групповой `Чат`, либо безэкранный (сетевая игра, Telegram).
+function sumHost() { return document.querySelector('#world .node-chat') || document.querySelector('#world .node-netgame') || document.querySelector('#world .node-telegram'); }
+// Реплики чата по порядку. У Telegram-нод `_msgs` во время хода — урезанная копия (мьют, перекат), поэтому берём
+// историю активной беседы целиком: счётчик «в сводку вошло N реплик» не должен плавать.
+function sumMsgs(chatNode) {
+  let src = (chatNode && chatNode._msgs) || [];
+  if (chatNode && chatNode.classList && chatNode.classList.contains('node-telegram') && typeof tgActiveConvo === 'function') {
+    const c = tgActiveConvo(chatNode); if (c && Array.isArray(c.msgs)) src = c.msgs;
+  }
+  return src.filter((m) => m.role === 'user' || m.role === 'char');
+}
+// Нода и её открытые вижны: вижн — копия полей, данные у них общие (правка в любом месте видна во всех).
+function sumMaster(el) { return (el && el._master) || el; }
+function sumViews(master) { return [master].concat([...document.querySelectorAll('.node-summary.nvis')].filter((v) => v._master === master)); }
+function sumSay(master, text) { sumViews(master).forEach((v) => { const n = v.querySelector('.sum-note'); if (n) n.textContent = text; }); }
+// Записать значение в поле ноды и снять с него RU-предпросмотр (иначе «вернуть оригинал» подсунул бы старый текст).
+function sumSetField(field, value) {
+  if (!field) return;
+  field.value = value; field._trPreviewing = false; field._trOrig = null;
+  const box = field.nextElementSibling; const b = box && box.classList && box.classList.contains('tr-btns') ? box.querySelector('.tr-b-prev') : null;
+  if (b) b.classList.remove('on');
+}
+function sumMirror(from) {
+  const m = sumMaster(from);
+  sumViews(m).forEach((v) => {
+    if (v !== from) {
+      ['.sum-text', '.sum-prompt'].forEach((sel) => { const a = from.querySelector(sel), b = v.querySelector(sel); if (a && b && trSafeVal(b) !== trSafeVal(a)) sumSetField(b, trSafeVal(a)); });
+      ['.sum-every', '.sum-words'].forEach((sel) => { const a = from.querySelector(sel), b = v.querySelector(sel); if (a && b && b.value !== a.value) b.value = a.value; });
+      const a = from.querySelector('.sum-auto'), b = v.querySelector('.sum-auto'); if (a && b) b.checked = a.checked;
+    }
+    sumPaint(v);
+  });
+}
+const sumRepl = (k) => { const d = k % 10, h = k % 100; return k + ' ' + ((d === 1 && h !== 11) ? 'реплика' : ((d >= 2 && d <= 4 && (h < 12 || h > 14)) ? 'реплики' : 'реплик')); };
+const sumEvery = (el) => Math.max(2, parseInt((el.querySelector('.sum-every') || {}).value, 10) || SUM_EVERY_DEF);
+// Сколько реплик, ещё не вошедших в сводку, она берёт сама. Больше — это история, которой она не видела (нода пришла в
+// давно идущий чат, авто долго было выключено): такой объём запускает только человек, кнопкой в ноде.
+const sumAutoMax = (every) => every * 2;
+function sumPaint(el) {
+  const m = sumMaster(el);
+  const t = String(trSafeVal(el.querySelector('.sum-text')) || '').trim();
+  const host = sumHost();
+  const total = host ? sumMsgs(host).length : 0;
+  const upto = Math.min(m._sumUpto || 0, total);
+  const every = sumEvery(el);
+  const lag = Math.max(0, total - 2) - upto;          // сколько реплик ждёт сводки (последний обмен не в счёт)
+  const big = lag > sumAutoMax(every);
+  // «Через сколько»: когда сводка обновится сама (или спросит об этом в ленте).
+  let next = '';
+  if (total) {
+    if (!((el.querySelector('.sum-auto') || {}).checked)) next = 'сама выключена';
+    else if (big) next = 'ждёт кнопку';
+    else next = (lag >= every) ? 'обновление — после следующего ответа' : ('до обновления: ' + sumRepl(every - lag));
+  }
+  const c = el.querySelector('.sum-count');
+  if (c) c.textContent = [t ? (soulWords(t) + ' сл.') : '', total ? ('в сводку вошло реплик: ' + upto + ' из ' + total) : '', next].filter(Boolean).join(' · ');
+  const b = el.querySelector('.sum-now');
+  if (b) b.textContent = m._sumBusy ? '■ Остановить' : (big ? ('＋ Сводка по всей истории · ' + sumRepl(total - upto)) : '⟳ Обновить сейчас');
+}
+// Текст в промт: сводка в обёртке ST. Пусто — плашка ничего не получает.
+function summaryBlockText(el) {
+  const t = String(trSafeVal(el.querySelector('.sum-text')) || '').trim();   // trSafeVal: RU-предпросмотр не утекает в промт
+  return t ? SUM_TEMPLATE.replace('{{summary}}', t) : '';
+}
+// Обновить сводку: прошлая сводка + реплики, которые в неё ещё не вошли → новая. true — сводка изменилась.
+async function summaryUpdate(el, chatNode, opts) {
+  opts = opts || {};
+  el = sumMaster(el);
+  const say = (t) => sumSay(el, t);
+  if (!chatNode) { say('⚠ В сборке нет чата — сводить нечего.'); return false; }
+  if (el._sumBusy) return false;
+  const api = chatApi(chatNode);
+  if (!api) { say('⚠ К чату не подключён API с адресом и моделью.'); return false; }
+  const all = sumMsgs(chatNode);
+  // Сама: последний обмен репликами не берём — ответ ещё могут перегенерить, а он и так стоит в самом конце промта.
+  const upTo = opts.all ? all.length : Math.max(0, all.length - 2);
+  let from = Math.min(el._sumUpto || 0, upTo);
+  if (upTo <= from) { say('Новых реплик для сводки нет.'); return false; }
+  el._sumBusy = true; el._sumStop = false;
+  const names = chatNames(chatNode);
+  const words = Math.max(25, parseInt((el.querySelector('.sum-words') || {}).value, 10) || SUM_WORDS_DEF);
+  const instrRaw = String(trSafeVal(el.querySelector('.sum-prompt')) || '').trim() || SUM_PROMPT_DEFAULT;
+  const instr = substituteMacros(instrRaw.replace(/\{\{\s*words\s*\}\}/gi, String(words)), names);
+  const ta = el.querySelector('.sum-text');
+  let summary = String(trSafeVal(ta) || '').trim();
+  const start = from, span = upTo - from;
+  let changed = false;
+  chatProc(chatNode, 'pulse', 'Суммаризация: обновляю сводку сюжета', { cancelable: false });
+  say('Обновляю сводку…');
+  sumViews(el).forEach(sumPaint);   // кнопка → «■ Остановить»
+  try {
+    while (from < upTo) {
+      if (el._sumStop) { say('Остановлено: в сводку вошло реплик ' + from + ' из ' + all.length + '. Продолжить — той же кнопкой.'); chatProc(chatNode, 'idle'); return changed; }
+      let n = 0, chars = 0;
+      while (from + n < upTo && n < SUM_CHUNK) { const len = String(all[from + n].text || '').length; if (n && chars + len > SUM_CHUNK_CHARS) break; chars += len; n++; }
+      const part = all.slice(from, from + n);
+      if (span > n) {   // длинная история идёт в несколько заходов — показываем, сколько пройдено
+        chatProc(chatNode, 'fill', 'Суммаризация: свожу историю · ' + (from - start) + ' из ' + span, { frac: (from - start) / span, cancelable: false });
+        say('Свожу историю: ' + (from - start) + ' из ' + span + ' реплик…');
+      }
+      const convo = part.map((m) => (m.role === 'user' ? dlgUserLabel(chatNode, names) : (m._speaker || names.char) + ': ') + (m.text || '')).join('\n');
+      const user = (summary ? ('CURRENT SUMMARY:\n' + summary + '\n\n') : '') + 'NEW MESSAGES:\n' + convo + '\n\nWrite the updated summary now.';
+      const r = await rlmApi('/api/rlm/generate', { base: api.base, key: api.key, model: api.model,
+        messages: [{ role: 'system', content: instr }, { role: 'user', content: user }],
+        params: { max_tokens: Math.max(300, words * 3), temperature: 0.3, reasoning: { enabled: false } } });
+      const text = memCleanReply(r);
+      if (!text) {   // пустой ответ или ошибка: прежняя сводка остаётся как была
+        say('⚠ Модель не вернула сводку' + ((r && r.error) ? (': ' + r.error) : '') + '. Прежняя сводка на месте (в неё вошло реплик: ' + from + ').');
+        chatProc(chatNode, 'idle');
+        if (typeof chatToast === 'function') chatToast(chatNode, 'суммаризация: модель не вернула сводку — прежняя на месте', 'err');
+        return changed;
+      }
+      summary = text.replace(/^\s*\[\s*Summary\s*:\s*/i, '').replace(/\]\s*$/, '')
+        .replace(/^\s*(?:#+\s*)?\**\s*(?:updated\s+)?summary\s*:?\s*\**\s*:?[ \t]*\r?\n+/i, '').trim();   // модель иногда сама ставит обёртку или строку-заголовок «**Summary:**»
+      from += part.length; changed = true;
+      sumSetField(ta, summary); el._sumUpto = from; el._sumBigNo = false; sumMirror(el);
+      if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
+    }
+    say('Сводка обновлена.');
+    chatProc(chatNode, 'done', 'Сводка сюжета обновлена');
+    if (chatNode.classList && chatNode.classList.contains('node-telegram') && typeof chatNode._setStatus === 'function') chatNode._setStatus('🧾 сводка сюжета обновлена', 'ok');   // безэкранный чат: строка статуса одна — прежняя ошибка в ней не должна висеть
+    return true;
+  } catch (e) { say('⚠ ' + String((e && e.message) || e)); chatProc(chatNode, 'idle'); return changed; }
+  finally { el._sumBusy = false; el._sumStop = false; sumViews(el).forEach(sumPaint); }
+}
+// После ответа: набралось «каждые N» новых реплик — обновить. Перегенерация того же хода не считается.
+function maybeUpdateSummary(chatNode, opts) {
+  if (!chatNode || !chatNode.classList) return;
+  document.querySelectorAll('.node-summary:not(.nvis)').forEach((el) => {
+    sumViews(el).forEach(sumPaint);                                 // счётчик «в сводку вошло N из M» — свежий после каждого ответа
+    if (opts && opts.replaced) return;
+    if (!nodeHasWire(el)) return;                                   // никуда не подключена — в промт не идёт, писать незачем
+    if (!((el.querySelector('.sum-auto') || {}).checked)) return;
+    if (sumViews(el).some((v) => v.querySelector('.sum-text') === document.activeElement)) return;   // сводку правят руками — не перебиваем
+    if (el._sumBusy) return;
+    const every = sumEvery(el);
+    const lag = Math.max(0, sumMsgs(chatNode).length - 2) - (el._sumUpto || 0);
+    if (lag < every) return;
+    const big = lag > sumAutoMax(every);   // большая история, которой сводка не видела: сама такой объём не гоняем
+    const rest = sumMsgs(chatNode).length - (el._sumUpto || 0);   // всё, что в сводку ещё не вошло, — то же число, что на кнопке «＋ Сводка по всей истории»
+    if (big) sumSay(el, 'В чате ' + sumRepl(rest) + ' без сводки. Сама такой объём не беру — нажми «＋ Сводка по всей истории», дальше поведу сама.');
+    // Обычная игра: как Душа — сперва вопрос в ленте чата «✓ / ✕», сама не стартует. Про большую историю спрашиваем
+    // один раз: отказался — больше не дёргаем, кнопка в ноде остаётся.
+    if (sumAsksFirst(chatNode)) {
+      if (big && el._sumBigNo) return;
+      chatNode._sumAsk = { el, big, lag: big ? rest : lag };
+      sumAskShow(chatNode);
+      return;
+    }
+    // Групповой чат, Telegram, сетевая игра: вопроса в ленте там нет (Душа тоже пишет сама).
+    if (big) {
+      if (!el._sumBigNo && typeof chatToast === 'function') chatToast(chatNode, 'в чате ' + sumRepl(rest) + ' без сводки — сделать сводку по всей истории можно кнопкой в ноде «Суммаризация»', 'ok', { title: 'СУММАРИЗАЦИЯ', icon: '🧾' });
+      el._sumBigNo = true;   // предупредили один раз
+      return;
+    }
+    summaryUpdate(el, chatNode).catch(() => {});
+  });
+}
+// Там же, где спрашивает Душа: обычная игра с нодой «Чат».
+function sumAsksFirst(chatNode) {
+  return !!(chatNode && chatNode.classList && chatNode.classList.contains('node-chat')
+    && !(typeof isGroupChat === 'function' && isGroupChat(chatNode))
+    && !chatNode.classList.contains('node-telegram') && !chatNode.classList.contains('node-netgame'));
+}
+// Показать вопрос сводки в ленте. Лента задаёт по одному вопросу: пока висит вопрос Души — ждём своей очереди.
+function sumAskShow(chatNode) {
+  const q = chatNode && chatNode._sumAsk;
+  if (!q || chatNode._soulAsk) return;
+  chatProc(chatNode, 'ask', q.big ? ('Суммаризация: в чате ' + sumRepl(q.lag) + ' без сводки — сделать сводку по всей истории?') : ('Суммаризация: обновить сводку сюжета? Новых реплик: ' + q.lag), {
+    okTitle: 'Да — обновить сводку сюжета сейчас',
+    noTitle: q.big ? 'Нет — больше не спрошу; сделать можно кнопкой в ноде «Суммаризация»' : 'Нет — не сейчас (спрошу после следующего ответа)',
+  });
+}
+function sumConfirm(chatNode, yes) {
+  const q = chatNode._sumAsk; chatNode._sumAsk = null;
+  if (!q || !q.el || !q.el.isConnected) { chatProc(chatNode, 'idle'); return; }
+  if (yes) { summaryUpdate(q.el, chatNode, q.big ? { all: true } : null).catch(() => {}); return; }   // «всю историю» — как кнопка в ноде, до последней реплики
+  if (q.big) q.el._sumBigNo = true;
+  chatProc(chatNode, 'idle');   // «не сейчас»: счётчик остаётся, спросим после следующего нового ответа
+}
+// Ответ «✓ / ✕» из ленты чата приходит одним сообщением на всех: сперва отвечают Душе, затем — сводке.
+function chatAskConfirm(chatNode, yes) {
+  if (!chatNode) return;
+  if (chatNode._soulAsk) { soulConfirm(chatNode, yes); sumAskShow(chatNode); return; }
+  if (chatNode._sumAsk) sumConfirm(chatNode, yes);
+}
+// Включить ноду в промт: своя плашка «Сводка» в комплитере (сверху, до истории) и провод к ней. Во вход плашки идёт
+// один провод, поэтому в «Память» сводку не втыкаем — там стоит Душа. Место плашки: перед «Памятью»; где её нет
+// (групповой комплитер) — перед первым слотом; иначе перед «Историей чата». Плашка уже есть и занята — не трогаем.
+function summaryAttach(sumEl) {
+  const comp = document.querySelector('#world .node-prompt') || document.querySelector('#world .node-mprompt');
+  if (!comp || !sumHost()) return false;
+  const list = comp.querySelector('.pm-list'); if (!list) return false;
+  if (!list.querySelector('.pm-item[data-id="summary"]')) {
+    const item = makePromptItem({ id: 'summary', name: 'Сводка', kind: 'marker', on: true }, list);
+    const before = list.querySelector('.pm-item[data-id="memory"]') || list.querySelector('.pm-item.pm-slot') || list.querySelector('.pm-item[data-id="chatHistory"]');
+    if (before) list.insertBefore(item, before); else list.appendChild(item);
+    relayoutPlates(list);
+  }
+  const out = findPort(sumEl, 'out'), pin = findPort(comp, 'plate:summary');
+  if (out && pin && !connections.some((c) => c.to === pin)) addConnection(out, pin);
+  redrawWires();
+  try { persistCurrentGraph(); } catch (_) { /* игнор */ }
+  return true;
+}
+// «Очистить чат» / «Новый чат»: сводка — содержимое чата, уходит вместе с историей.
+function clearSummaryNodes() {
+  document.querySelectorAll('.node-summary:not(.nvis)').forEach((el) => {
+    sumSetField(el.querySelector('.sum-text'), '');
+    el._sumUpto = 0; el._sumBigNo = false; sumSay(el, '');
+    sumMirror(el);
+  });
+  const h = sumHost(); if (h) h._sumAsk = null;   // вопрос о сводке, если висел, больше не к чему
 }
 // Нода Режиссёр — события сцены, чисто RLM. Переиспользует движок записей лорбука
 // (buildLoreApp) с injection: event и тремя триггерами времени (range/random/chain).
@@ -10122,7 +10932,7 @@ function closeChatVision() {
 // на холсте нетронутой, а в чате — ВТОРОЙ ЖИВОЙ экземпляр тем же билдером (один UI-код) с текущими
 // значениями мастера. Правки вида записываются в мастер при закрытии (вид закрыт оверлеем — мастер в это
 // время не редактируют параллельно). Типы: API / Промт комплитер / Хроника / Озвучка. fromImmersive — над `#immersive`.
-const NODE_VISION_BUILD = { sysprompt: buildSysPromptNode, embedder: buildEmbedderNode, api: buildApiNode, prompt: buildPromptNode, mprompt: buildMpromptNode, chronicle: buildChronicleNode, tts: buildTtsNode, options: buildOptionsNode, local: buildLocalNode, state: buildStateNode, objective: buildObjectiveNode, note: buildNoteNode, random: buildRandomNode, dry: buildDryNode, character: buildCharacterNode, persona: buildPersonaNode, critic: buildCriticNode, translator: buildTranslatorNode };
+const NODE_VISION_BUILD = { sysprompt: buildSysPromptNode, embedder: buildEmbedderNode, api: buildApiNode, prompt: buildPromptNode, mprompt: buildMpromptNode, chronicle: buildChronicleNode, tts: buildTtsNode, options: buildOptionsNode, local: buildLocalNode, state: buildStateNode, objective: buildObjectiveNode, note: buildNoteNode, random: buildRandomNode, dry: buildDryNode, character: buildCharacterNode, persona: buildPersonaNode, critic: buildCriticNode, translator: buildTranslatorNode, summary: buildSummaryNode };
 // Перенести в копию состояние «поле погашено»: значения applyValues копирует, а disabled и класс
 // строки — нет. Без этого разворот показывал активными крутилки, которые на самом деле выключены
 // гейтом режима (в Chat вся нода «Локал-сэмплеры» не работает).
@@ -10145,6 +10955,7 @@ function buildNodeVision(master, type) {
   const build = NODE_VISION_BUILD[type];
   if (!build) return null;
   const view = build();
+  if (type === 'summary') view._master = master;                // сводка: кнопки вижна работают с настоящей нодой (см. sumMaster)
   applyValues(view, type, nodeValues(master, type));           // текущее состояние мастера → в вид (тот же круг, что при загрузке графа)
   if (typeof instrumentTranslateFields === 'function') instrumentTranslateFields(view);   // RU/EN на полях, как у ноды
   copyDisabledState(master, view);                             // перенести «погашено» (гейт режима Chat/Text)
@@ -10473,7 +11284,7 @@ function openClipDialog(chatNode, selected) {
 // ── Меню «Инструменты» (🔧) в чате: вижны нод, у которых нет своей кнопки внизу (Персонаж/карточка,
 //    Пользователь/персона, Промт комплитер, ноды API — подписаны ролью, Хроника, Озвучка, Программный DRY —
 //    если подключён, Транслитер). Клик → вижн ноды в чате. ──
-const TOOLS_MENU_SEL = { character: '.node-char', persona: '.node-persona', prompt: '.node-prompt', mprompt: '.node-mprompt', api: '.node-api', chronicle: '.node-chronicle', tts: '.node-tts', state: '.node-state', objective: '.node-objective', note: '.node-note', random: '.node-random', dry: '.node-dry', critic: '.node-critic', translator: '.node-translator', soul: '.node-soul', narrator: '.node-narrator' };
+const TOOLS_MENU_SEL = { character: '.node-char', persona: '.node-persona', prompt: '.node-prompt', mprompt: '.node-mprompt', api: '.node-api', chronicle: '.node-chronicle', tts: '.node-tts', state: '.node-state', objective: '.node-objective', note: '.node-note', random: '.node-random', dry: '.node-dry', critic: '.node-critic', translator: '.node-translator', soul: '.node-soul', narrator: '.node-narrator', summary: '.node-summary' };
 // «Программный DRY» стоит в меню ТОЛЬКО подключённым: его выход веерный (комплитер и/или разъём
 // Критика), и висящая на холсте неподключённая нода в чате ничего не решает — открывать её оттуда незачем.
 function dryConnected(dryNode) {
@@ -10485,7 +11296,7 @@ function toolsMenuNodes() {
   const добавить = (тип) => document.querySelectorAll(TOOLS_MENU_SEL[тип]).forEach((n) => out.push(n));
   ['character', 'persona', 'prompt', 'mprompt', 'api', 'chronicle', 'tts', 'state', 'objective', 'note', 'random'].forEach(добавить);
   document.querySelectorAll(TOOLS_MENU_SEL.dry).forEach((n) => { if (dryConnected(n)) out.push(n); });
-  ['critic', 'translator', 'soul', 'narrator'].forEach(добавить);
+  ['critic', 'translator', 'soul', 'summary', 'narrator'].forEach(добавить);
   return out;
 }
 function closeToolsMenu() { document.querySelectorAll('.tools-menu.show').forEach((ov) => ov.classList.remove('show')); }
@@ -13258,6 +14069,16 @@ function tgStateVarValue(v, raw) {
   }
   return stateShowVal(v, raw);
 }
+// Сводка значений «Состояния» для СИНГЛА — строкой в ленту ноды. В Telegram её не шлём (там же
+// решение, что и в партии: чат игрока остаётся чистым, цифры смотрит хозяин бота у себя).
+// Пусто, если ножка «Состояние» не подключена, переменных нет или снята галочка «показывать в чате».
+function tgSoloStateLine(el, snap) {
+  if (!snap || typeof stateNodeForChat !== 'function') return '';
+  const st = stateNodeForChat(el); if (!st) return '';
+  if (typeof stateOpts === 'function' && stateOpts(st).hud === false) return '';
+  const defs = stateVarDefs(st); if (!defs.length) return '';
+  return defs.map((v) => '▸ ' + tgFormatStateVar(v, snap[v.id])).join('\n');
+}
 function tgNgStateHud(el) {
   const mu = tgNgMuser(el); if (!mu) return '';
   const rows = [];
@@ -13480,7 +14301,7 @@ function tgBgSync(el) {
   tgBgApply(el);
 }
 // Перерисовать фон во ВСЕХ нодах сетевой игры (файл и параметры общие — как и весь конфиг Telegram).
-function tgBgSyncAll() { document.querySelectorAll('.node-netgame').forEach((n) => tgBgSync(n)); }
+function tgBgSyncAll() { document.querySelectorAll('.node-telegram').forEach((n) => tgBgSync(n)); }   // фон ленты есть и у сингла
 // Лениво достать файл фона с сервера (ключ тяжёлый — в общей загрузке базы он пропущен).
 function tgBgEnsure(el) {
   if (_tgBgData !== undefined) { tgBgSync(el); return; }
@@ -13522,7 +14343,7 @@ function tgBubApply(el) {
   const irng = el.querySelector('.tg-bub-in-alpha'); if (irng) irng.value = ia;
   const iav = el.querySelector('.tg-bub-in-alpha-v'); if (iav) iav.textContent = ia + '%';
 }
-function tgBubApplyAll() { document.querySelectorAll('.node-netgame').forEach((n) => tgBubApply(n)); }
+function tgBubApplyAll() { document.querySelectorAll('.node-telegram').forEach((n) => tgBubApply(n)); }   // плашки ответов — у обеих телеграм-нод
 function tgBubWire(el, persist) {
   const inp = el.querySelector('.tg-bub-color');
   if (inp) {
@@ -13590,6 +14411,37 @@ function tgGmSync(el) {
   if (autoGen) autoGen.checked = !!(dir && dir._gen && dir._gen.enabled);
   tgGmCanonLoad(el, false);
   tgGmNoteSync(el, sec);
+  tgGmSumSync(el, sec);
+}
+// Зеркало «Суммаризации» в ГМ-меню: настоящие поля и кнопка — в ноде «Суммаризация».
+function tgGmSumNode() { return document.querySelector('#world .node-summary:not(.nvis)'); }
+function tgGmSumSync(el, sec) {
+  sec = sec || el.querySelector('.tg-admin [data-sec="quick"]'); if (!sec) return;
+  const au = sec.querySelector('.tg-gm-sum-auto'); if (!au) return;
+  const ev = sec.querySelector('.tg-gm-sum-every'), wd = sec.querySelector('.tg-gm-sum-words');
+  const now = sec.querySelector('.tg-gm-sum-now'), op = sec.querySelector('.tg-gm-sum-open'), st = sec.querySelector('.tg-gm-sum-state');
+  const sum = tgGmSumNode();
+  const none = sec.querySelector('.tg-gm-no-sum'); if (none) none.hidden = !!sum;
+  [au, ev, wd, now, op].forEach((c) => { if (c) c.disabled = !sum; });
+  const nt = sec.querySelector('.tg-gm-sum-note');
+  if (!sum) { if (st) st.textContent = ''; if (nt) nt.hidden = true; return; }
+  if (typeof sumPaint === 'function') sumPaint(sum);   // счётчик «в сводку вошло N из M» — по текущей истории
+  au.checked = !!(sum.querySelector('.sum-auto') || {}).checked;
+  if (ev && document.activeElement !== ev) ev.value = (sum.querySelector('.sum-every') || {}).value || '';
+  if (wd && document.activeElement !== wd) wd.value = (sum.querySelector('.sum-words') || {}).value || '';
+  if (now) now.textContent = (sum.querySelector('.sum-now') || {}).textContent || '⟳ Обновить сейчас';
+  if (st) st.textContent = (sum.querySelector('.sum-count') || {}).textContent || 'сводки пока нет';   // счётчик: слова · в сводку вошло N из M · через сколько
+  if (nt) { const t = (sum.querySelector('.sum-note') || {}).textContent || ''; nt.textContent = t; nt.hidden = !t; }
+}
+// Правка в панели → пишем в настоящую ноду и шлём ей штатный change (она сама сохранит граф и обновит свои вижны).
+function tgGmSumBind(el) {
+  const sec = el.querySelector('.tg-admin [data-sec="quick"]'); if (!sec || !sec.querySelector('.tg-gm-sum-auto')) return;
+  const push = (sel, set) => { const sum = tgGmSumNode(); const f = sum && sum.querySelector(sel); if (!f) return; set(f); f.dispatchEvent(new Event('change', { bubbles: true })); tgGmSumSync(el, sec); };
+  sec.querySelector('.tg-gm-sum-auto').addEventListener('change', (e) => push('.sum-auto', (f) => { f.checked = e.target.checked; }));
+  sec.querySelector('.tg-gm-sum-every').addEventListener('change', (e) => push('.sum-every', (f) => { f.value = e.target.value; }));
+  sec.querySelector('.tg-gm-sum-words').addEventListener('change', (e) => push('.sum-words', (f) => { f.value = e.target.value; }));
+  sec.querySelector('.tg-gm-sum-now').addEventListener('click', (e) => { e.stopPropagation(); const sum = tgGmSumNode(); const b = sum && sum.querySelector('.sum-now'); if (b) b.click(); setTimeout(() => tgGmSumSync(el, sec), 0); });
+  sec.querySelector('.tg-gm-sum-open').addEventListener('click', (e) => { e.stopPropagation(); const sum = tgGmSumNode(); if (sum && typeof openNodeInChat === 'function') openNodeInChat(sum, el, false); });
 }
 // Зеркало «Заметки автора» в ГМ-меню: настоящее поле — в ноде «Заметка автора» (и в ноде «Душа» мира).
 function tgGmNoteSync(el, sec) {
@@ -13751,6 +14603,7 @@ function tgGmWire(el) {
   on('.tg-gm-guest', () => openDir('.lb-invitebtn'));
   on('.tg-gm-visitor', () => { const dir = tgGmDirector(); if (dir && typeof directorGenerateNow === 'function') directorGenerateNow(dir, 'visitor'); });
   tgGmNoteBind(el);
+  tgGmSumBind(el);
   tgGmSync(el);
   const t = setInterval(() => { if (!el.isConnected) { clearInterval(t); return; } tgGmSync(el); }, 1200);   // нода удалена — таймер сам уходит
 }
@@ -14105,12 +14958,28 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
       el._setStatus(t ? ('🧮 значения посчитаны' + (t.hits ? ' · ' + t.hits : '')) : '⚠ счетовод не ответил — значения без изменений', t ? 'ok' : 'err');
     }
   }
+  // «Телеграм сингл»: ножка «Состояние» работает ровно как у ноды «Чат» — вырезать тег <state_update>,
+  // применить дельты, снимок значений положить в саму реплику (свои значения у каждой беседы).
+  let stateSnap = null, stateReasons = null;
+  if (r && r.ok && !el.classList.contains('node-netgame') && typeof stateProcessReply === 'function') {
+    const sp = stateProcessReply(el, text);
+    text = sp.text; stateSnap = sp.snapshot; stateReasons = sp.reasons;
+    if (stateSnap && typeof tallyOnFor === 'function' && tallyOnFor(el)) {   // Счетовод (галочка в ноде «Критик») — счёт отдельным проходом, как в чате
+      el._setStatus('🧮 считаю значения…', '');
+      const t = await tallyChatStates(el, text);
+      if (t) { stateSnap = t.values; stateReasons = t.reasons; }
+      el._setStatus(t ? '🧮 значения посчитаны' : '⚠ счетовод не ответил — значения без изменений', t ? 'ok' : 'err');
+    }
+  }
   if (opts.editLast) { for (let i = convo.msgs.length - 1; i >= 0; i--) { if (convo.msgs[i].role === 'char') { convo.msgs.splice(i, 1); break; } if (convo.msgs[i].role === 'user') break; } }
   if (opts.editLast) { const feedRows = [...el.querySelectorAll('.tg-feed .tg-line.out')]; if (feedRows.length) feedRows[feedRows.length - 1].remove(); }   // и в ленте прошлый ответ убираем — иначе двоится   // перекат по фидбеку: убрать прежний ответ бота (заменяем)
   // Диагностика «что собралось в промт» (ctx) весит десятки килобайт на реплику. Держим её только
   // у последней: снимок партии переставал влезать в быструю запись и срывался на больших играх.
   (convo.msgs || []).forEach((m) => { if (m.ctx) delete m.ctx; });
-  tgAddMsg(el, convo, { role: 'char', text });                // история модели — ОРИГИНАЛ (язык модели); на диск сразу, до отправки и озвучки
+  { const cm = { role: 'char', text };                        // история модели — ОРИГИНАЛ (язык модели); на диск сразу, до отправки и озвучки
+    if (stateSnap) cm._state = stateSnap;                     // снимок значений — в саму реплику (как в ноде «Чат»)
+    if (stateReasons) cm._stateR = stateReasons;
+    tgAddMsg(el, convo, cm); }
   const cn = chatNames(el).char;
   // Авто-перевод ОТВЕТА EN→RU: в Telegram (текст/голос) и в консоль уходит русский; история остаётся английской.
   // Секция «preview» = EN→RU (как кнопка RU). Перевод не удался → шлём оригинал.
@@ -14192,7 +15061,7 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
           if (vres) convo.lastSent.voiceId = (vres && vres.messageId) || null;
         }
       } else el._setStatus('✗ правка на месте: ' + ((edR && edR.description) || 'ошибка'), 'err');
-      if (r && r.ok) { noteTick(); if (!ngMd) maybeUpdateMemory(el, { replaced: true }); maybeUpdateChronicle(el); }   // это ЗАМЕНА прежнего хода — Душа его уже посчитала
+      if (r && r.ok) { noteTick(); if (!ngMd) maybeUpdateMemory(el, { replaced: true }); maybeUpdateChronicle(el); maybeUpdateSummary(el, { replaced: true }); }   // это ЗАМЕНА прежнего хода — Душа его уже посчитала
       if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
       return;
     }
@@ -14244,7 +15113,7 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
           tgFeed(el, outText, 'out', cn, { kb, img: atm.img, aud: atm.aud, doc: atm.doc, ctx: tgLastCtx(convo) });
           await tgSendHud(el, token, chatId, thread, hudText);   // данные — своим сообщением
           el._setStatus('@' + (el._botName || 'бот') + ' · слушаю…', 'ok');
-          if (r && r.ok) { if (!el.classList.contains('node-netgame')) maybeUpdateMemory(el); maybeUpdateChronicle(el); }
+          if (r && r.ok) { if (!el.classList.contains('node-netgame')) maybeUpdateMemory(el); maybeUpdateChronicle(el); maybeUpdateSummary(el); }
           if (critSilent) el._setStatus('⚠ критик не вынес вердикт — ход ушёл без проверки', 'err');
           if (typeof persistCurrentGraph === 'function') persistCurrentGraph();
           return;
@@ -14264,7 +15133,8 @@ async function telegramReply(el, token, chatId, incomingText, threadId, opts) {
       else el._setStatus('✗ отправка: ' + ((sent && sent.description) || 'ошибка'), 'err');
     }
   }
-  if (r && r.ok) { noteTick(); if (!el.classList.contains('node-netgame')) maybeUpdateMemory(el, { replaced: !!opts.editLast }); maybeUpdateChronicle(el); }   // память: сингл/групп — авто (замена хода 🔄/⚖ не считается новой репликой); сетевая игра ведёт Души сама (tgNgUpdateSouls). Хроника — всем
+  if (stateSnap) { const hud = tgSoloStateLine(el, stateSnap); if (hud) tgFeed(el, hud, 'out', '📊 Состояние', {}); }   // значения после хода — в ленту ноды (в Telegram не шлём)
+  if (r && r.ok) { noteTick(); if (!el.classList.contains('node-netgame')) maybeUpdateMemory(el, { replaced: !!opts.editLast }); maybeUpdateChronicle(el); maybeUpdateSummary(el, { replaced: !!opts.editLast }); }   // память: сингл/групп — авто (замена хода 🔄/⚖ не считается новой репликой); сетевая игра ведёт Души сама (tgNgUpdateSouls). Хроника — всем
   if (critSilent) el._setStatus('⚠ критик не вынес вердикт — ход ушёл без проверки', 'err');
   if (typeof persistCurrentGraph === 'function') persistCurrentGraph();   // сохранить историю беседы (_convos), чтобы пережила перезаход
 }
@@ -14690,7 +15560,7 @@ function tgNgRefreshCast(el) { if (el && el.classList && el.classList.contains('
 // панель участников отстаёт от актуальной разводки.
 function tgNgRefreshAllCast() { document.querySelectorAll('.node-netgame').forEach(tgNgRefreshCast); }
 // Связи поменялись — пересобрать полосу нод во всех окнах сетевой игры.
-function tgRefreshVisBars() { document.querySelectorAll('.node-netgame').forEach((n) => { try { tgRenderVisBar(n); } catch (e) { /* нода могла быть в разборе */ } }); }
+function tgRefreshVisBars() { document.querySelectorAll('.node-telegram').forEach((n) => { try { tgRenderVisBar(n); } catch (e) { /* нода могла быть в разборе */ } }); }   // полоска значков подключённых нод — и у сингла
 function tgBoundName(p) {
   const leg = p._leg; if (!leg) return '';
   const ngEl = leg.closest('.node-netgame');
@@ -14807,12 +15677,12 @@ function tgOpenPartMenu(el, p, anchor) {
 // все телеграм-функции работают), но под сетевую игру (мультиперсона / компиляция ходов / пачка-обновление душ —
 // впереди). Отдельная сущность, чтобы сингл-`Telegram` не трогать. Тип узла — 'netgame'. Дефолт-режим — Группа.
 function buildNetgameNode() {
-  const el = buildTelegramNode();
-  el.classList.add('node-netgame');
+  const el = buildTelegramNode('netgame');
   tgAtmWire(el);   // админ-панель: выбор картинки/звука «Атмосферы»
   const lbl = el.querySelector('.node-head .label'); if (lbl) lbl.textContent = 'Телеграм сетевая игра';
   const ico = el.querySelector('.node-head .icon'); if (ico) ico.textContent = '⚄';   // глиф-кубик (перекрашивается в сиреневый — CSS)
   const mode = el.querySelector('.tg-mode'); if (mode) mode.value = 'group';           // сетевая игра — всегда группа
+  const stLeg = el.querySelector('.tg-state-leg'); if (stLeg) stLeg.remove();          // ножка «Состояние» — только у сингла: в партии значения ведутся по слотам игроков
   const cast = el.querySelector('.tg-cast'); if (cast) cast.style.display = '';        // панель участников сразу видна
   // Кнопка «Собрать ход» — ручной триггер сборки хода (второй способ, кроме обращения к боту в чате).
   const btnsRow = el.querySelector('.tg-set-row.tg-btns');
@@ -14897,12 +15767,65 @@ const TG_ICONS = {
   trash:  '<svg class="tg-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.8 4.3h10.4M6 4.3V2.8h4v1.5M5 4.3l.6 8.9h4.8l.6-8.9"/></svg>',
 };
 function tgSetBtn(btn, icon, label) { if (!btn) return btn; btn.innerHTML = (TG_ICONS[icon] || '') + '<span class="tg-btn-lbl">' + esc(label) + '</span>'; return btn; }
+// ── Опции телеграм-ноды: один снимок и одно применение ────────────────────────────
+// Раньше настройки жили ОДНИМ ключом базы на все телеграм-ноды — сингл и сетевая игра перебивали друг
+// другу голос, перевод и фон. Теперь: свой ключ базы у каждой (токен там же) + этот снимок в графе ноды.
+// Токен в снимок НЕ кладём: пресеты уезжают людям, секрет туда попасть не должен.
+function tgCfgSnapshot(el) {
+  const val = (sel) => (el.querySelector(sel) || {}).value;
+  const chk = (sel) => !!(el.querySelector(sel) || {}).checked;
+  const bg = (typeof tgBgParams === 'function') ? tgBgParams(el) : {};
+  return {
+    mode: val('.tg-mode') || 'dm', aud: tgAudMode(el), autoTr: chk('.tg-auto-tr'), voiceProb: val('.tg-voice-prob'),
+    critic: chk('.tg-critic'), local: chk('.tg-local'),
+    sep: val('.tg-sep-text') || '', sepOn: chk('.tg-sep-on'),
+    wait: val('.tg-wait-text') || '', waitOn: chk('.tg-wait-on'),
+    castPrompt: (typeof trSafeVal === 'function' ? trSafeVal(el.querySelector('.tg-ng-castp')) : val('.tg-ng-castp')) || '',
+    bgBlur: bg.blur, bgDim: bg.dim, bgMode: bg.mode, bgGlow: bg.glow, bgGlowR: bg.glowR, bgFade: bg.fade,
+    admShut: (typeof tgAdmShut === 'function') ? tgAdmShut(el) : [],
+    bubColor: _tgBubColor, bubAlpha: _tgBubAlpha, bubInColor: _tgBubInColor, bubInAlpha: _tgBubInAlpha,
+  };
+}
+// Применить настройки к ноде. Зовётся дважды: при создании (дефолт из базы) и при восстановлении
+// снимка графа (опции самой ноды — они главнее, потому что переехали вместе с пресетом/чатом).
+function tgApplyCfg(el, cfg) {
+  if (!el || !cfg || typeof cfg !== 'object') return;
+  const q = (sel) => el.querySelector(sel);
+  if (cfg.mode && q('.tg-mode')) q('.tg-mode').value = cfg.mode;
+  // Режим аудирования: настройка `aud`; старые снимки (voice/voiceMix) переводим в неё же.
+  const audSaved = cfg.aud || (cfg.voice ? (cfg.voiceMix ? 'mix' : 'voice') : 'off');
+  const audRb = q('.tg-aud-mode[value="' + audSaved + '"]') || q('.tg-aud-mode[value="off"]');
+  if (audRb) audRb.checked = true;
+  if (q('.tg-auto-tr')) q('.tg-auto-tr').checked = !!cfg.autoTr;
+  if (cfg.sep != null && q('.tg-sep-text')) q('.tg-sep-text').value = cfg.sep;
+  if (q('.tg-sep-on')) { const so = q('.tg-sep-on'); so.checked = (cfg.sepOn !== false); const si = q('.tg-sep-text'); if (si) si.disabled = !so.checked; }
+  if (cfg.wait && q('.tg-wait-text')) q('.tg-wait-text').value = cfg.wait;
+  if (q('.tg-wait-on')) q('.tg-wait-on').checked = (cfg.waitOn !== false);
+  if (q('.tg-critic')) q('.tg-critic').checked = !!cfg.critic;
+  if (q('.tg-local')) { q('.tg-local').checked = !!cfg.local; el._localMode = !!cfg.local; }
+  if (cfg.voiceProb != null && cfg.voiceProb !== '' && q('.tg-voice-prob')) q('.tg-voice-prob').value = cfg.voiceProb;
+  // Фон ленты: параметры — из настроек, сам файл — лениво отдельным ключом базы.
+  if (cfg.bgBlur != null && q('.tg-bg-blur')) q('.tg-bg-blur').value = cfg.bgBlur;
+  if (cfg.bgDim != null && q('.tg-bg-dim')) q('.tg-bg-dim').value = cfg.bgDim;
+  if (cfg.castPrompt != null && q('.tg-ng-castp')) q('.tg-ng-castp').value = cfg.castPrompt;
+  if (cfg.bgGlow != null && q('.tg-bg-glow')) q('.tg-bg-glow').value = cfg.bgGlow;
+  if (cfg.bgGlowR != null && q('.tg-bg-glow-r')) q('.tg-bg-glow-r').value = cfg.bgGlowR;
+  if (cfg.bgFade != null && q('.tg-bg-fade')) q('.tg-bg-fade').value = cfg.bgFade;
+  const bgRb = q('.tg-bg-mode[value="' + (cfg.bgMode || TG_BG_DEF.mode) + '"]');
+  if (bgRb) bgRb.checked = true;
+  if (cfg.bubColor != null) _tgBubColor = cfg.bubColor;         // цвет плашки ответа ИИ (пусто — родной цвет темы)
+  if (cfg.bubInColor != null) _tgBubInColor = cfg.bubInColor;   // то же для плашки ответа игрока
+  if (cfg.bubInAlpha != null) _tgBubInAlpha = cfg.bubInAlpha;
+  if (cfg.bubAlpha != null) _tgBubAlpha = cfg.bubAlpha;         // её прозрачность
+  if (typeof tgAdmApplyShut === 'function') tgAdmApplyShut(el, cfg.admShut);   // что было свёрнуто — свернуть снова
+}
 function tgBtnLabel(btn, txt) { if (!btn) return; const s = btn.querySelector('.tg-btn-lbl'); if (s) s.textContent = txt; else btn.textContent = txt; }
-// ВНУТРЕННИЙ конструктор: самостоятельной ноды «Telegram» больше нет (убрана из меню 2026-08-28) —
-// это основа, на которой строится buildNetgameNode(). Напрямую не звать.
-function buildTelegramNode() {
+// Общий конструктор телеграм-нод. Сам по себе даёт «Телеграм сингл» (бот отвечает один-на-один, как
+// было до 2026-08-28 — ноду вернули в меню 2026-09-21); с kind='netgame' на нём строится «Сетевая игра».
+// Метку node-netgame ставим ЗДЕСЬ, до чтения настроек: ключ конфига выбирается по ней (у нод свои боты).
+function buildTelegramNode(kind) {
   const el = document.createElement('div');
-  el.className = 'node panel node-telegram';
+  el.className = 'node panel node-telegram' + (kind === 'netgame' ? ' node-netgame' : '');
   el.innerHTML = `
     ${corners()}
     <span class="port in" data-dir="in" title="Ответ пайплайна: подключи сюда выход ноды API"></span>
@@ -14976,7 +15899,7 @@ function buildTelegramNode() {
               <button class="btn ghost tg-run" type="button" data-ic="power">Запустить бота</button>
             </div>
             <label class="tg-aud-opt" title="Играть прямо в ноде: бот НЕ шлёт в Telegram (токен не нужен), ответы ИИ идут в ленту. Ввод игроков — кнопкой ✍ у ника. Для теста без мессенджера."><input type="checkbox" class="tg-local"> 🔌 локально (тест без Telegram)</label>
-            <label class="tg-aud-opt" title="Не заполнять документы Душ при старте партии. Один раз заполнил — поставил галочку, и повторные старты не тратят запросы (для тестов: за это время всё равно ничего не изменилось)."><input type="checkbox" class="tg-noseed"> 🚫 не обновлять Души на старте</label>
+            <label class="tg-aud-opt tg-noseed-lbl" title="Не заполнять документы Душ при старте партии. Один раз заполнил — поставил галочку, и повторные старты не тратят запросы (для тестов: за это время всё равно ничего не изменилось)."><input type="checkbox" class="tg-noseed"> 🚫 не обновлять Души на старте</label>
           </div>
           <div class="tg-adm-sec" data-sec="opts">
             <div class="tg-adm-t" title="Клик — свернуть/развернуть раздел"><span class="tg-adm-car">▾</span>⚙ Опции</div>
@@ -15014,6 +15937,20 @@ function buildTelegramNode() {
               <span class="tg-gm-note-left" title="Сколько ходов осталось">—</span>
               <button class="btn ghost tg-gm-note-reset" type="button" title="Начать отсчёт заново">↺ сброс</button>
             </div>
+            <div class="tg-adm-t2">🧾 Сводка сюжета</div>
+            <div class="tg-adm-hint">Короткая страница «что было до сих пор» — стоит в начале промта. Зеркало ноды «Суммаризация»: текст сводки и инструкция — по кнопке «открыть».</div>
+            <div class="tg-gm-none tg-gm-no-sum" hidden>ноды «Суммаризация» в сборке нет</div>
+            <div class="tg-gm-note-row">
+              <label class="tg-aud-opt" title="Обновлять сводку самой, по счётчику реплик"><input type="checkbox" class="tg-gm-sum-auto"> сама</label>
+              <label class="tg-aud-opt" title="Через сколько новых реплик обновлять сводку">каждые<input class="field num tg-gm-sum-every" type="number" min="2" max="250" value="10" spellcheck="false">реплик</label>
+              <label class="tg-aud-opt" title="Потолок длины сводки">до<input class="field num tg-gm-sum-words" type="number" min="25" max="1000" value="200" spellcheck="false">слов</label>
+            </div>
+            <div class="tg-gm-note-row">
+              <button class="btn ghost tg-gm-sum-now" type="button" title="Довести сводку до последней реплики. Если накопилась большая история, которой сводка не видела, — пересказать её всю. Сами сообщения остаются в истории как были">⟳ Обновить сейчас</button>
+              <button class="btn ghost tg-gm-sum-open" type="button" title="Открыть ноду «Суммаризация» прямо здесь: текст сводки и инструкция">открыть</button>
+              <span class="tg-gm-sum-state" title="Сколько слов в сводке, сколько реплик партии в неё уже вошло и через сколько реплик следующее обновление. Реплика — одно сообщение истории: общий ход игроков и ответ ведущего считаются по одной"></span>
+            </div>
+            <div class="tg-gm-none tg-gm-sum-note" hidden></div>
           </div>
           <div class="tg-adm-sec" data-sec="atm">
             <div class="tg-adm-t" title="Клик — свернуть/развернуть раздел"><span class="tg-adm-car">▾</span>🌫 Атмосфера</div>
@@ -15107,6 +16044,10 @@ function buildTelegramNode() {
         <span class="pin-lbl">Цель</span>
         <span class="port out" data-dir="out" title="Эта партия → нода «Цель» (задачи по ходу игры; их видят Режиссёр и Критик)"></span>
       </div>
+      <div class="svc-out tg-leg tg-state-leg" data-out="state">
+        <span class="pin-lbl">Состояние</span>
+        <span class="port out" data-dir="out" title="Этот чат → нода «Состояние» (переменные-счётчики: ИИ ведёт их по ходу игры, как в ноде «Чат»)"></span>
+      </div>
       <div class="svc-out tg-leg tg-tts" data-out="tts">
         <span class="pin-lbl">Озвучка</span>
         <span class="port out" data-dir="out" title="Подключи ноду «Озвучка» — ответы уйдут голосом (нужна галочка «отвечать голосом»)"></span>
@@ -15122,6 +16063,12 @@ function buildTelegramNode() {
     </div>`;
   selectToDropdown(el, 'tg-mode', DD_OPTS.tgMode);   // режим Личка/Группа с описанием под опцией
   el.querySelectorAll('.tg-body [data-ic]').forEach((b) => tgSetBtn(b, b.dataset.ic, (b.textContent || '').trim()));   // значки-SVG в кнопки (Написать самому — под лентой; Играть/Запустить бота/Очистить — в верхней строке)
+  if (kind !== 'netgame') {   // СИНГЛ: имя ноды и панель без сетевых разделов (что не работает без партии — того и нет)
+    const lbl0 = el.querySelector('.node-head .label'); if (lbl0) lbl0.textContent = 'Телеграм сингл';
+    const atmT = el.querySelector('.tg-adm-sec[data-sec="atm"] .tg-adm-t');
+    if (atmT) atmT.innerHTML = '<span class="tg-adm-car">▾</span>🌄 Фон ленты';   // «Атмосфера» — сетевая (картинка/звук к ходу); у сингла в разделе остаётся фон
+    const bgSub = el.querySelector('.tg-bg-ctl .tg-adm-sub'); if (bgSub) bgSub.remove();
+  }
   const token = el.querySelector('.tg-token');
   const mode = el.querySelector('.tg-mode');
   // «Запустить бота» стоит в ДВУХ местах — в верхней строке ноды и в «Настройках бота» (рядом с токеном).
@@ -15312,7 +16259,13 @@ function buildTelegramNode() {
     tInput.addEventListener('input', grow); tInput.addEventListener('paste', () => setTimeout(grow, 0));
     tgSaySync(el);
   }
-  const persist = () => saveTgCfg({ token: token.value, mode: mode.value, aud: tgAudMode(el), autoTr: autoTr.checked, voiceProb: voiceProb.value, critic: criticChk.checked, local: localChk.checked, sep: (el.querySelector('.tg-sep-text') || {}).value || '', sepOn: !!(el.querySelector('.tg-sep-on') || {}).checked, wait: (el.querySelector('.tg-wait-text') || {}).value || '', castPrompt: trSafeVal(el.querySelector('.tg-ng-castp')) || '', waitOn: !!(el.querySelector('.tg-wait-on') || {}).checked, bgBlur: tgBgParams(el).blur, bgDim: tgBgParams(el).dim, bgMode: tgBgParams(el).mode, bgGlow: tgBgParams(el).glow, bgGlowR: tgBgParams(el).glowR, bgFade: tgBgParams(el).fade, admShut: tgAdmShut(el), bubColor: _tgBubColor, bubAlpha: _tgBubAlpha, bubInColor: _tgBubInColor, bubInAlpha: _tgBubInAlpha });
+  // Настройки уходят в ДВА места: свой ключ базы (там же токен — он в граф не идёт) и снимок самой
+  // ноды (persistCurrentGraph → data.cfg). Второе и значит «нода вбирает опции в себя»: у сингла и у
+  // сетевой игры они больше не общие и переезжают вместе с пресетом/чатом.
+  const persist = () => {
+    saveTgCfg(Object.assign({ token: token.value }, tgCfgSnapshot(el)), el);
+    try { if (typeof persistCurrentGraph === 'function') persistCurrentGraph(); } catch (_) {}
+  };
   // Блок управления голосом (комбинирование + модель) виден, только когда включено «отвечать голосом».
   const syncVoiceCtl = () => {
     const m = tgAudMode(el);
@@ -15409,7 +16362,8 @@ function buildTelegramNode() {
     tgSyncMsgCount(el);           // после очистки счётчик обязан показать 0 — старых историй тут быть не должно
     setStatus('очищаю память Души…', '');
     try { await Promise.all(purges); } catch (err) { /* очистка best-effort */ }
-    document.querySelectorAll('.node-soul').forEach((s) => { if (typeof soulFillDocRecords === 'function') soulFillDocRecords(s); });   // вьюер записей Души — обновить
+    document.querySelectorAll('.node-soul').forEach((s) => { if (typeof soul2Is === 'function' && soul2Is(s) && !s.classList.contains('soul-view')) soul2Reset(s); if (typeof soulFillDocRecords === 'function') soulFillDocRecords(s); });   // вьюер записей Души — обновить (набор «новая»: листы в ноде обнуляем сразу)
+    if (typeof clearSummaryNodes === 'function') clearSummaryNodes();   // сводка сюжета — содержимое партии, стирается вместе с историей
     try { allowShrink(chatgraphKeyOf(current.chatId)); } catch (_) {}   // очистка — намеренная, серверу можно укоротить
     if (typeof persistCurrentGraph === 'function') persistCurrentGraph();   // сохранить ПУСТУЮ историю (иначе вернётся при перезаходе)
     setStatus('всё очищено: история, ход, состояния, Душа', 'ok');
@@ -15453,41 +16407,17 @@ function buildTelegramNode() {
     sayBtn.disabled = false;
   });
   token.addEventListener('pointerdown', (e) => e.stopPropagation());
-  // Восстановить сохранённые настройки (переживают перезапуск).
-  const cfg = loadTgCfg();
+  // Восстановить сохранённые настройки. Ключ базы — свой у каждой ноды (см. tgCfgKeyOf): он держит
+  // токен и служит дефолтом для НОВОЙ ноды. Дальше опции едут в снимке самой ноды (data.cfg →
+  // restoreNodeData → tgApplyCfg): «нода вбирает опции в себя», и сингл с партией не путают настройки.
+  const cfg = loadTgCfg(el);
   if (cfg.token) token.value = cfg.token;
-  if (cfg.mode) mode.value = cfg.mode;
-  // Режим аудирования: новая настройка `aud`; старые снимки (voice/voiceMix) переводим в неё же.
-  const audSaved = cfg.aud || (cfg.voice ? (cfg.voiceMix ? 'mix' : 'voice') : 'off');
-  const audRb = el.querySelector('.tg-aud-mode[value="' + audSaved + '"]') || el.querySelector('.tg-aud-mode[value="off"]');
-  if (audRb) audRb.checked = true;
-  autoTr.checked = !!cfg.autoTr;
-  if (cfg.sep != null && el.querySelector('.tg-sep-text')) el.querySelector('.tg-sep-text').value = cfg.sep;
-  if (el.querySelector('.tg-sep-on')) { const so = el.querySelector('.tg-sep-on'); so.checked = (cfg.sepOn !== false); const si = el.querySelector('.tg-sep-text'); if (si) si.disabled = !so.checked; }
-  if (cfg.wait && el.querySelector('.tg-wait-text')) el.querySelector('.tg-wait-text').value = cfg.wait;
-  if (el.querySelector('.tg-wait-on')) el.querySelector('.tg-wait-on').checked = (cfg.waitOn !== false);
-  criticChk.checked = !!cfg.critic;
-  localChk.checked = !!cfg.local; el._localMode = localChk.checked;
-  if (cfg.voiceProb != null && cfg.voiceProb !== '') voiceProb.value = cfg.voiceProb;
-  // Фон ленты: параметры — из общего конфига, сам файл — лениво отдельным ключом базы.
-  if (cfg.bgBlur != null && el.querySelector('.tg-bg-blur')) el.querySelector('.tg-bg-blur').value = cfg.bgBlur;
-  if (cfg.bgDim != null && el.querySelector('.tg-bg-dim')) el.querySelector('.tg-bg-dim').value = cfg.bgDim;
-  if (cfg.castPrompt != null && el.querySelector('.tg-ng-castp')) el.querySelector('.tg-ng-castp').value = cfg.castPrompt;
-  if (cfg.bgGlow != null && el.querySelector('.tg-bg-glow')) el.querySelector('.tg-bg-glow').value = cfg.bgGlow;
-  if (cfg.bgGlowR != null && el.querySelector('.tg-bg-glow-r')) el.querySelector('.tg-bg-glow-r').value = cfg.bgGlowR;
-  if (cfg.bgFade != null && el.querySelector('.tg-bg-fade')) el.querySelector('.tg-bg-fade').value = cfg.bgFade;
-  const bgRb = el.querySelector('.tg-bg-mode[value="' + (cfg.bgMode || TG_BG_DEF.mode) + '"]');
-  if (bgRb) bgRb.checked = true;
-  if (cfg.bubColor != null) _tgBubColor = cfg.bubColor;   // цвет плашки ответа ИИ (пусто — родной цвет темы)
-  if (cfg.bubInColor != null) _tgBubInColor = cfg.bubInColor;   // то же для плашки ответа игрока
-  if (cfg.bubInAlpha != null) _tgBubInAlpha = cfg.bubInAlpha;
-  if (cfg.bubAlpha != null) _tgBubAlpha = cfg.bubAlpha;   // её прозрачность
+  tgApplyCfg(el, cfg);
   tgBubWire(el, persist); tgBubApply(el);
   tgBgWire(el, persist);
   tgAdmSecsWire(el, persist);                  // заголовки разделов админ-панели — кликабельные (свернуть/развернуть)
   tgGmWire(el);                                // пункт «ГМ меню» — живые дубли Цели/Критика/Режиссёра
   nodePinScreenBtn(el);                        // 📌 в шапке — закрепить экран (колесо крутит содержимое, а не зумит холст)
-  tgAdmApplyShut(el, cfg.admShut);             // что было свёрнуто в прошлый раз — свернуть снова
   setTimeout(() => tgBgEnsure(el), 0);   // нода уже в DOM (класс node-netgame на месте) — можно рисовать
   syncVoiceCtl();   // показать блок голоса + запустить опрос модели, если «отвечать голосом» включено
   return el; // розетку привяжет createNode
@@ -15499,7 +16429,7 @@ function buildTelegramNode() {
 //   EN — перевод RU→EN, реально ЗАМЕНЯЕТ текст (без отката).
 // Провайдер берётся из ноды «Транслитер»: секция «preview» для RU, «replace» для EN.
 // Кэш: неизменённый текст повторно не переводится.
-const TR_FIELD_SEL = '.node-sys .ta, .node-sys .sys-prefill, .node-persona .pa-desc, .node-char .ch-text, .lb-name, .lb-keys, .lb-keys2, .lb-content, .node-chronicle .chr-style-prompt, .node-state .st-prompt';
+const TR_FIELD_SEL = '.node-sys .ta, .node-sys .sys-prefill, .node-persona .pa-desc, .node-char .ch-text, .lb-name, .lb-keys, .lb-keys2, .lb-content, .node-chronicle .chr-style-prompt, .node-state .st-prompt, .node-summary .sum-text, .node-summary .sum-prompt';
 // Дефолты сэмплеров для нейро-перевода, когда нода «Опции · перевод» НЕ подключена.
 // Низкая температура (точность) + щедрый лимит ответа: перевод по объёму примерно = исходнику,
 // а «размышления» отключены (модель не молотит впустую) — потому 4000 безопасно и не режет длинный текст.
@@ -16643,7 +17573,7 @@ window.addEventListener('message', async (e) => {
   else if (m.type === 'greet-swipe') greetSwipe(node, m.dir);   // ‹ › на приветствии до начала ролки → выбрать первое сообщение
   else if (m.type === 'swipe') swipeLast(node, m.dir);           // ‹ › у последнего ответа: листать варианты; › на последнем — новая генерация со всеми фидбеками
   else if (m.type === 'fb-del') deleteFeedback(node, m.idx, m.k); // ✕ в табличке фидбеков — убрать одно замечание из следующих генераций этого ответа
-  else if (m.type === 'soul-confirm') soulConfirm(node, !!m.yes);  // лента «Душа: обновить память?» → ✓ пишем / ✕ не сейчас
+  else if (m.type === 'soul-confirm') chatAskConfirm(node, !!m.yes);  // лента «Душа: обновить память?» → ✓ пишем / ✕ не сейчас
   else if (m.type === 'feedback') {                                              // 💬 «Переписать» → перекат с замечанием впереди, БЕЗ авто-урока (урок — отдельная кнопка «Записать в блокнот»)
     const fb = String(m.text || '').trim(); if (!fb || !fbLastOnly(m.idx)) return;
     chatApplyApiPreset(node, m.preset);                                          // выбранный в окне пресет → основной API чата (перекат уже на новой модели)
@@ -16835,13 +17765,15 @@ function sourceText(outPort, ctxText) {
   const lore = outPort.closest('.node-lore');
   if (lore) return loreText(lore, ctxText);
   const soul = outPort.closest('.node-soul');
-  if (soul) return soul._memory || '';                 // память (RAG) считает refreshSoulMemory перед сборкой
+  if (soul) return (soul._promptMode === 'v2') ? (soul._memTop || '') : (soul._memory || '');   // память считает refreshSoulMemory перед сборкой; у набора «новая» сюда идёт только дневник — сцену и психику ставит assembleMessages
   const state = outPort.closest('.node-state');
   if (state) return stateBlockText(state, ctxText);    // текущие значения + пороги + директива тега
   const objective = outPort.closest('.node-objective');
   if (objective) return objectiveBlockText(objective, ctxText);   // текущая (первая невыполненная) задача → впрыск в контекст
   const note = outPort.closest('.node-note');
   if (note) return noteText(note);                     // заметка ведущего (пусто, когда срок вышел)
+  const sum = outPort.closest('.node-summary');
+  if (sum) return summaryBlockText(sum);               // бегущая сводка сюжета, целиком
   const rnd = outPort.closest('.node-random');
   if (rnd) return randomBlockText(rnd);                // ближайший исход из очереди (выключен → пусто)
   const narr = outPort.closest('.node-narrator');      // нода «Рассказчик»: текст секции по её выходу
@@ -17240,6 +18172,16 @@ function assembleMessages(compEl, chatNode, ctxText) {
         }
         return;
       }
+    }
+    // Душа, набор «новая»: Сцена и Психика встают не на место плашки, а перед последней репликой (SOUL2_END_DEPTH) —
+    // замер 2026-10-08: взаимное положение тел модель берёт только оттуда. Дневник идёт обычным путём ниже.
+    {
+      const pin = it.querySelector('.port.in');
+      if (pin) connections.forEach((c) => {
+        if (c.to !== pin || !c.from || !c.from.closest) return;
+        const s2 = c.from.closest('.node-soul');
+        if (s2 && s2._promptMode === 'v2') (s2._memEnd || []).forEach((p) => { if (p.text) inChat.push({ role: 'system', content: p.text, depth: SOUL2_END_DEPTH, _src: p.src }); });
+      });
     }
     const content = plateContent(it, ctxText).trim(); if (!content) return;
     const roleSel = it.dataset.kind === 'text' ? it.querySelector('.pm-role') : null; // роль — только у «текста»
@@ -17742,7 +18684,9 @@ function clearThisChat(node, opts) {
   } else {
     node._groupStarted = false; node._phantoms = {}; node._groupScene = ''; node._grpCounts = {}; node._grpSinceNarr = 0;
   }
-  connectedSoulNodes().forEach((s) => { s._memory = ''; s._memoryUsed = []; s._sinceMem = 0; if (typeof soulRecLoadChats === 'function') soulRecLoadChats(s); });
+  connectedSoulNodes().forEach((s) => { s._memory = ''; s._memoryUsed = []; s._sinceMem = 0; if (soul2Is(s)) soul2Reset(s); else if (typeof soulRecLoadChats === 'function') soulRecLoadChats(s); });   // набор «новая»: листы в ноде обнуляем сразу — папку стирает запрос выше, перечитывать её рано
+  if (typeof soulNextPaintAll === 'function') soulNextPaintAll();
+  if (typeof clearSummaryNodes === 'function') clearSummaryNodes();   // сводка сюжета — содержимое этого чата, стирается вместе с историей
   if (!opts.keepObjective) clearObjectiveFor(node);   // цель: сброс на новом чате, если не выбрано «оставить»
   if (!isGroup) seedGreeting(node);   // одиночный — приветствие персонажа; в группе старт даёт сцена/«След. ход»
   renderChatLogs(node); renderScanners(); redrawWires();
@@ -17762,7 +18706,9 @@ function newChatCopy(node, opts) {
   setCurrent({ mode: 'chat', charId, chatId: cid });
   node._chatId = cid; node._msgs = [];
   const chatLore = loreNodeByScope('chat'); if (chatLore) fillLorebook(chatLore, []);              // копия сборки, но лорбук чата пуст
-  connectedSoulNodes().forEach((s) => { s._memory = ''; s._memoryUsed = []; s._sinceMem = 0; if (typeof soulRecLoadChats === 'function') soulRecLoadChats(s); });   // Душа пуста (новая папка chatId)
+  connectedSoulNodes().forEach((s) => { s._memory = ''; s._memoryUsed = []; s._sinceMem = 0; if (soul2Is(s)) soul2Reset(s); if (typeof soulRecLoadChats === 'function') soulRecLoadChats(s); });   // Душа пуста (новая папка chatId)
+  if (typeof soulNextPaintAll === 'function') soulNextPaintAll();
+  if (typeof clearSummaryNodes === 'function') clearSummaryNodes();   // сводка сюжета осталась в снимке старого чата; новый начинает с пустой
   if (!opts.keepObjective) clearObjectiveFor(node);   // цель: новый чат начинает с чистой, если не выбрано «оставить» (старый чат уже сохранён с целью)
   seedGreeting(node);
   renderChatLogs(node); renderScanners(); redrawWires();
@@ -18247,7 +19193,7 @@ async function generateReply(node, opts) {
   // Замена ТОГО ЖЕ хода (🔄 перегенерация, перекат по фидбеку, вердикт критика) — не новая реплика:
   // счётчик Души не двигаем, иначе перегенерил 4 раза — и память обновилась «по расписанию» на пустом месте.
   const replaced = !!(opts.regen || opts.directive);
-  if (r && r.ok) { noteTick(); maybeUpdateMemory(node, { replaced }); maybeUpdateChronicle(node); maybeCheckObjective(node, { replaced }); if (!opts.noCritic) maybeRunCritic(node).catch(() => {}); }   // движок памяти (Душа) + авто-сводка (Хроника) + проверка «Цели» + авто-критик, фоном
+  if (r && r.ok) { noteTick(); maybeUpdateMemory(node, { replaced }); maybeUpdateChronicle(node); maybeUpdateSummary(node, { replaced }); maybeCheckObjective(node, { replaced }); if (!opts.noCritic) maybeRunCritic(node).catch(() => {}); }   // движок памяти (Душа) + авто-сводка (Хроника) + проверка «Цели» + авто-критик, фоном
   if (r && r.ok && !charMsg.pending) maybeAutoSpeak(node, idx);   // авто-озвучка (перевод → голос); pending держит критик — озвучим на его апрув/перекат
 }
 
@@ -19315,6 +20261,7 @@ function nodeType(el) {
   if (el.classList.contains('node-state')) return 'state';
   if (el.classList.contains('node-objective')) return 'objective';
   if (el.classList.contains('node-note')) return 'note';
+  if (el.classList.contains('node-summary')) return 'summary';
   if (el.classList.contains('node-random')) return 'random';
   if (el.classList.contains('node-dry')) return 'dry';
   return null;
@@ -19477,6 +20424,7 @@ function nodeValues(el, type) {
     autoSpeak: !!(el.querySelector('.tts-autospeak') || {}).checked,   // авто-озвучивание каждой реплики ИИ (перевод → голос)
   };
   if (type === 'telegram' || type === 'netgame') return { mode: (el.querySelector('.tg-mode') || {}).value || 'dm',
+    cfg: tgCfgSnapshot(el),                                      // опции ноды (голос, перевод, фон, критик…) — в ней самой, а не одни на все телеграм-ноды; токена тут НЕТ
     chatId: el._chatId || '',                                    // папка памяти партии — иначе Души заводятся заново
     lastChatId: (el._lastChatId != null ? el._lastChatId : null), // активная беседа (раньше угадывалась «по длине»)
     lastThreadId: (el._lastThreadId != null ? el._lastThreadId : null),
@@ -19506,6 +20454,14 @@ function nodeValues(el, type) {
     text: trSafeVal(el.querySelector('.note-text')) || '',
     turns: (el.querySelector('.note-turns') || {}).value || '0',
     left: (el._noteLeft == null ? null : el._noteLeft),
+  };
+  if (type === 'summary') return {
+    text: trSafeVal(el.querySelector('.sum-text')) || '',           // сама сводка — содержимое чата (в пресет не уезжает: stripPlayFromGraph); trSafeVal — оригинал, а не RU-предпросмотр
+    upto: ((el._master || el)._sumUpto) || 0,                        // до какой реплики доведена (у вижна счётчик — в настоящей ноде)
+    auto: !!(el.querySelector('.sum-auto') || {}).checked,
+    every: (el.querySelector('.sum-every') || {}).value || String(SUM_EVERY_DEF),
+    words: (el.querySelector('.sum-words') || {}).value || String(SUM_WORDS_DEF),
+    prompt: trSafeVal(el.querySelector('.sum-prompt')) || '',
   };
   if (type === 'objective') return { checkCtr: el._objCheckCtr || 0, genCtr: el._objGenCtr || 0,
     goal: trSafeVal(el.querySelector('.obj-goal')) || '',                                   // trSafeVal: RU-предпросмотр не утекает в снимок
@@ -19542,6 +20498,7 @@ function nodeValues(el, type) {
     reason: (el.querySelector('.soul-reason') || {}).value || 'off',
     temp: (el.querySelector('.soul-temp') || {}).value || '0.3',
     promptMode: el._promptMode || 'single',
+    v2on: el._v2on ? { scene: !!el._v2on.scene, psyche: !!el._v2on.psyche, diary: !!el._v2on.diary } : null,   // набор «новая»: какие листы включены
     h: el._docH || null,
   };
   return {};
@@ -19654,6 +20611,7 @@ function applyValues(el, type, d) {
     if (d.bools) [...el.querySelectorAll('.tts-b')].forEach((c) => { if (d.bools[c.dataset.key] != null) c.checked = !!d.bools[c.dataset.key]; });
     const asb = el.querySelector('.tts-autospeak'); if (asb && d.autoSpeak != null) asb.checked = !!d.autoSpeak;   // авто-озвучивание
   } else if (type === 'telegram' || type === 'netgame') {
+    if (d.cfg) { tgApplyCfg(el, d.cfg); if (typeof tgBubApply === 'function') tgBubApply(el); if (typeof tgBgApply === 'function') tgBgApply(el); }   // опции самой ноды главнее дефолта из базы (старые снимки без cfg — работают как раньше)
     const m = el.querySelector('.tg-mode'); if (m && d.mode) m.value = d.mode;   // токен восстановлен из store при создании
     if (Array.isArray(d.cast)) {   // пересоздать розетки участников ДО restoreGraph — тогда провода участник↔персонаж восстановятся сами
       el._cast = []; el._castById = {};
@@ -19710,6 +20668,9 @@ function applyValues(el, type, d) {
     setV('.soul-batch', d.batch); setV('.soul-delta', d.delta); setV('.soul-topk', d.topk);
     setV('.soul-maxtok', d.maxtok); setV('.soul-temp', d.temp); if (d.reason != null) setV('.soul-reason', d.reason);
     el._promptMode = d.promptMode || 'single'; setV('.soul-prompt-preset', el._promptMode);   // режим набора промтов (селектор в шапке «Доки памяти»)
+    if (d.v2on && typeof d.v2on === 'object') el._v2on = { scene: d.v2on.scene !== false, psyche: d.v2on.psyche !== false, diary: d.v2on.diary !== false };
+    if (typeof soul2Face === 'function') soul2Face(el);   // набор «новая» — своё лицо ноды
+    if (typeof soulNextPaint === 'function') setTimeout(() => soulNextPaint(el), 0);   // счётчик «до вопроса»: ноды графа догрузились — посчитать
     if (d.h) { el._docH = d.h; el.style.setProperty('--soul-doc-h', d.h + 'px'); }
   } else if (type === 'chat' || type === 'groupchat') {
     // d.msgs есть только у СТАРЫХ снимков (сейчас история в снимок не пишется). Берём её лишь тогда,
@@ -19797,6 +20758,14 @@ function applyValues(el, type, d) {
     const n = el.querySelector('.note-turns'); if (n && d.turns != null) n.value = d.turns;
     el._noteLeft = (d.left == null ? null : d.left);
     if (typeof el._notePaint === 'function') el._notePaint();
+  } else if (type === 'summary') {
+    const setV = (sel, v) => { const n = el.querySelector(sel); if (n && v != null) n.value = v; };
+    if (d.text != null) sumSetField(el.querySelector('.sum-text'), d.text);   // sumSetField: заодно снимает RU-предпросмотр с поля
+    setV('.sum-every', d.every); setV('.sum-words', d.words);
+    if (d.prompt != null && String(d.prompt).trim()) sumSetField(el.querySelector('.sum-prompt'), d.prompt);   // пустая инструкция в снимке = умолчание
+    const a = el.querySelector('.sum-auto'); if (a && d.auto != null) a.checked = !!d.auto;
+    el._sumUpto = Math.max(0, parseInt(d.upto, 10) || 0);
+    if (typeof sumPaint === 'function') sumPaint(el);
   } else if (type === 'objective') {
     if (d.checkCtr != null) el._objCheckCtr = d.checkCtr;
     if (d.genCtr != null) el._objGenCtr = d.genCtr;
@@ -20106,6 +21075,19 @@ function wire(fromEl, fromKey, toEl, toKey) {
   const fp = findPort(fromEl, fromKey), tp = findPort(toEl, toKey);
   if (fp && tp) addConnection(fp, tp);
 }
+// Нода «Суммаризация» в заводской сборке: своя плашка «Сводка» (перед «Памятью»; в групповом — перед первым слотом) + провод.
+function presetAddSummary(comp, x, y) {
+  const sum = createNode('summary', x, y);
+  const list = comp.querySelector('.pm-list');
+  if (!list.querySelector('.pm-item[data-id="summary"]')) {
+    const item = makePromptItem({ id: 'summary', name: 'Сводка', kind: 'marker', on: true }, list);
+    const before = list.querySelector('.pm-item[data-id="memory"]') || list.querySelector('.pm-item.pm-slot');
+    if (before) list.insertBefore(item, before); else list.appendChild(item);
+    relayoutPlates(list);
+  }
+  wire(sum, 'out', comp, 'plate:summary');
+  return sum;
+}
 function buildDefaultPreset() {
   clearGraph();
   const char = createNode('character', 40, 60);
@@ -20144,6 +21126,8 @@ function buildDefaultPreset() {
   wire(loreChar,  'out', comp, 'plate:charLore');
   wire(loreChat,  'out', comp, 'plate:chatLore');
   wire(soul, 'out', comp, 'plate:memory');
+  { soul._promptMode = 'v2'; const sel = soul.querySelector('.soul-prompt-preset'); if (sel) sel.value = 'v2'; if (typeof soul2Face === 'function') soul2Face(soul); }   // набор «новая»: сцена · психика · дневник
+  presetAddSummary(comp, 360, 40 - SUM_PRESET_RISE);   // бегущая сводка сюжета → своя плашка «Сводка» (сверху, до истории)
   wire(dir, 'out', comp, 'plate:events');
   wire(emb, 'out', loreWorld, 'in:embedder');
   wire(emb, 'out', loreChar, 'in:embedder');
@@ -20287,6 +21271,7 @@ function buildGroupChatPreset() {
   wire(chat, 'out:chronicle', chronicle, 'in');
   wire(chronicle, 'out', loreChat, 'in');
   wire(chat, 'out:tts', tts, 'in');
+  presetAddSummary(comp, 720, 40 - SUM_PRESET_RISE);   // бегущая сводка сюжета → своя плашка «Сводка» (перед слотами: общая на всю партию)
   // ── Перевод (как в базовом): Транслитер + своя пара API/Опции (одна машина = обе стороны) ──
   const trans = createNode('translator', 2200, 200);
   trans.querySelectorAll('.tr-provider').forEach((p) => { p.value = 'neuro'; p.dispatchEvent(new Event('change')); });
@@ -20476,6 +21461,7 @@ function buildNetgamePreset() {
   wire(loreChat, 'out', comp, 'plate:chatLore');
   wire(dir, 'out', comp, 'plate:events');
   wire(worldSoul, 'out', comp, 'plate:memory');
+  presetAddSummary(comp, 760, 40 - SUM_PRESET_RISE);   // бегущая сводка сюжета → своя плашка «Сводка» (пульт — в «ГМ меню» ноды партии)
   wire(emb, 'out', loreWorld, 'in:embedder');
   wire(emb, 'out', loreChat, 'in:embedder');
   wire(emb, 'out', worldSoul, 'in:embedder');
@@ -21121,6 +22107,7 @@ function setActivePreset(id) { if (id && presetById(id)) { lsSet(ACTIVE_PRESET_K
 // со стороны это выглядело как «моя история пропала». История партии живёт только в снимке чата.
 function stripPlayFromGraph(g) {
   (g && g.nodes || []).forEach((n) => {
+    if (n && n.data && n.type === 'summary') { n.data.text = ''; n.data.upto = 0; return; }   // сводка сюжета — содержимое партии, а не настройка сборки
     if (!n || !n.data || (n.type !== 'netgame' && n.type !== 'telegram')) return;
     n.data.convos = {};          // переписка по беседам
     n.data.ngTurn = [];          // недособранный ход
@@ -21155,6 +22142,60 @@ function migratePresetsEmbedderMiniLm() {
       if (changed) lsSet(presetGraphKeyOf(p.id), g);
     });
     lsSet(EMB_MINILM_KEY, 1);
+  } catch (_) { /* не критично — не роняем старт */ }
+}
+// Leon 2026-10-08: «добавь во все пресеты обязательно, как и новую душу». Один раз, в сохранённых ПРЕСЕТАХ (не в чатах):
+//  • нода «Суммаризация» + плашка «Сводка» + провод — в каждый пресет, где её ещё нет;
+//  • Душа обычной игры и Telegram-сингла переводится на набор «новая». Души группового чата и сетевой игры не трогаем:
+//    у них свои наборы доков (слоты, листы игроков), набор «новая» под них не сделан.
+const SOUL2_SUM_PRESETS_KEY = 'rlm.soul2SumPresets';
+function presetGraphAddSummary(g) {
+  const nodes = g.nodes;
+  if (nodes.some((n) => n && n.type === 'summary')) return false;
+  if (!nodes.some((n) => n && ['chat', 'groupchat', 'netgame', 'telegram'].includes(n.type))) return false;   // сводить нечего — в сборке нет чата
+  const isComp = (n) => !!(n && (n.type === 'prompt' || n.type === 'mprompt') && n.data && Array.isArray(n.data.plates));
+  const conns = Array.isArray(g.connections) ? g.connections : (g.connections = []);
+  // Комплитер ответа — тот, чей выход идёт во вход «Промт» ноды API; иначе первый на холсте.
+  let ci = nodes.findIndex((n, i) => isComp(n) && conns.some((c) => c && c.from && c.to && c.from[0] === i && c.from[1] === 'out' && c.to[1] === 'in:prompt'));
+  if (ci < 0) ci = nodes.findIndex(isComp);
+  if (ci < 0) return false;
+  const plates = nodes[ci].data.plates;
+  if (!plates.some((pl) => pl && pl.id === 'summary')) {   // сверху, до истории: перед «Памятью»; в групповом — перед первым слотом
+    let at = plates.findIndex((pl) => pl && pl.id === 'memory');
+    if (at < 0) at = plates.findIndex((pl) => pl && pl.kind === 'slot');
+    if (at < 0) at = plates.findIndex((pl) => pl && pl.id === 'main') + 1;
+    plates.splice(at, 0, { id: 'summary', kind: 'marker', enabled: true, pos: 'rel', name: 'Сводка', custom: false, role: '', depth: '' });
+  }
+  if (conns.some((c) => c && c.to && c.to[0] === ci && c.to[1] === 'plate:summary')) return true;   // плашка занята чужим проводом — ноду не ставим
+  // Место — прямо над комплитером. Ширин нод в снимке нет, поэтому берём их с запасом и встаём выше ВСЕХ нод,
+  // чей столбец задевает столбец комплитера: так сводка ни на кого не ляжет.
+  const cx = Number(nodes[ci].x) || 0;
+  const wOf = (t) => ({ chat: 820, groupchat: 820, netgame: 1000, telegram: 1000, soul: 1220, lorebook: 560, director: 560, character: 540 })[t] || 420;
+  const col = nodes.filter((n) => n && (Number(n.x) || 0) < cx + 360 && (Number(n.x) || 0) + wOf(n.type) > cx - 20);
+  const top = Math.min.apply(null, col.map((n) => Number(n.y) || 0));
+  nodes.push({ type: 'summary', x: cx, y: top - SUM_PRESET_RISE, collapsed: false,
+    data: { text: '', upto: 0, auto: true, every: String(SUM_EVERY_DEF), words: String(SUM_WORDS_DEF), prompt: '' } });
+  conns.push({ from: [nodes.length - 1, 'out'], to: [ci, 'plate:summary'] });
+  return true;
+}
+function presetGraphSoulV2(g) {
+  const nodes = g.nodes;
+  if (nodes.some((n) => n && (n.type === 'groupchat' || n.type === 'netgame' || n.type === 'mprompt'))) return false;
+  if (!nodes.some((n) => n && (n.type === 'chat' || n.type === 'telegram'))) return false;
+  let changed = false;
+  nodes.forEach((n) => { if (n && n.type === 'soul' && n.data && n.data.promptMode !== 'v2') { n.data.promptMode = 'v2'; n.data.sinceMem = 0; changed = true; } });
+  return changed;
+}
+function migratePresetsSoul2Summary() {
+  try {
+    if (lsGet(SOUL2_SUM_PRESETS_KEY, 0)) return;
+    getPresets().forEach((p) => {
+      const g = lsGet(presetGraphKeyOf(p.id), null);
+      if (!g || !Array.isArray(g.nodes)) return;
+      const a = presetGraphAddSummary(g), b = presetGraphSoulV2(g);
+      if (a || b) lsSet(presetGraphKeyOf(p.id), g);
+    });
+    lsSet(SOUL2_SUM_PRESETS_KEY, 1);
   } catch (_) { /* не критично — не роняем старт */ }
 }
 function ensurePresets() {
@@ -23309,6 +24350,7 @@ async function boot() {
   ensureNetgameModelPresets();   // пресеты «Сетевая игра · GLM-4.7» и «· Kimi» — сборка стенда 2026-09-13 (один раз на имя)
   migrateNetgameModelRules();    // в уже посеянные пресеты под модель — правила против болячек своей модели (один раз)
   migratePresetsEmbedderMiniLm();   // нода «Эмбеддер» в сохранённых пресетах: e5 → MiniLM (один раз)
+  migratePresetsSoul2Summary();     // сохранённые пресеты: + нода «Суммаризация»; Душа сингла — на набор «новая» (один раз)
   if (current.mode === 'chat' && current.charId && current.chatId) {
     await activateChat(current.charId, current.chatId, { immersive: false });   // при СТАРТЕ — на холст; в полноэкранный чат ныряем, только когда его выбрал сам
   } else {

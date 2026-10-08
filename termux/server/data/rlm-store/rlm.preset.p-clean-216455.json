@@ -158,6 +158,16 @@
             "depth": "4"
           },
           {
+            "id": "summary",
+            "kind": "marker",
+            "enabled": true,
+            "pos": "rel",
+            "name": "Сводка",
+            "custom": false,
+            "role": "",
+            "depth": ""
+          },
+          {
             "id": "memory",
             "kind": "marker",
             "enabled": false,
@@ -378,6 +388,20 @@
         "reason": "off",
         "label": "Опции · Критик"
       }
+    },
+    {
+      "type": "summary",
+      "x": 800,
+      "y": -1780,
+      "collapsed": false,
+      "data": {
+        "text": "",
+        "upto": 0,
+        "auto": true,
+        "every": "10",
+        "words": "200",
+        "prompt": ""
+      }
     }
   ],
   "connections": [
@@ -509,6 +533,16 @@
       "to": [
         9,
         "in:options"
+      ]
+    },
+    {
+      "from": [
+        11,
+        "out"
+      ],
+      "to": [
+        3,
+        "plate:summary"
       ]
     }
   ]

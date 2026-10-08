@@ -545,3 +545,31 @@ router.post('/copy', (req, res) => {
         res.json({ ok: true });
     } catch (e) { res.status(500).json({ ok: false, error: String(e) }); }
 });
+
+// ── Душа «новая» (три листа одним JSON): состояние Сцены и Психики лежит ДАННЫМИ в `_state.json` той же
+// папки памяти чата. Поэтому «Очистить», «Ветка» и удаление чата (purge / copy папки) работают как работали.
+// Что именно в состоянии — решает клиент (`soul2*` в renderer.js); сервер только хранит объект целиком.
+const stateFile = (dir) => path.join(dir, '_state.json');
+router.post('/state-get', (req, res) => {
+    try {
+        const dir = chatDir((req.body || {}).chat);
+        const p = dir ? stateFile(dir) : null;
+        if (!p || !fs.existsSync(p)) return res.json({ ok: true, state: null });
+        let state = null;
+        try { state = JSON.parse(fs.readFileSync(p, 'utf-8')); } catch (_) { state = null; }   // битый файл = пустая память, не ошибка хода
+        res.json({ ok: true, state: (state && typeof state === 'object') ? state : null });
+    } catch (e) { res.status(500).json({ ok: false, state: null, error: String(e) }); }
+});
+router.post('/state-save', (req, res) => {
+    try {
+        const { chat, state } = req.body || {};
+        const dir = chatDir(chat);
+        if (!dir) return res.json({ ok: false, skipped: 'no-chat' });
+        if (!state || typeof state !== 'object' || Array.isArray(state)) return res.json({ ok: false, skipped: 'bad-state' });
+        fs.mkdirSync(dir, { recursive: true });
+        const tmp = stateFile(dir) + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify(state, null, 1), 'utf-8');   // сначала рядом, потом подмена — обрыв не оставит полфайла
+        fs.renameSync(tmp, stateFile(dir));
+        res.json({ ok: true });
+    } catch (e) { res.status(500).json({ ok: false, error: String(e) }); }
+});

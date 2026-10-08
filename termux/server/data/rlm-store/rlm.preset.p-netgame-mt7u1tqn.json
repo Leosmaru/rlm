@@ -138,6 +138,16 @@
             "players": []
           },
           {
+            "id": "summary",
+            "kind": "marker",
+            "enabled": true,
+            "pos": "rel",
+            "name": "Сводка",
+            "custom": false,
+            "role": "",
+            "depth": ""
+          },
+          {
             "id": "memory",
             "kind": "marker",
             "enabled": true,
@@ -958,6 +968,20 @@
           "success"
         ]
       }
+    },
+    {
+      "type": "summary",
+      "x": 480,
+      "y": -1440,
+      "collapsed": false,
+      "data": {
+        "text": "",
+        "upto": 0,
+        "auto": true,
+        "every": "10",
+        "words": "200",
+        "prompt": ""
+      }
     }
   ],
   "connections": [
@@ -1349,6 +1373,16 @@
       "to": [
         2,
         "plate:random"
+      ]
+    },
+    {
+      "from": [
+        31,
+        "out"
+      ],
+      "to": [
+        2,
+        "plate:summary"
       ]
     }
   ]

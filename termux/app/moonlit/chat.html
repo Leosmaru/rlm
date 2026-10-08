@@ -932,12 +932,14 @@
       const ACC = 'var(--customThemeColor,#51a0de)';
       let anim = null, hideT = null, mode = null, pendingScene = null;   // mode: 'proc' | 'scene' | 'ask'; pendingScene — подсказка сцены ждёт, пока процесс освободит ленту
       let pendingAsk = null;   // вопрос «Душа: обновить память?» ждёт, пока лента занята процессом (критик/озвучка), и покажется на idle
+      let askTips = null;      // подсказки кнопок ✓ / ✕ текущего вопроса (пусто — тексты Души)
       // Кнопка ✓ для вопроса — создаём один раз рядом с крестиком; вне режима 'ask' скрыта.
       let pok = null;
       function okBtn(){ if (pok) return pok; pok = document.createElement('span'); pok.className = 'rlm-proc-ok'; pok.textContent = '✓'; pok.title = 'Да — обновить память по этому ответу'; pok.hidden = true; px.parentNode.insertBefore(pok, px);
         pok.addEventListener('click', () => { if (mode !== 'ask') return; parent.postMessage({ type: 'soul-confirm', yes: true }, '*'); pendingAsk = null; toIdle(); }); return pok; }
       function showAsk(text){ mode = 'ask'; if (hideT) { clearTimeout(hideT); hideT = null; } stop(); bar.classList.add('on'); fill.style.transition='none'; fill.style.opacity='0.5'; fill.style.left='0'; fill.style.width='100%'; fill.style.background='linear-gradient(90deg,transparent,'+ACC+' 50%,transparent)';
-        proc.hidden = false; if (zoneActions) zoneActions.style.visibility = 'hidden'; ptext.className = 'rlm-proc-text ask'; ptext.textContent = text || 'Душа: обновить память?'; okBtn().hidden = false; px.hidden = false; px.title = 'Нет — не сейчас (спрошу после следующего ответа)'; }
+        proc.hidden = false; if (zoneActions) zoneActions.style.visibility = 'hidden'; ptext.className = 'rlm-proc-text ask'; ptext.textContent = text || 'Душа: обновить память?'; okBtn().hidden = false; px.hidden = false;
+        pok.title = (askTips && askTips.ok) || 'Да — обновить память по этому ответу'; px.title = (askTips && askTips.no) || 'Нет — не сейчас (спрошу после следующего ответа)'; }   // подсказки ✓ / ✕ — того, кто спрашивает (Душа или Суммаризация)
       const stop = () => { if (anim) { clearInterval(anim); anim = null; } };
       function barOff(){ stop(); fill.style.transition='none'; fill.style.opacity='0'; fill.style.left='0'; fill.style.width='0'; bar.classList.remove('on'); }
       function toIdle(){ barOff(); proc.hidden = true; if (zoneActions) zoneActions.style.visibility = ''; mode = null; if (pok) pok.hidden = true; px.title = 'Отменить';
@@ -972,7 +974,7 @@
 
         // Вопрос «Душа: обновить память?» — не процесс: ✓ пишем / ✕ не сейчас. Проверяем ДО того, как mode станет 'proc'.
         // Если лента занята процессом (критик, озвучка) — вопрос ждёт и покажется, когда она освободится, а не пропадает.
-        if (st === 'ask')   { if (mode === 'proc') { pendingAsk = m.text || 'Душа: обновить память?'; return; } showAsk(m.text); return; }
+        if (st === 'ask')   { askTips = { ok: m.okTitle || '', no: m.noTitle || '' }; if (mode === 'proc') { pendingAsk = m.text || 'Душа: обновить память?'; return; } showAsk(m.text); return; }
         // Вопрос уже висел, а тут пришёл процесс/финал (Цель, Хроника, озвучка…) — вопрос не теряем: отложим и вернём на idle.
         if (mode === 'ask' && st !== 'idle') pendingAsk = ptext.textContent || 'Душа: обновить память?';
         if (st !== 'idle') mode = 'proc';   // реальный процесс перекрывает подсказку сцены (вернётся из pendingScene, когда лента освободится)
